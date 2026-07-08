@@ -1,0 +1,36 @@
+artifacts:
+  - id: project.index
+    kind: project_doc
+    path: .agent/INDEX.md
+    status: active
+    read_policy: default
+    update_policy: agent_propose_diff
+    source_of_truth: true
+    owner: human
+    tags:
+      - index
+
+  - id: project.architecture
+    kind: knowledge
+    path: .agent/knowledge/architecture.md
+    status: distilled
+    read_policy: on_architecture_tasks
+    update_policy: agent_propose_diff
+    source_of_truth: true
+    owner: team
+    tags:
+      - architecture
+
+  - id: context.architecture
+    kind: context_module
+    path: .agent/context-modules/architecture/module.yaml
+    status: promoted
+    read_policy: on_architecture_tasks
+    update_policy: agent_propose_diff
+    source_of_truth: true
+    owner: team
+    derived_from:
+      - project.architecture
+    tags:
+      - architecture
+      - context-management

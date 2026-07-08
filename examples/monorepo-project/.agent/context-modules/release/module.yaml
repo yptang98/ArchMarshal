@@ -1,0 +1,16 @@
+id: context.release
+name: Release Context
+version: 0.1.0
+status: active
+summary: Release context for the monorepo example.
+tags:
+  - release
+  - ci
+read_policy:
+  - on_release_tasks
+negative_triggers:
+  - frontend-only implementation
+source_files:
+  - .agent/knowledge/release.md
+historical_references: []
+related_skills: []

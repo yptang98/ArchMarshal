@@ -1,0 +1,36 @@
+artifacts:
+  - id: project.index
+    kind: project_doc
+    path: .agent/INDEX.md
+    status: active
+    read_policy: default
+    update_policy: agent_propose_diff
+    source_of_truth: true
+    owner: human
+    tags:
+      - index
+
+  - id: project.release
+    kind: knowledge
+    path: .agent/knowledge/release.md
+    status: distilled
+    read_policy: on_release_tasks
+    update_policy: agent_propose_diff
+    source_of_truth: true
+    owner: team
+    tags:
+      - release
+
+  - id: context.release
+    kind: context_module
+    path: .agent/context-modules/release/module.yaml
+    status: promoted
+    read_policy: on_release_tasks
+    update_policy: agent_propose_diff
+    source_of_truth: true
+    owner: team
+    derived_from:
+      - project.release
+    tags:
+      - release
+      - context-management

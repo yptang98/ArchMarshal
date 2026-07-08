@@ -1,0 +1,33 @@
+workspace:
+  name: monorepo-project
+  version: 0.1.0
+  description: Monorepo ArchMarshal example project.
+
+paths:
+  project_root: .
+  code_roots:
+    - packages/api
+    - packages/web
+  agent_root: .agent
+  project_skills:
+    - .agents/skills
+    - tools/agent-skills
+  generated_skills:
+    - .agents/skills/generated
+  knowledge:
+    - .agent/knowledge
+    - docs/agent/knowledge
+  context_modules:
+    - .agent/context-modules
+  reports:
+    - .agent/reports
+  plans:
+    - .agent/plans
+  history:
+    - .agent/history
+  archive:
+    - .agent/archive
+  cache:
+    - .agent/cache
+  inbox:
+    - .agent/inbox

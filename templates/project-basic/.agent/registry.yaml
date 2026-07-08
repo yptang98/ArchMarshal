@@ -1,0 +1,34 @@
+artifacts:
+  - id: project.index
+    kind: project_doc
+    path: .agent/INDEX.md
+    status: active
+    read_policy: default
+    update_policy: agent_propose_diff
+    source_of_truth: true
+    owner: human
+    tags:
+      - index
+      - context-management
+
+  - id: project.architecture
+    kind: knowledge
+    path: .agent/knowledge/architecture.md
+    status: active
+    read_policy: on_architecture_tasks
+    update_policy: agent_propose_diff
+    source_of_truth: true
+    owner: team
+    tags:
+      - architecture
+
+  - id: project.commands
+    kind: knowledge
+    path: .agent/knowledge/commands.md
+    status: active
+    read_policy: task_based
+    update_policy: agent_propose_diff
+    source_of_truth: true
+    owner: team
+    tags:
+      - commands

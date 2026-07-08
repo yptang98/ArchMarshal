@@ -1,0 +1,15 @@
+id: context.example
+name: Example Context
+version: 0.1.0
+status: active
+summary: Reusable context distilled from project knowledge and historical artifacts.
+tags:
+  - context-management
+read_policy:
+  - when_task_matches
+negative_triggers:
+  - unrelated task
+source_files:
+  - .agent/knowledge/example.md
+historical_references: []
+related_skills: []

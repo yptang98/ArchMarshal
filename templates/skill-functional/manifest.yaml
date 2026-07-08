@@ -1,0 +1,42 @@
+id: skill.functional.example
+name: example-functional-skill
+kind: functional_skill
+version: 0.1.0
+status: experimental
+priority: normal
+scope: functional
+summary: Template for a general reusable functional skill.
+tags:
+  - documentation
+  - analysis
+triggers:
+  - example functional task
+negative_triggers:
+  - project-specific release workflow
+reproducibility:
+  required: false
+  scripts_local: true
+  templates_local: true
+  references_local: true
+paths:
+  skill_root: .
+  scripts: scripts
+  templates: templates
+  references: references
+  tests: tests
+dependencies:
+  commands: []
+  files: []
+  network_required: false
+outputs:
+  default_dir: .agent/reports
+  artifact_kind: report
+  ttl_days: 30
+permissions:
+  reads:
+    - project.index
+  writes:
+    - report.example
+  proposes: []
+  forbidden:
+    - global.skills

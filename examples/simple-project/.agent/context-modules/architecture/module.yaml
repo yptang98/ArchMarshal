@@ -1,0 +1,15 @@
+id: context.architecture
+name: Architecture Context
+version: 0.1.0
+status: active
+summary: Minimal architecture context for the simple example project.
+tags:
+  - architecture
+read_policy:
+  - on_architecture_tasks
+negative_triggers:
+  - release-only tasks
+source_files:
+  - .agent/knowledge/architecture.md
+historical_references: []
+related_skills: []
