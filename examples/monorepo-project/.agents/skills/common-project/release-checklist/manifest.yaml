@@ -1,0 +1,50 @@
+id: skill.common-project.release-checklist
+name: release-checklist
+kind: common_project_skill
+version: 0.1.0
+status: active
+priority: normal
+scope: common_project
+summary: Reproducible release readiness checklist for engineering repositories.
+tags:
+  - release
+  - ci
+  - project-governance
+  - reproducibility
+triggers:
+  - release checklist
+  - release readiness
+negative_triggers:
+  - frontend-only implementation
+  - one-off debugging
+reproducibility:
+  required: true
+  scripts_local: true
+  templates_local: true
+  references_local: true
+paths:
+  skill_root: .
+  scripts: scripts
+  templates: templates
+  references: references
+  tests: tests
+dependencies:
+  commands:
+    - git
+  files: []
+  network_required: false
+outputs:
+  default_dir: .agent/reports
+  artifact_kind: report
+  ttl_days: 30
+permissions:
+  reads:
+    - project.index
+    - context.release
+  writes:
+    - report.release
+  proposes:
+    - project.release
+  forbidden:
+    - global.skills
+

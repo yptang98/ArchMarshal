@@ -10,7 +10,7 @@ This sample report demonstrates the expected shape of future `archmarshal audit`
 
 ## Findings
 
-### warning: project.context_module_missing_source_files
+### error: project.context_module_missing_source_files
 
 `context.architecture` should list the source knowledge files or reports it was distilled from.
 

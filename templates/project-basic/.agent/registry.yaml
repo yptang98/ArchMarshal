@@ -32,3 +32,25 @@ artifacts:
     owner: team
     tags:
       - commands
+
+  - id: project.glossary
+    kind: knowledge
+    path: .agent/knowledge/glossary.md
+    status: active
+    read_policy: task_based
+    update_policy: agent_propose_diff
+    source_of_truth: true
+    owner: team
+    tags:
+      - glossary
+
+  - id: project.conventions
+    kind: knowledge
+    path: .agent/knowledge/conventions.md
+    status: active
+    read_policy: task_based
+    update_policy: agent_propose_diff
+    source_of_truth: true
+    owner: team
+    tags:
+      - conventions

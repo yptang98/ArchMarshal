@@ -9,6 +9,12 @@ paths:
     - packages/api
     - packages/web
   agent_root: .agent
+  global_skills:
+    - .agents/global
+  functional_skills:
+    - .agents/skills/functional
+  common_project_skills:
+    - .agents/skills/common-project
   project_skills:
     - .agents/skills
     - tools/agent-skills

@@ -10,6 +10,17 @@ artifacts:
     tags:
       - index
 
+  - id: project.architecture
+    kind: knowledge
+    path: .agent/knowledge/architecture.md
+    status: distilled
+    read_policy: on_architecture_tasks
+    update_policy: agent_propose_diff
+    source_of_truth: true
+    owner: team
+    tags:
+      - architecture
+
   - id: project.release
     kind: knowledge
     path: .agent/knowledge/release.md

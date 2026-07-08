@@ -1,0 +1,47 @@
+id: skill.functional.doc-summary
+name: doc-summary
+kind: functional_skill
+version: 0.1.0
+status: active
+priority: normal
+scope: functional
+summary: Summarize durable documentation into compact review notes.
+tags:
+  - documentation
+  - analysis
+  - context-management
+triggers:
+  - summarize documentation
+  - summarize durable knowledge
+negative_triggers:
+  - release checklist
+  - dependency upgrade
+reproducibility:
+  required: false
+  scripts_local: true
+  templates_local: true
+  references_local: true
+paths:
+  skill_root: .
+  scripts: scripts
+  templates: templates
+  references: references
+  tests: tests
+dependencies:
+  commands: []
+  files: []
+  network_required: false
+outputs:
+  default_dir: .agent/reports
+  artifact_kind: report
+  ttl_days: 30
+permissions:
+  reads:
+    - project.index
+  writes:
+    - report.documentation
+  proposes:
+    - project.knowledge
+  forbidden:
+    - global.skills
+

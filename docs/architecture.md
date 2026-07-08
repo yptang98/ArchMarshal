@@ -59,6 +59,10 @@ A project workspace contains source code, configuration, documentation, project 
 - `.agent/workspace.yaml` as path mapping.
 - `.agent/INDEX.md` as the human map.
 - `.agent/registry.yaml` as the artifact ledger.
+- `.agents/global/` for lightweight global policy skills.
+- `.agents/skills/functional/` for reusable functional skills.
+- `.agents/skills/common-project/` for reproducible engineering workflow skills.
+- `.agents/skills/generated/` for generated skills that must be registered before use.
 
 The path mapping allows projects to keep their own structure while still being inspectable by tooling.
 
@@ -107,6 +111,8 @@ ArchMarshal operations should mature in this order:
 2. `lint`: detect structural problems.
 3. `audit`: explain risks and evidence.
 4. `plan`: propose non-destructive changes.
-5. `apply`: execute confirmed, non-destructive changes.
+5. `resolve`: advise which skills and context modules fit a task.
+6. `closeout`: summarize used skills and cleanup actions after project work.
+7. `apply`: execute confirmed, non-destructive changes.
 
-The MVP implements only the read-only inventory prototype.
+The current CLI implements read-only inventory, lint, audit, plan, resolve, and closeout. `apply` remains intentionally unsupported.

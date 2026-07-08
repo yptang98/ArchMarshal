@@ -2,7 +2,7 @@
 
 ArchMarshal is a lightweight control plane for agent workspaces. It treats skills as dynamic capability nodes, project skills as reproducible engineering workflows, and project files as lifecycle-managed artifacts.
 
-The first version is intentionally conservative: it defines structure, schemas, templates, examples, and read-only inventory behavior before any apply-style automation exists.
+The first version is intentionally conservative: it defines structure, schemas, templates, examples, and read-only inventory, lint, audit, and plan behavior before any apply-style automation exists.
 
 ## Goals
 
@@ -33,6 +33,7 @@ ArchMarshal/
 │  ├─ architecture.md
 │  ├─ skill-taxonomy.md
 │  ├─ project-file-lifecycle.md
+│  ├─ product-requirements.md
 │  └─ lint-rules.md
 ├─ schemas/
 │  ├─ workspace.schema.yaml
@@ -40,6 +41,9 @@ ArchMarshal/
 │  └─ artifact-registry.schema.yaml
 ├─ scripts/
 │  └─ inventory.py
+├─ src/
+│  └─ archmarshal/
+├─ tests/
 ├─ templates/
 │  ├─ project-basic/
 │  ├─ skill-functional/
@@ -67,28 +71,37 @@ The layers are deliberately asymmetric. Global policy should be small and stable
 
 ## Suggested CLI Shape
 
-The MVP script is read-only:
+Install locally for development:
 
 ```bash
-python scripts/inventory.py examples/simple-project
+pip install -e .
 ```
 
-Future command shape:
+Run read-only commands:
 
 ```bash
-archmarshal init
-archmarshal inventory
-archmarshal lint
-archmarshal audit
-archmarshal plan
-archmarshal apply --from-plan plan.yaml
+archmarshal inventory examples/simple-project --pretty
+archmarshal lint examples/simple-project --pretty
+archmarshal audit examples/simple-project --pretty
+archmarshal plan examples/simple-project --pretty
+archmarshal resolve examples/monorepo-project --task "prepare release checklist" --pretty
+archmarshal closeout examples/monorepo-project --used-skill skill.common-project.release-checklist --pretty
 ```
 
-`apply` is intentionally future work. It should never be introduced before plan output, diff preview, and non-destructive defaults are stable.
+The compatibility wrapper still works:
+
+```bash
+python scripts/inventory.py examples/simple-project --pretty
+```
+
+`apply` is intentionally not implemented. It should never be introduced before plan output, diff preview, and non-destructive defaults are stable.
 
 ## Safety Rules
 
 - Inventory, lint, audit, and plan are read-only by default.
+- Resolve is advisory and loads only matched skill/context metadata.
+- Closeout summarizes used skills and cleanup actions after project work.
+- Global, functional, common-project, project, and generated skill roots are separately mapped.
 - Historical artifact directories are explicit-read only:
   - `.agent/reports/`
   - `.agent/history/`
@@ -117,3 +130,22 @@ archmarshal apply --from-plan plan.yaml
 - [x] Read-only inventory script
 - [x] Lint rule list
 - [x] Audit report sample
+- [x] Executable CLI package
+- [x] Governance lint rules
+- [x] Read-only remediation plan output
+- [x] Task-based skill/context resolver
+- [x] Project closeout skill/memory summary
+- [x] Tests for clean examples, missing entry files, skill conflicts, and historical read policy
+
+## Development
+
+```bash
+python -m pytest
+```
+
+When running without installing the package:
+
+```bash
+$env:PYTHONPATH='src'
+python -m archmarshal lint examples/simple-project --pretty
+```

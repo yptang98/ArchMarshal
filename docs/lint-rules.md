@@ -11,6 +11,8 @@ skill.missing_manifest
 skill.missing_tags
 skill.missing_triggers
 skill.missing_negative_triggers
+skill.missing_required_field
+skill.kind_scope_mismatch
 skill.global_too_large
 skill.global_contains_project_fact
 skill.functional_contains_project_fact
@@ -35,7 +37,10 @@ project.archive_read_policy_not_never_default
 project.inbox_file_too_old
 project.generated_skill_not_registered
 project.context_module_missing_source_files
+project.context_module_not_registered
 project.knowledge_without_read_policy
+project.duplicate_artifact_id
+project.artifact_path_missing
 ```
 
 ## Severity Guidance

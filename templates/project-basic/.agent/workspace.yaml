@@ -8,6 +8,12 @@ paths:
   code_roots:
     - src
   agent_root: .agent
+  global_skills:
+    - .agents/global
+  functional_skills:
+    - .agents/skills/functional
+  common_project_skills:
+    - .agents/skills/common-project
   project_skills:
     - .agents/skills
   generated_skills:

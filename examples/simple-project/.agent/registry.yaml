@@ -21,6 +21,17 @@ artifacts:
     tags:
       - architecture
 
+  - id: project.commands
+    kind: knowledge
+    path: .agent/knowledge/commands.md
+    status: active
+    read_policy: task_based
+    update_policy: agent_propose_diff
+    source_of_truth: true
+    owner: team
+    tags:
+      - commands
+
   - id: context.architecture
     kind: context_module
     path: .agent/context-modules/architecture/module.yaml

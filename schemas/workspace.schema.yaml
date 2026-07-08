@@ -37,6 +37,18 @@ properties:
           type: string
       agent_root:
         type: string
+      global_skills:
+        type: array
+        items:
+          type: string
+      functional_skills:
+        type: array
+        items:
+          type: string
+      common_project_skills:
+        type: array
+        items:
+          type: string
       project_skills:
         type: array
         items:

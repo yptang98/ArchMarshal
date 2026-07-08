@@ -1,0 +1,45 @@
+id: skill.global.lightweight-policy
+name: lightweight-policy
+kind: global_skill
+version: 0.1.0
+status: active
+priority: highest
+scope: global
+summary: Minimal global governance policy example.
+tags:
+  - skill-management
+  - context-management
+triggers:
+  - skill conflict
+  - governance priority
+negative_triggers:
+  - feature implementation
+  - one-off debugging
+reproducibility:
+  required: false
+  scripts_local: true
+  templates_local: true
+  references_local: true
+paths:
+  skill_root: .
+  scripts: scripts
+  templates: templates
+  references: references
+  tests: tests
+dependencies:
+  commands: []
+  files: []
+  network_required: false
+outputs:
+  default_dir: .agent/reports
+  artifact_kind: report
+  ttl_days: 30
+permissions:
+  reads:
+    - project.index
+  writes: []
+  proposes:
+    - project.registry
+  forbidden:
+    - source_code
+

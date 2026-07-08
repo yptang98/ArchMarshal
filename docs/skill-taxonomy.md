@@ -41,6 +41,12 @@ status:
 
 Global skills are policy, not toolboxes. They define priority, conflict handling, loading rules, naming rules, and safety boundaries.
 
+Recommended path:
+
+```text
+.agents/global/
+```
+
 Required properties:
 
 - Highest governance priority.
@@ -52,6 +58,12 @@ Required properties:
 ## Functional Skill
 
 Functional skills provide general reusable capabilities that are not tied to a project.
+
+Recommended path:
+
+```text
+.agents/skills/functional/
+```
 
 Examples:
 
@@ -76,6 +88,12 @@ Required properties:
 ## Common Project Skill
 
 Common project skills provide reproducible engineering workflows that are useful across repositories.
+
+Recommended path:
+
+```text
+.agents/skills/common-project/
+```
 
 Examples:
 
@@ -109,6 +127,12 @@ Project skills must live under declared project skill paths, usually:
 ## Generated Project Skill
 
 Generated project skills are produced from repeated project work. They must not become active hidden behavior. They should be registered, reviewed, and traceable to their source artifacts.
+
+Recommended path:
+
+```text
+.agents/skills/generated/
+```
 
 ## Recommended Tags
 
