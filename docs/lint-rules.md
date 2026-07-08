@@ -18,6 +18,12 @@ skill.global_contains_project_fact
 skill.functional_contains_project_fact
 skill.common_project_missing_reproducibility
 skill.script_outside_skill_path
+skill.path_outside_skill_root
+skill.local_path_missing
+skill.local_path_empty
+skill.dependency_file_outside_skill_root
+skill.declared_dependency_file_missing
+skill.command_dependency_missing
 skill.undeclared_external_dependency
 skill.duplicate_name
 skill.overlapping_trigger
@@ -28,6 +34,11 @@ skill.governance_implicit_enabled
 
 ```text
 project.missing_workspace_yaml
+project.workspace_yaml_invalid
+project.workspace_missing_metadata
+project.workspace_missing_paths
+project.workspace_invalid_path_entry
+project.workspace_path_outside_root
 project.missing_agent_index
 project.agents_md_too_large
 project.agents_md_contains_history

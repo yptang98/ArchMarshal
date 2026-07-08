@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import shutil
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 from .diagnostics import Diagnostic
 from .inventory import collect_inventory
-from .io import read_text
+from .io import list_files, load_yaml, read_text
 
 
 GLOBAL_SKILL_MAX_LINES = 120
@@ -23,6 +24,7 @@ def lint_workspace(root: Path | str) -> list[Diagnostic]:
     inventory = collect_inventory(root)
     diagnostics: list[Diagnostic] = []
     diagnostics.extend(_lint_project_files(inventory.root, inventory.to_dict()))
+    diagnostics.extend(_lint_workspace_manifest(inventory.root, inventory.to_dict()))
     diagnostics.extend(_lint_registry(inventory.to_dict()))
     diagnostics.extend(_lint_context_modules(inventory.to_dict()))
     diagnostics.extend(_lint_skills(inventory.root, inventory.to_dict()))
@@ -87,6 +89,109 @@ def _lint_project_files(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
             )
         )
     return diagnostics
+
+
+def _lint_workspace_manifest(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    workspace_file = root / ".agent" / "workspace.yaml"
+    if not workspace_file.exists():
+        return diagnostics
+    try:
+        raw = load_yaml(workspace_file)
+    except Exception as exc:
+        return [
+            Diagnostic(
+                "project.workspace_yaml_invalid",
+                "error",
+                f"workspace.yaml could not be parsed: {exc}",
+                ".agent/workspace.yaml",
+                "Fix workspace.yaml syntax.",
+            )
+        ]
+    workspace = raw.get("workspace") if isinstance(raw, dict) else None
+    paths = raw.get("paths") if isinstance(raw, dict) else None
+    if not isinstance(workspace, dict):
+        diagnostics.append(
+            Diagnostic(
+                "project.workspace_missing_metadata",
+                "error",
+                "workspace.yaml is missing the workspace metadata object.",
+                ".agent/workspace.yaml",
+                "Add workspace.name and workspace.version.",
+            )
+        )
+    else:
+        for field in ["name", "version"]:
+            if not workspace.get(field):
+                diagnostics.append(
+                    Diagnostic(
+                        "project.workspace_missing_metadata",
+                        "error",
+                        f"workspace.yaml is missing workspace.{field}.",
+                        ".agent/workspace.yaml",
+                        "Add stable workspace metadata for inventory and reports.",
+                    )
+                )
+    if not isinstance(paths, dict):
+        diagnostics.append(
+            Diagnostic(
+                "project.workspace_missing_paths",
+                "error",
+                "workspace.yaml is missing the paths object.",
+                ".agent/workspace.yaml",
+                "Add paths so ArchMarshal can honor project-specific layout.",
+            )
+        )
+        return diagnostics
+    for field in ["project_root", "agent_root"]:
+        if not paths.get(field):
+            diagnostics.append(
+                Diagnostic(
+                    "project.workspace_missing_paths",
+                    "error",
+                    f"workspace.yaml is missing paths.{field}.",
+                    ".agent/workspace.yaml",
+                    "Declare the required root path mappings.",
+                )
+            )
+    for key, value in paths.items():
+        entries = value if isinstance(value, list) else [value]
+        for entry in entries:
+            if not isinstance(entry, str) or not entry:
+                diagnostics.append(
+                    Diagnostic(
+                        "project.workspace_invalid_path_entry",
+                        "error",
+                        f"paths.{key} contains an invalid path entry.",
+                        ".agent/workspace.yaml",
+                        "Use non-empty relative path strings.",
+                    )
+                )
+                continue
+            if _path_escapes_root(root, entry):
+                diagnostics.append(
+                    Diagnostic(
+                        "project.workspace_path_outside_root",
+                        "warning",
+                        f"paths.{key} points outside the project root.",
+                        entry,
+                        "Keep mappings inside the project unless this is an intentional external workspace.",
+                    )
+                )
+    return diagnostics
+
+
+def _path_escapes_root(root: Path, entry: str) -> bool:
+    path = Path(entry)
+    if path.is_absolute():
+        target = path.resolve()
+    else:
+        target = (root / path).resolve()
+    try:
+        target.relative_to(root.resolve())
+        return False
+    except ValueError:
+        return True
 
 
 def _lint_registry(data: dict[str, Any]) -> list[Diagnostic]:
@@ -243,6 +348,7 @@ def _lint_skills(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
             triggers[str(trigger).strip().lower()].append(manifest_path)
         diagnostics.extend(_lint_skill_required_fields(skill, manifest_path))
         diagnostics.extend(_lint_skill_reproducibility(skill, manifest_path))
+        diagnostics.extend(_lint_skill_local_paths(root, skill, manifest_path))
         diagnostics.extend(_lint_skill_boundaries(root, skill, manifest_path))
         if "/generated/" in skill_dir.replace("\\", "/") and skill_dir not in generated_registry_paths:
             diagnostics.append(
@@ -335,21 +441,117 @@ def _lint_skill_required_fields(skill: dict[str, Any], manifest_path: str) -> li
 
 
 def _lint_skill_reproducibility(skill: dict[str, Any], manifest_path: str) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
     if skill.get("kind") != "common_project_skill":
-        return []
+        return diagnostics
     reproducibility = skill.get("reproducibility") or {}
     expected_true = ["required", "scripts_local", "templates_local", "references_local"]
-    if all(reproducibility.get(key) is True for key in expected_true):
-        return []
-    return [
-        Diagnostic(
-            "skill.common_project_missing_reproducibility",
-            "error",
-            "Common project skill does not prove local reproducibility.",
-            manifest_path,
-            "Set reproducibility.required/scripts_local/templates_local/references_local to true.",
+    if not all(reproducibility.get(key) is True for key in expected_true):
+        diagnostics.append(
+            Diagnostic(
+                "skill.common_project_missing_reproducibility",
+                "error",
+                "Common project skill does not prove local reproducibility.",
+                manifest_path,
+                "Set reproducibility.required/scripts_local/templates_local/references_local to true.",
+            )
         )
-    ]
+    return diagnostics
+
+
+def _lint_skill_local_paths(root: Path, skill: dict[str, Any], manifest_path: str) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    skill_root = (root / str(skill.get("_skill_dir", ""))).resolve()
+    manifest_paths = skill.get("paths") or {}
+    for field in ["scripts", "templates", "references", "tests"]:
+        declared = manifest_paths.get(field)
+        if not declared:
+            continue
+        target = (skill_root / str(declared)).resolve()
+        if not _is_relative_to(target, skill_root):
+            diagnostics.append(
+                Diagnostic(
+                    "skill.path_outside_skill_root",
+                    "error",
+                    f"Skill path '{field}' points outside the skill directory.",
+                    manifest_path,
+                    "Keep scripts, templates, references, and tests inside the skill directory.",
+                )
+            )
+            continue
+        if field != "tests" and skill.get("kind") == "common_project_skill":
+            reproducibility = skill.get("reproducibility") or {}
+            flag_name = f"{field}_local"
+            if reproducibility.get(flag_name) is True and not target.exists():
+                diagnostics.append(
+                    Diagnostic(
+                        "skill.local_path_missing",
+                        "error",
+                        f"Common project skill declares local {field}, but the directory is missing.",
+                        _relative_or_absolute(target, root),
+                        "Create the declared directory under the skill path.",
+                    )
+                )
+            elif reproducibility.get(flag_name) is True and not list_files(target):
+                diagnostics.append(
+                    Diagnostic(
+                        "skill.local_path_empty",
+                        "warning",
+                        f"Common project skill declares local {field}, but the directory has no files.",
+                        _relative_or_absolute(target, root),
+                        "Add the reproducibility material or set the reproducibility flag honestly.",
+                    )
+                )
+    dependencies = skill.get("dependencies") or {}
+    for file_path in dependencies.get("files") or []:
+        target = (skill_root / str(file_path)).resolve()
+        if not _is_relative_to(target, skill_root):
+            diagnostics.append(
+                Diagnostic(
+                    "skill.dependency_file_outside_skill_root",
+                    "error",
+                    "Skill dependency file points outside the skill directory.",
+                    manifest_path,
+                    "Copy required dependency files into the skill directory or declare a command dependency instead.",
+                )
+            )
+        elif not target.exists():
+            diagnostics.append(
+                Diagnostic(
+                    "skill.declared_dependency_file_missing",
+                    "error",
+                    "Skill dependency file is declared but missing.",
+                    _relative_or_absolute(target, root),
+                    "Add the dependency file under the skill directory.",
+                )
+            )
+    for command in dependencies.get("commands") or []:
+        if not shutil.which(str(command)):
+            diagnostics.append(
+                Diagnostic(
+                    "skill.command_dependency_missing",
+                    "warning",
+                    f"Declared command dependency '{command}' is not available on PATH.",
+                    manifest_path,
+                    "Install the command or run this skill in an environment that provides it.",
+                )
+            )
+    return diagnostics
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _relative_or_absolute(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def _lint_skill_boundaries(root: Path, skill: dict[str, Any], manifest_path: str) -> list[Diagnostic]:

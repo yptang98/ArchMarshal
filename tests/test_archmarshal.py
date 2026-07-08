@@ -55,6 +55,40 @@ def test_missing_project_entry_files_are_errors(tmp_path: Path) -> None:
     assert by_rule["project.missing_agent_index"].severity == "error"
 
 
+def test_workspace_manifest_metadata_is_required(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    workspace = root / ".agent" / "workspace.yaml"
+    workspace.write_text(
+        """
+workspace:
+  name: ""
+paths:
+  project_root: .
+  agent_root: .agent
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = rules(root)
+    assert "project.workspace_missing_metadata" in result
+
+
+def test_workspace_paths_warn_when_they_escape_root(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    workspace = root / ".agent" / "workspace.yaml"
+    workspace.write_text(
+        workspace.read_text(encoding="utf-8")
+        + """
+
+  external_memory:
+    - ..
+""",
+        encoding="utf-8",
+    )
+
+    assert "project.workspace_path_outside_root" in rules(root)
+
+
 def test_detects_overlapping_skill_trigger(tmp_path: Path) -> None:
     root = copy_example(tmp_path, "simple-project")
     skill_dir = root / ".agents" / "skills" / "functional" / "doc-summary-copy"
@@ -107,6 +141,70 @@ def test_report_default_read_policy_is_error(tmp_path: Path) -> None:
     )
 
     assert "project.report_read_policy_not_explicit" in rules(root)
+
+
+def test_common_project_skill_reproducibility_paths_are_verified(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "monorepo-project")
+    skill_dir = root / ".agents" / "skills" / "common-project" / "release-checklist"
+    shutil.rmtree(skill_dir / "templates")
+
+    assert "skill.local_path_missing" in rules(root)
+
+
+def test_skill_paths_cannot_escape_skill_root(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "monorepo-project")
+    manifest = (
+        root
+        / ".agents"
+        / "skills"
+        / "common-project"
+        / "release-checklist"
+        / "manifest.yaml"
+    )
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace("templates: templates", "templates: ../outside"),
+        encoding="utf-8",
+    )
+
+    assert "skill.path_outside_skill_root" in rules(root)
+
+
+def test_skill_dependency_files_stay_inside_skill_root(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "monorepo-project")
+    manifest = (
+        root
+        / ".agents"
+        / "skills"
+        / "common-project"
+        / "release-checklist"
+        / "manifest.yaml"
+    )
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace("files: []", "files:\n    - ../secret.txt"),
+        encoding="utf-8",
+    )
+
+    assert "skill.dependency_file_outside_skill_root" in rules(root)
+
+
+def test_missing_command_dependency_is_warning(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "monorepo-project")
+    manifest = (
+        root
+        / ".agents"
+        / "skills"
+        / "common-project"
+        / "release-checklist"
+        / "manifest.yaml"
+    )
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace("    - git", "    - archmarshal-definitely-missing-command"),
+        encoding="utf-8",
+    )
+
+    diagnostics = lint_workspace(root)
+    by_rule = {diagnostic.rule: diagnostic for diagnostic in diagnostics}
+    assert by_rule["skill.command_dependency_missing"].severity == "warning"
 
 
 def test_audit_and_plan_are_read_only_views(tmp_path: Path) -> None:
