@@ -49,41 +49,26 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 
 ## Quick Start
 
-ArchMarshal is meant to be installed into a Codex session. After that, you use
-short lifecycle words and keep giving normal project instructions.
+ArchMarshal is meant to be installed into a Codex session. Install once, then
+use the built-in lifecycle words while giving normal project instructions.
 
-### 1. Copy This Into Codex Once
+### 1. Install
 
 ```text
 Codex, install ArchMarshal for this project:
 https://github.com/yptang98/ArchMarshal
 
-After installing it, let me use two short lifecycle words:
-
-- When I type `archmarshal-start`, run ArchMarshal's project-start check for
-  the current project. Check save paths, naming, and memory/history rules, then
-  keep using ArchMarshal quietly while I give normal project instructions.
-
-- When I type `archmarshal-end`, run ArchMarshal's project closeout for the
-  current project or phase. Give me a preservation and reproducibility summary.
-  Do not modify files unless I explicitly approve.
-
-During the project, if context is compressed or I ask for a checkpoint, create
-an ArchMarshal checkpoint proposal. Summaries are indexes, not replacements:
-never delete raw reports, plans, checkpoints, notes, or history.
-
-Use automatic recording depth. If the project mostly reuses existing skills,
-keep the record light. Only go deeper when the work creates new reusable
-knowledge, a new workflow, or a real governance risk.
-
-Keep the output concise. Do not make me type long ArchMarshal commands.
+After installing, confirm it is available and show me the shortest way to start.
 ```
 
-### 2. Start A Project
+### 2. Start
 
 ```text
 archmarshal-start
 ```
+
+ArchMarshal checks save paths, naming, memory/history rules, and then Codex can
+keep using it quietly while you give normal project instructions.
 
 Then continue with normal work:
 
@@ -93,13 +78,22 @@ Refactor the API client.
 Write the benchmark report.
 ```
 
-### 3. End A Project
+During the project, checkpoints should preserve what must survive context
+compression. Summaries are indexes, not replacements: raw reports, plans,
+checkpoints, notes, and history stay preserved.
+
+### 3. End
 
 ```text
 archmarshal-end
 ```
 
-That is the main workflow: install prompt, `archmarshal-start`, normal project
+ArchMarshal closes the project or phase with a preservation and reproducibility
+summary. It uses automatic recording depth: routine skill reuse stays light,
+while genuinely novel work can produce deeper memory, context, or skill
+promotion suggestions.
+
+That is the main workflow: install, `archmarshal-start`, normal project
 instructions, `archmarshal-end`.
 See [Getting Started](docs/getting-started.md) for the minimal prompts.
 
