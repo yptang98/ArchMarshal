@@ -7,6 +7,7 @@ These are the rule names currently emitted by `archmarshal lint` and surfaced by
 ```text
 skill.missing_manifest
 skill.invalid_manifest_yaml
+skill.manifest_schema_invalid
 skill.missing_tags
 skill.missing_triggers
 skill.missing_negative_triggers
@@ -32,6 +33,7 @@ skill.overlapping_trigger
 ```text
 project.missing_workspace_yaml
 project.workspace_yaml_invalid
+project.workspace_schema_invalid
 project.workspace_missing_metadata
 project.workspace_missing_paths
 project.workspace_invalid_path_entry
@@ -41,8 +43,9 @@ project.agents_md_too_large
 project.agents_md_contains_history
 project.unregistered_agent_file
 project.report_read_policy_not_explicit
+project.registry_yaml_invalid
+project.registry_schema_invalid
 project.archive_read_policy_not_never_default
-project.inbox_file_too_old
 project.generated_skill_not_registered
 project.context_module_missing_source_files
 project.context_module_invalid_yaml
@@ -69,6 +72,19 @@ memory.no_source_evidence
 memory.generated_unreviewed
 memory.conflicting_records
 ```
+
+## Schema And Parse Rules
+
+`project.workspace_yaml_invalid`, `project.registry_yaml_invalid`,
+`skill.invalid_manifest_yaml`, and `project.context_module_invalid_yaml` mean the
+file could not be parsed as YAML. ArchMarshal reports these as structured
+diagnostics instead of throwing a traceback, then continues scanning what it can.
+
+`project.workspace_schema_invalid`, `project.registry_schema_invalid`, and
+`skill.manifest_schema_invalid` mean the YAML parsed successfully but failed the
+corresponding JSON Schema in `schemas/`. These diagnostics include a JSON path
+such as `.agent/workspace.yaml#$.workspace.version`, the schema error message,
+and a targeted suggestion.
 
 ## Severity Guidance
 

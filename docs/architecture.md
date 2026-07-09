@@ -68,6 +68,10 @@ A project workspace contains source code, configuration, documentation, project 
 
 The path mapping allows projects to keep their own structure while still being inspectable by tooling.
 
+Workspace, registry, and skill manifest YAML files are parsed fail-soft. Invalid
+YAML becomes a structured lint diagnostic, and valid YAML is checked against the
+packaged JSON Schemas before downstream rules run.
+
 ## Historical Artifact Layer
 
 Historical artifacts preserve process, evidence, reports, temporary analysis, and old plans. They are not loaded by default.

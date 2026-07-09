@@ -7,7 +7,8 @@ from typing import Any
 
 from .diagnostics import Diagnostic
 from .inventory import collect_inventory
-from .io import list_files, load_yaml, read_text
+from .io import list_files, load_yaml_safe, read_text
+from .schema_validation import validate_schema
 
 
 GLOBAL_SKILL_MAX_LINES = 120
@@ -98,18 +99,28 @@ def _lint_workspace_manifest(root: Path, data: dict[str, Any]) -> list[Diagnosti
     workspace_file = root / ".agent" / "workspace.yaml"
     if not workspace_file.exists():
         return diagnostics
-    try:
-        raw = load_yaml(workspace_file)
-    except Exception as exc:
+    result = load_yaml_safe(workspace_file)
+    if result.error:
         return [
             Diagnostic(
                 "project.workspace_yaml_invalid",
                 "error",
-                f"workspace.yaml could not be parsed: {exc}",
+                f"workspace.yaml could not be parsed: {result.error}",
                 ".agent/workspace.yaml",
                 "Fix workspace.yaml syntax.",
             )
         ]
+    raw = result.data
+    diagnostics.extend(
+        _schema_diagnostics(
+            "project.workspace_schema_invalid",
+            ".agent/workspace.yaml",
+            "workspace",
+            raw,
+        )
+    )
+    if not isinstance(raw, dict):
+        return diagnostics
     workspace = raw.get("workspace") if isinstance(raw, dict) else None
     paths = raw.get("paths") if isinstance(raw, dict) else None
     if not isinstance(workspace, dict):
@@ -183,6 +194,24 @@ def _lint_workspace_manifest(root: Path, data: dict[str, Any]) -> list[Diagnosti
     return diagnostics
 
 
+def _schema_diagnostics(
+    rule: str,
+    source_path: str,
+    schema_name: str,
+    payload: object,
+) -> list[Diagnostic]:
+    return [
+        Diagnostic(
+            rule,
+            "error",
+            f"Schema violation at {issue.location}: {issue.message}",
+            f"{source_path}#{issue.location}",
+            issue.suggestion,
+        )
+        for issue in validate_schema(payload, schema_name)
+    ]
+
+
 def _path_escapes_root(root: Path, entry: str) -> bool:
     path = Path(entry)
     if path.is_absolute():
@@ -200,7 +229,31 @@ def _lint_registry(data: dict[str, Any]) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
     artifact_ids: set[str] = set()
     root = Path(data["root"])
+    registry_path = root / ".agent" / "registry.yaml"
+    if registry_path.exists():
+        result = load_yaml_safe(registry_path)
+        if result.error:
+            diagnostics.append(
+                Diagnostic(
+                    "project.registry_yaml_invalid",
+                    "error",
+                    f"registry.yaml could not be parsed: {result.error}",
+                    ".agent/registry.yaml",
+                    "Fix registry.yaml syntax.",
+                )
+            )
+            return diagnostics
+        diagnostics.extend(
+            _schema_diagnostics(
+                "project.registry_schema_invalid",
+                ".agent/registry.yaml",
+                "artifact-registry",
+                result.data,
+            )
+        )
     for artifact in data["artifacts"]:
+        if artifact.get("_load_error"):
+            continue
         artifact_id = str(artifact.get("id", ""))
         path = str(artifact.get("path", "")).replace("\\", "/")
         kind = artifact.get("kind")
@@ -515,6 +568,17 @@ def _lint_skills(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
                 )
             )
             continue
+        schema_payload = skill.get("_schema_data")
+        if schema_payload is None:
+            schema_payload = {key: value for key, value in skill.items() if not key.startswith("_")}
+        diagnostics.extend(
+            _schema_diagnostics(
+                "skill.manifest_schema_invalid",
+                manifest_path,
+                "skill-manifest",
+                schema_payload,
+            )
+        )
         name = str(skill.get("name", ""))
         if name:
             names[name].append(manifest_path)

@@ -1,0 +1,140 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://archmarshal.local/schemas/skill-manifest.schema.yaml
+title: ArchMarshal Skill Manifest
+type: object
+required:
+  - id
+  - name
+  - kind
+  - version
+  - status
+  - scope
+  - summary
+  - tags
+  - triggers
+  - negative_triggers
+additionalProperties: true
+properties:
+  id:
+    type: string
+    pattern: "^skill\\.[a-z0-9_.-]+$"
+  name:
+    type: string
+    minLength: 1
+  kind:
+    enum:
+      - global_skill
+      - functional_skill
+      - common_project_skill
+      - project_skill
+      - generated_project_skill
+      - governance_skill
+  version:
+    type: string
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+  status:
+    enum:
+      - active
+      - disabled
+      - experimental
+      - deprecated
+      - archived
+  priority:
+    enum:
+      - highest
+      - high
+      - normal
+      - low
+  scope:
+    enum:
+      - global
+      - functional
+      - common_project
+      - project
+      - module
+      - generated
+  summary:
+    type: string
+    minLength: 1
+  tags:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      type: string
+  triggers:
+    type: array
+    minItems: 1
+    items:
+      type: string
+  negative_triggers:
+    type: array
+    minItems: 1
+    items:
+      type: string
+  reproducibility:
+    type: object
+    properties:
+      required:
+        type: boolean
+      scripts_local:
+        type: boolean
+      templates_local:
+        type: boolean
+      references_local:
+        type: boolean
+  paths:
+    type: object
+    properties:
+      skill_root:
+        type: string
+      scripts:
+        type: string
+      templates:
+        type: string
+      references:
+        type: string
+      tests:
+        type: string
+  dependencies:
+    type: object
+    properties:
+      commands:
+        type: array
+        items:
+          type: string
+      files:
+        type: array
+        items:
+          type: string
+      network_required:
+        type: boolean
+  outputs:
+    type: object
+    properties:
+      default_dir:
+        type: string
+      artifact_kind:
+        type: string
+      ttl_days:
+        type: integer
+        minimum: 0
+  permissions:
+    type: object
+    properties:
+      reads:
+        type: array
+        items:
+          type: string
+      writes:
+        type: array
+        items:
+          type: string
+      proposes:
+        type: array
+        items:
+          type: string
+      forbidden:
+        type: array
+        items:
+          type: string

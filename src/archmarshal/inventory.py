@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .io import list_files, load_yaml, rel
+from .io import list_files, load_yaml_safe, rel
 
 
 DEFAULT_PATHS = {
@@ -88,9 +88,17 @@ def _load_workspace(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     workspace_file = root / ".agent" / "workspace.yaml"
     if not workspace_file.exists():
         return {}, DEFAULT_PATHS.copy()
-    data = load_yaml(workspace_file)
+    result = load_yaml_safe(workspace_file)
+    if result.error:
+        return {
+            "_load_error": result.error,
+            "_source_path": rel(workspace_file, root),
+        }, DEFAULT_PATHS.copy()
+    data = result.data if isinstance(result.data, dict) else {}
     paths = DEFAULT_PATHS.copy()
-    paths.update(data.get("paths", {}) or {})
+    declared_paths = data.get("paths", {})
+    if isinstance(declared_paths, dict):
+        paths.update(declared_paths or {})
     return data.get("workspace", {}) or {}, paths
 
 
@@ -150,19 +158,25 @@ def _load_registry(root: Path) -> list[dict[str, Any]]:
     registry_file = root / ".agent" / "registry.yaml"
     if not registry_file.exists():
         return []
-    data = load_yaml(registry_file)
+    result = load_yaml_safe(registry_file)
+    if result.error:
+        return [{"_load_error": result.error, "_registry_file": rel(registry_file, root)}]
+    data = result.data
     artifacts = data.get("artifacts", []) if isinstance(data, dict) else []
-    return [item for item in artifacts if isinstance(item, dict)]
+    result_artifacts = [item for item in artifacts if isinstance(item, dict)]
+    for item in result_artifacts:
+        item["_registry_file"] = rel(registry_file, root)
+    return result_artifacts
 
 
 def _load_memory_stores(root: Path) -> list[dict[str, Any]]:
     memory_file = root / ".agent" / "memory-stores.yaml"
     if not memory_file.exists():
         return []
-    try:
-        data = load_yaml(memory_file)
-    except Exception as exc:  # pragma: no cover - surfaced as data for lint
-        return [{"_load_error": str(exc), "_memory_file": rel(memory_file, root)}]
+    result = load_yaml_safe(memory_file)
+    if result.error:
+        return [{"_load_error": result.error, "_memory_file": rel(memory_file, root)}]
+    data = result.data
     stores = data.get("memory_stores", []) if isinstance(data, dict) else []
     result = [item for item in stores if isinstance(item, dict)]
     for item in result:
@@ -174,10 +188,10 @@ def _load_memory_records(root: Path) -> list[dict[str, Any]]:
     memory_file = root / ".agent" / "memory-records.yaml"
     if not memory_file.exists():
         return []
-    try:
-        data = load_yaml(memory_file)
-    except Exception as exc:  # pragma: no cover - surfaced as data for lint
-        return [{"_load_error": str(exc), "_memory_file": rel(memory_file, root)}]
+    result = load_yaml_safe(memory_file)
+    if result.error:
+        return [{"_load_error": result.error, "_memory_file": rel(memory_file, root)}]
+    data = result.data
     records = data.get("memory_records", []) if isinstance(data, dict) else []
     result = [item for item in records if isinstance(item, dict)]
     for item in result:
@@ -186,10 +200,16 @@ def _load_memory_records(root: Path) -> list[dict[str, Any]]:
 
 
 def _load_skill_manifest(manifest_path: Path, root: Path) -> dict[str, Any]:
-    try:
-        manifest = load_yaml(manifest_path)
-    except Exception as exc:  # pragma: no cover - surfaced as data for lint
-        manifest = {"_load_error": str(exc)}
+    result = load_yaml_safe(manifest_path)
+    if result.error:
+        manifest = {"_load_error": result.error}
+    elif isinstance(result.data, dict):
+        manifest = result.data
+    else:
+        manifest = {
+            "_schema_data": result.data,
+            "_schema_error": "Skill manifest must be a YAML mapping.",
+        }
     skill_dir = manifest_path.parent
     manifest["_manifest_path"] = rel(manifest_path, root)
     manifest["_skill_dir"] = rel(skill_dir, root)
@@ -224,10 +244,16 @@ def _find_skills(root: Path, entries: dict[str, list[Path]]) -> list[dict[str, A
 
 
 def _load_context_module(module_path: Path, root: Path) -> dict[str, Any]:
-    try:
-        module = load_yaml(module_path)
-    except Exception as exc:  # pragma: no cover - surfaced as data for lint
-        module = {"_load_error": str(exc)}
+    result = load_yaml_safe(module_path)
+    if result.error:
+        module = {"_load_error": result.error}
+    elif isinstance(result.data, dict):
+        module = result.data
+    else:
+        module = {
+            "_schema_data": result.data,
+            "_schema_error": "Context module must be a YAML mapping.",
+        }
     module["_module_path"] = rel(module_path, root)
     return module
 

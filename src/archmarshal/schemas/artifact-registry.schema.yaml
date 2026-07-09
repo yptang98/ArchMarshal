@@ -1,0 +1,96 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://archmarshal.local/schemas/artifact-registry.schema.yaml
+title: ArchMarshal Artifact Registry
+type: object
+required:
+  - artifacts
+additionalProperties: false
+properties:
+  artifacts:
+    type: array
+    items:
+      type: object
+      required:
+        - id
+        - kind
+        - path
+        - status
+        - read_policy
+        - update_policy
+        - source_of_truth
+        - tags
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+          pattern: "^[a-z0-9_.-]+$"
+        kind:
+          enum:
+            - source_code
+            - config
+            - project_doc
+            - knowledge
+            - context_module
+            - skill
+            - generated_skill
+            - report
+            - plan
+            - history
+            - artifact
+            - cache
+        path:
+          type: string
+          minLength: 1
+        status:
+          enum:
+            - inbox
+            - raw
+            - active
+            - distilled
+            - promoted
+            - stale
+            - archived
+            - deleted
+        read_policy:
+          enum:
+            - default
+            - task_based
+            - on_planning
+            - on_architecture_tasks
+            - on_database_tasks
+            - on_release_tasks
+            - when_task_matches
+            - explicit_only
+            - never_default
+        update_policy:
+          enum:
+            - human_only
+            - agent_propose_diff
+            - agent_can_update
+            - append_only
+            - generated
+            - mutable_until_complete
+            - immutable
+        source_of_truth:
+          type: boolean
+        owner:
+          type: string
+        tags:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+        ttl_days:
+          type: integer
+          minimum: 0
+        derived_from:
+          type: array
+          items:
+            type: string
+        related_skills:
+          type: array
+          items:
+            type: string
+        created_by_skill:
+          type: string

@@ -75,6 +75,35 @@ paths:
     assert "project.workspace_missing_metadata" in result
 
 
+def test_invalid_workspace_yaml_reports_structured_diagnostic(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    workspace = root / ".agent" / "workspace.yaml"
+    workspace.write_text("workspace:\n  name: broken\n paths:\n", encoding="utf-8")
+
+    inventory = collect_inventory(root)
+    diagnostics = lint_workspace(root)
+
+    assert inventory.workspace["_load_error"]
+    assert {diagnostic.rule for diagnostic in diagnostics} >= {"project.workspace_yaml_invalid"}
+
+
+def test_workspace_schema_errors_are_reported(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    workspace = root / ".agent" / "workspace.yaml"
+    workspace.write_text(
+        workspace.read_text(encoding="utf-8").replace("version: 0.1.0", "version: abc"),
+        encoding="utf-8",
+    )
+
+    diagnostics = lint_workspace(root)
+    by_rule = [diagnostic for diagnostic in diagnostics if diagnostic.rule == "project.workspace_schema_invalid"]
+
+    assert by_rule
+    assert by_rule[0].path is not None
+    assert "#$.workspace.version" in by_rule[0].path
+    assert by_rule[0].suggestion
+
+
 def test_workspace_paths_warn_when_they_escape_root(tmp_path: Path) -> None:
     root = copy_example(tmp_path, "simple-project")
     workspace = root / ".agent" / "workspace.yaml"
@@ -120,6 +149,45 @@ negative_triggers:
     )
 
     assert "skill.overlapping_trigger" in rules(root)
+
+
+def test_invalid_registry_yaml_reports_structured_diagnostic(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    registry = root / ".agent" / "registry.yaml"
+    registry.write_text("artifacts:\n  - id: broken\n    tags: [unterminated\n", encoding="utf-8")
+
+    inventory = collect_inventory(root)
+    diagnostics = lint_workspace(root)
+
+    assert inventory.artifacts[0]["_load_error"]
+    assert "project.registry_yaml_invalid" in {diagnostic.rule for diagnostic in diagnostics}
+
+
+def test_registry_schema_enum_and_required_errors_are_reported(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    registry = root / ".agent" / "registry.yaml"
+    registry.write_text(
+        """
+artifacts:
+  - id: project.bad
+    kind: report
+    path: .agent/reports/bad.md
+    status: raw
+    read_policy: always
+    tags:
+      - audit
+""".strip(),
+        encoding="utf-8",
+    )
+
+    diagnostics = lint_workspace(root)
+    schema_diagnostics = [
+        diagnostic for diagnostic in diagnostics if diagnostic.rule == "project.registry_schema_invalid"
+    ]
+
+    assert len(schema_diagnostics) >= 3
+    assert any("#$.artifacts[0].read_policy" in str(item.path) for item in schema_diagnostics)
+    assert any("required" in item.suggestion.lower() for item in schema_diagnostics if item.suggestion)
 
 
 def test_report_default_read_policy_is_error(tmp_path: Path) -> None:
@@ -259,6 +327,45 @@ def test_skill_memory_writes_require_memory_effects(tmp_path: Path) -> None:
     )
 
     assert "skill.memory_side_effect_undeclared" in rules(root)
+
+
+def test_invalid_skill_manifest_yaml_does_not_block_other_skills(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    manifest = root / ".agents" / "skills" / "functional" / "doc-summary" / "manifest.yaml"
+    manifest.write_text("id: skill.functional.doc-summary\ntriggers: [broken\n", encoding="utf-8")
+
+    inventory = collect_inventory(root)
+    diagnostics = lint_workspace(root)
+
+    assert "skill.global.lightweight-policy" in {skill.get("id") for skill in inventory.skills}
+    assert "skill.invalid_manifest_yaml" in {diagnostic.rule for diagnostic in diagnostics}
+
+
+def test_skill_manifest_schema_errors_are_reported(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    manifest = root / ".agents" / "skills" / "functional" / "doc-summary" / "manifest.yaml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace("kind: functional_skill", "kind: weird_skill"),
+        encoding="utf-8",
+    )
+
+    diagnostics = lint_workspace(root)
+    schema_diagnostics = [
+        diagnostic for diagnostic in diagnostics if diagnostic.rule == "skill.manifest_schema_invalid"
+    ]
+
+    assert schema_diagnostics
+    assert "#$.kind" in str(schema_diagnostics[0].path)
+
+
+def test_invalid_context_module_yaml_reports_structured_diagnostic(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    module = root / ".agent" / "context-modules" / "architecture" / "module.yaml"
+    module.write_text("id: context.architecture\nsource_files: [broken\n", encoding="utf-8")
+
+    diagnostics = lint_workspace(root)
+
+    assert "project.context_module_invalid_yaml" in {diagnostic.rule for diagnostic in diagnostics}
 
 
 def test_audit_and_plan_are_read_only_views(tmp_path: Path) -> None:

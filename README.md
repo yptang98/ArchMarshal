@@ -165,6 +165,8 @@ python scripts/inventory.py examples/simple-project --pretty
 ## Safety Rules
 
 - Inventory, lint, audit, and plan are read-only by default.
+- YAML inputs fail softly: bad workspace, registry, skill, or context module YAML becomes a structured diagnostic.
+- Workspace, registry, and skill manifest schemas are enforced during lint.
 - Resolve is advisory and loads only matched skill/context metadata.
 - Closeout summarizes used skills and cleanup actions after project work.
 - Global, functional, common-project, project, and generated skill roots are separately mapped.
@@ -189,6 +191,7 @@ python scripts/inventory.py examples/simple-project --pretty
 - [x] Workspace schema
 - [x] Skill manifest schema
 - [x] Artifact registry schema
+- [x] Lint-time schema validation for workspace, registry, and skill manifests
 - [x] Basic project template
 - [x] Functional skill template
 - [x] Common project skill template
@@ -200,6 +203,7 @@ python scripts/inventory.py examples/simple-project --pretty
 - [x] Audit report sample
 - [x] Executable CLI package
 - [x] Governance lint rules
+- [x] Fail-soft YAML parsing for workspace, registry, skill manifests, and context modules
 - [x] Read-only remediation plan output
 - [x] Task-based skill/context resolver
 - [x] Project closeout skill/memory summary

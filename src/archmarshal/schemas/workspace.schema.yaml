@@ -1,0 +1,91 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://archmarshal.local/schemas/workspace.schema.yaml
+title: ArchMarshal Workspace
+type: object
+required:
+  - workspace
+  - paths
+additionalProperties: false
+properties:
+  workspace:
+    type: object
+    required:
+      - name
+      - version
+    additionalProperties: false
+    properties:
+      name:
+        type: string
+        minLength: 1
+      version:
+        type: string
+        pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+      description:
+        type: string
+  paths:
+    type: object
+    required:
+      - project_root
+      - agent_root
+    additionalProperties: false
+    properties:
+      project_root:
+        type: string
+      code_roots:
+        type: array
+        items:
+          type: string
+      agent_root:
+        type: string
+      global_skills:
+        type: array
+        items:
+          type: string
+      functional_skills:
+        type: array
+        items:
+          type: string
+      common_project_skills:
+        type: array
+        items:
+          type: string
+      project_skills:
+        type: array
+        items:
+          type: string
+      generated_skills:
+        type: array
+        items:
+          type: string
+      knowledge:
+        type: array
+        items:
+          type: string
+      context_modules:
+        type: array
+        items:
+          type: string
+      reports:
+        type: array
+        items:
+          type: string
+      plans:
+        type: array
+        items:
+          type: string
+      history:
+        type: array
+        items:
+          type: string
+      archive:
+        type: array
+        items:
+          type: string
+      cache:
+        type: array
+        items:
+          type: string
+      inbox:
+        type: array
+        items:
+          type: string
