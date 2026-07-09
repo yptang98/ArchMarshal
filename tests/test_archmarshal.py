@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 from archmarshal.audit import audit_workspace
+from archmarshal.checkpoint import checkpoint_workspace
 from archmarshal.cli import main
 from archmarshal.closeout import closeout_workspace
 from archmarshal.inventory import collect_inventory
@@ -401,6 +402,10 @@ def test_closeout_reports_used_skills(tmp_path: Path) -> None:
     assert result["used_skills"][0]["id"] == "skill.common-project.release-checklist"
     assert result["missing_used_skills"] == ["skill.missing"]
     assert result["diagnostic_summary"]["error"] == 0
+    assert result["original_preservation_policy"]["preserve_originals"] is True
+    assert result["original_preservation_policy"]["delete_after_summary"] is False
+    assert result["session_summary"]["used_skill_count"] == 1
+    assert result["reproduction_checklist"]
 
 
 def test_closeout_proposes_memory_candidates_from_reports(tmp_path: Path) -> None:
@@ -428,6 +433,65 @@ def test_closeout_proposes_memory_candidates_from_reports(tmp_path: Path) -> Non
 
     result = closeout_workspace(root, [])
     assert result["candidate_memory_updates"][0]["source_artifact"] == "report.learning"
+    assert result["candidate_memory_updates"][0]["preserve_original"] is True
+    assert result["preservation_manifest"]["original_history_artifacts"][0]["id"] == "report.learning"
+
+
+def test_checkpoint_preserves_compaction_summary_without_mutating_project(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    before_files = sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
+
+    result = checkpoint_workspace(
+        root,
+        summary="Implemented lightweight onboarding and kept raw history intact.",
+        task="new project setup",
+        decisions=["Use append-only checkpoints after context compression."],
+        files=[".agent/registry.yaml", "src/archmarshal/checkpoint.py"],
+        next_steps=["Review candidate memory before promotion."],
+        used_skills=["skill.functional.doc-summary"],
+        risks=["Do not delete raw reports after distillation."],
+    )
+    after_files = sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
+
+    assert before_files == after_files
+    assert result["mode"] == "propose_only"
+    assert result["original_preservation_policy"]["delete_after_summary"] is False
+    assert result["registry_update_suggestions"][0]["update_policy"] == "append_only"
+    assert result["registry_update_suggestions"][0]["read_policy"] == "explicit_only"
+    assert result["registry_update_suggestions"][0]["preserve_original"] is True
+    assert result["suggested_memory_record"]["status"] == "candidate"
+    assert result["suggested_memory_record"]["review_status"] == "pending_human"
+
+
+def test_cli_checkpoint_outputs_preservation_policy(tmp_path: Path, capsys) -> None:
+    root = copy_example(tmp_path, "simple-project")
+
+    assert main(
+        [
+            "checkpoint",
+            str(root),
+            "--summary",
+            "Compressed context after architecture work.",
+            "--task",
+            "architecture checkpoint",
+            "--decision",
+            "Keep source notes intact.",
+        ]
+    ) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["stage"] == "context_checkpoint"
+    assert payload["original_preservation_policy"]["preserve_originals"] is True
+    assert payload["registry_update_suggestions"][0]["preserve_original"] is True
+
+
+def test_cli_inventory_serializes_yaml_dates(tmp_path: Path, capsys) -> None:
+    root = copy_example(tmp_path, "simple-project")
+
+    assert main(["inventory", str(root)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["memory_records"][0]["last_verified"] == "2026-07-09"
 
 
 def test_cli_lint_exit_codes(tmp_path: Path, capsys) -> None:

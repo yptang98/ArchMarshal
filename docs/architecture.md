@@ -76,6 +76,12 @@ packaged JSON Schemas before downstream rules run.
 
 Historical artifacts preserve process, evidence, reports, temporary analysis, and old plans. They are not loaded by default.
 
+Summaries never replace original history. A distilled knowledge file, context
+module, memory record, or checkpoint is an index into preserved evidence. Raw
+reports, plans, checkpoints, and history should remain retrievable through
+explicit-only paths so later agents can reproduce detail without reloading every
+artifact by default.
+
 Default explicit-only directories:
 
 - `.agent/reports/`
@@ -124,7 +130,8 @@ ArchMarshal operations should mature in this order:
 3. `audit`: explain risks and evidence.
 4. `plan`: propose non-destructive changes.
 5. `resolve`: advise which skills and context modules fit a task.
-6. `closeout`: summarize used skills and cleanup actions after project work.
-7. `apply`: execute confirmed, non-destructive changes.
+6. `checkpoint`: preserve compact state after context compression as a read-only candidate record.
+7. `closeout`: summarize used skills, preservation needs, and reproduction evidence after project work.
+8. `apply`: execute confirmed, non-destructive changes.
 
-The current CLI implements read-only inventory, lint, audit, plan, resolve, and closeout. `apply` remains intentionally unsupported.
+The current CLI implements read-only inventory, lint, audit, plan, resolve, checkpoint, and closeout. `apply` remains intentionally unsupported.

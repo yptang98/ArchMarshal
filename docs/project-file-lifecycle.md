@@ -2,6 +2,16 @@
 
 Project files are not automatically dynamic context. Most files are historical artifacts until they are distilled, registered, and promoted.
 
+## Original Preservation Rule
+
+Do not delete raw project history just because a summary exists.
+
+Summaries, context modules, memory records, and closeout notes are navigation
+layers. They should preserve references to the original reports, plans,
+checkpoints, source files, decisions, and historical artifacts. The original
+material remains explicit-only or archived so later agents can reproduce exact
+details when needed.
+
 ## Lifecycle
 
 ```text
@@ -85,6 +95,13 @@ Promote only when content is reusable and stable enough to justify a stronger li
 - Distilled knowledge can become a context module.
 - Repeated procedural knowledge can become a project skill.
 - Cross-project procedural knowledge can become a common project skill.
+- Promotion preserves the original artifact; it does not overwrite or delete it.
+
+## Context Checkpoints
+
+Use `archmarshal checkpoint` after context compression or summarization. A
+checkpoint stores the compact state as a candidate history artifact and memory
+record suggestion. It is append-only, explicit-only, and read-only by default.
 
 ## AGENTS.md Role
 

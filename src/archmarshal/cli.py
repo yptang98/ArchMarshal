@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 from .audit import audit_workspace
+from .checkpoint import checkpoint_workspace
 from .closeout import closeout_workspace
 from .diagnostics import Diagnostic, severity_counts
 from .inventory import collect_inventory
@@ -21,6 +23,43 @@ def main(argv: list[str] | None = None) -> int:
     _add_root_command(subparsers, "inventory", "Scan workspace structure without modifying files.")
     _add_root_command(subparsers, "audit", "Summarize governance risks.")
     _add_root_command(subparsers, "plan", "Generate read-only remediation actions.")
+    checkpoint_parser = _add_root_command(
+        subparsers,
+        "checkpoint",
+        "Create a read-only context checkpoint after summarization or compaction.",
+    )
+    checkpoint_parser.add_argument("--summary", required=True, help="Compact summary to preserve.")
+    checkpoint_parser.add_argument("--task", default="", help="Task or project stage being checkpointed.")
+    checkpoint_parser.add_argument(
+        "--decision",
+        action="append",
+        default=[],
+        help="Important decision to preserve. Repeat as needed.",
+    )
+    checkpoint_parser.add_argument(
+        "--file",
+        action="append",
+        default=[],
+        help="Important project file touched or relied on. Repeat as needed.",
+    )
+    checkpoint_parser.add_argument(
+        "--next-step",
+        action="append",
+        default=[],
+        help="Follow-up work that should survive context compression. Repeat as needed.",
+    )
+    checkpoint_parser.add_argument(
+        "--used-skill",
+        action="append",
+        default=[],
+        help="Skill id used before this checkpoint. Repeat as needed.",
+    )
+    checkpoint_parser.add_argument(
+        "--risk",
+        action="append",
+        default=[],
+        help="Known risk, caveat, or unresolved uncertainty. Repeat as needed.",
+    )
     closeout_parser = _add_root_command(
         subparsers,
         "closeout",
@@ -71,6 +110,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "plan":
         _print_json(plan_workspace(root), args.pretty)
         return 0
+    if args.command == "checkpoint":
+        _print_json(
+            checkpoint_workspace(
+                root,
+                summary=args.summary,
+                task=args.task,
+                decisions=args.decision,
+                files=args.file,
+                next_steps=args.next_step,
+                used_skills=args.used_skill,
+                risks=args.risk,
+            ),
+            args.pretty,
+        )
+        return 0
     if args.command == "closeout":
         _print_json(closeout_workspace(root, args.used_skill), args.pretty)
         return 0
@@ -89,7 +143,13 @@ def _add_root_command(subparsers: Any, name: str, help_text: str) -> argparse.Ar
 
 
 def _print_json(payload: Any, pretty: bool) -> None:
-    print(json.dumps(payload, indent=2 if pretty else None, sort_keys=True))
+    print(json.dumps(payload, default=_json_default, indent=2 if pretty else None, sort_keys=True))
+
+
+def _json_default(value: Any) -> str:
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return str(value)
 
 
 __all__ = ["main"]

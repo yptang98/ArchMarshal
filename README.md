@@ -49,6 +49,11 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 
 ## Quick Start
 
+Recommended use is lightweight. Start ArchMarshal at the beginning of a new
+project or new project phase, then use it to keep checkpoints and closeout
+records. Retrofitting a large existing workspace is possible, but should stay
+read-only until a human reviews every suggested change.
+
 Open Codex in the workspace you want to inspect and paste:
 
 ```text
@@ -68,12 +73,36 @@ Please:
 4. Do not modify my existing project files. Only report diagnostics, risks, and suggested next steps.
 ```
 
+After a context compaction or summarization event, preserve the key state as a
+candidate checkpoint:
+
+```bash
+archmarshal checkpoint . \
+  --task "new project setup" \
+  --summary "What changed, what matters, and what remains unresolved." \
+  --decision "Important decision that must survive compression." \
+  --file ".agent/registry.yaml" \
+  --next-step "Review candidate memory before promotion." \
+  --pretty
+```
+
+At project completion, produce a read-only preservation and reproduction view:
+
+```bash
+archmarshal closeout . --used-skill skill.common-project.release-checklist --pretty
+```
+
+Summaries are indexes, not replacements. Raw reports, plans, checkpoints, and
+history should remain preserved with explicit-only read policies so later agents
+can reproduce details without loading every artifact by default.
+
 For a quick smoke test inside this repository:
 
 ```bash
 archmarshal inventory examples/simple-project --pretty
 archmarshal lint examples/simple-project --pretty
 archmarshal audit examples/simple-project --pretty
+archmarshal checkpoint examples/simple-project --task "docs pass" --summary "Preserve a compact checkpoint." --pretty
 archmarshal resolve examples/monorepo-project --task "prepare release checklist" --pretty
 archmarshal closeout examples/monorepo-project --used-skill skill.common-project.release-checklist --pretty
 ```
@@ -85,6 +114,7 @@ archmarshal closeout examples/monorepo-project --used-skill skill.common-project
 - No automatic third-party skill installation.
 - No automatic project directory rewrite.
 - No deletion.
+- No summarization that deletes or replaces original project history.
 - No automatic global configuration mutation.
 - No dynamic context loading runtime.
 
@@ -169,6 +199,8 @@ python scripts/inventory.py examples/simple-project --pretty
 - Workspace, registry, and skill manifest schemas are enforced during lint.
 - Resolve is advisory and loads only matched skill/context metadata.
 - Closeout summarizes used skills and cleanup actions after project work.
+- Checkpoint records compact state after context compression without modifying files.
+- Summaries and memory candidates must point back to preserved original material.
 - Global, functional, common-project, project, and generated skill roots are separately mapped.
 - Historical artifact directories are explicit-read only:
   - `.agent/reports/`
@@ -206,7 +238,9 @@ python scripts/inventory.py examples/simple-project --pretty
 - [x] Fail-soft YAML parsing for workspace, registry, skill manifests, and context modules
 - [x] Read-only remediation plan output
 - [x] Task-based skill/context resolver
+- [x] Read-only context checkpoint output for post-compression summaries
 - [x] Project closeout skill/memory summary
+- [x] Closeout preservation manifest and reproduction checklist
 - [x] Memory store and memory record governance
 - [x] Memory-aware resolve and closeout candidate output
 - [x] Tests for clean examples, missing entry files, skill conflicts, and historical read policy
