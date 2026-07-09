@@ -41,6 +41,11 @@ def checkpoint_workspace(
         "root": str(inventory.root),
         "mode": "propose_only",
         "stage": "context_checkpoint",
+        "recording_policy": {
+            "default_level": "light",
+            "record": ["important_changes", "decisions", "risks", "next_steps"],
+            "reason": "A checkpoint should preserve what must survive compression, not create a heavyweight project summary by default.",
+        },
         "save_path": {
             "kind": "project_file",
             "path": checkpoint_dir,

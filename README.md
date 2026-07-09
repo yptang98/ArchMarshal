@@ -76,6 +76,11 @@ During the project, if context is compressed or I ask for a checkpoint, create
 an ArchMarshal checkpoint proposal. Summaries are indexes, not replacements:
 never delete raw reports, plans, checkpoints, notes, or history.
 
+At project closeout, use ArchMarshal's recording_policy. If the project mostly
+reused existing skills, only record important changes, decisions, risks, and
+files touched. Only suggest memory/context/skill promotion when the work created
+new reusable knowledge or a new workflow.
+
 Only show me concise results. Do not make me type long ArchMarshal commands.
 ```
 
@@ -105,6 +110,10 @@ See [Getting Started](docs/getting-started.md) for the minimal prompts.
 
 Summaries are indexes, not replacements. Raw reports, plans, checkpoints, and
 history should remain preserved with explicit-only read policies.
+
+ArchMarshal does not force heavyweight summaries. Routine projects that mostly
+reuse existing skills should stay light; novel work can opt into deeper
+recording and promotion suggestions.
 
 ## Current Boundaries
 

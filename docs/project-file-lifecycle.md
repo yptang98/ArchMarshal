@@ -97,6 +97,15 @@ Promote only when content is reusable and stable enough to justify a stronger li
 - Cross-project procedural knowledge can become a common project skill.
 - Promotion preserves the original artifact; it does not overwrite or delete it.
 
+## Recording Depth
+
+Do not write a heavyweight closeout summary for every project.
+
+When a project mostly reuses existing registered skills, record only important
+changes, decisions, risks, files touched, and next steps. Suggest deeper memory,
+context, or skill promotion only when the work produced new reusable knowledge,
+a new workflow, unregistered artifacts, or governance risk.
+
 ## Context Checkpoints
 
 Use `archmarshal checkpoint` after context compression or summarization. A

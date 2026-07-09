@@ -470,6 +470,17 @@ def test_closeout_reports_used_skills(tmp_path: Path) -> None:
     assert result["original_preservation_policy"]["delete_after_summary"] is False
     assert result["session_summary"]["used_skill_count"] == 1
     assert result["reproduction_checklist"]
+    assert result["recording_policy"]["level"] == "deep"
+
+
+def test_closeout_is_light_when_project_reuses_registered_skill(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "monorepo-project")
+
+    result = closeout_workspace(root, ["skill.common-project.release-checklist"])
+
+    assert result["recording_policy"]["level"] == "light"
+    assert "important_changes" in result["recording_policy"]["record"]
+    assert "long_narrative_summary" in result["recording_policy"]["skip_by_default"]
 
 
 def test_closeout_proposes_memory_candidates_from_reports(tmp_path: Path) -> None:
@@ -499,6 +510,8 @@ def test_closeout_proposes_memory_candidates_from_reports(tmp_path: Path) -> Non
     assert result["candidate_memory_updates"][0]["source_artifact"] == "report.learning"
     assert result["candidate_memory_updates"][0]["preserve_original"] is True
     assert result["preservation_manifest"]["original_history_artifacts"][0]["id"] == "report.learning"
+    assert result["recording_policy"]["level"] == "deep"
+    assert "candidate_memory_updates" in result["recording_policy"]["novelty_signals"]
 
 
 def test_checkpoint_preserves_compaction_summary_without_mutating_project(tmp_path: Path) -> None:
@@ -519,6 +532,7 @@ def test_checkpoint_preserves_compaction_summary_without_mutating_project(tmp_pa
 
     assert before_files == after_files
     assert result["mode"] == "propose_only"
+    assert result["recording_policy"]["default_level"] == "light"
     assert result["save_path"]["source"] == "workspace"
     assert result["save_path"]["path"] == ".agent/inbox/checkpoints"
     assert result["checkpoint"]["filename"].endswith("-new-project-setup-checkpoint.md")
@@ -552,6 +566,7 @@ def test_end_workspace_wraps_closeout(tmp_path: Path) -> None:
     assert result["mode"] == "read_only"
     assert result["used_skills"][0]["id"] == "skill.common-project.release-checklist"
     assert result["original_preservation_policy"]["preserve_originals"] is True
+    assert result["recording_policy"]["level"] == "light"
 
 
 def test_cli_start_and_end_entrypoints(tmp_path: Path, capsys) -> None:

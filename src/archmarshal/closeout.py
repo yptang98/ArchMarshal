@@ -22,6 +22,23 @@ def closeout_workspace(root: Path | str, used_skills: list[str] | None = None) -
     matched = [skill_index[item] for item in used_skills if item in skill_index]
     missing = [item for item in used_skills if item not in skill_index]
     plan = plan_workspace(root)
+    inventory_dict = inventory.to_dict()
+    candidate_memory_updates = _candidate_memory_updates(inventory_dict)
+    promotion_candidates = _promotion_candidates(inventory_dict, matched)
+    archive_candidates = _archive_candidates(inventory_dict)
+    skill_candidates = _skill_candidates(inventory_dict, used_skills)
+    registry_update_suggestions = _registry_update_suggestions(inventory_dict)
+    session_summary = _session_summary(inventory_dict, matched, missing)
+    recording_policy = _recording_policy(
+        diagnostics=diagnostics,
+        missing_skills=missing,
+        session_summary=session_summary,
+        candidate_memory_updates=candidate_memory_updates,
+        promotion_candidates=promotion_candidates,
+        archive_candidates=archive_candidates,
+        skill_candidates=skill_candidates,
+        registry_update_suggestions=registry_update_suggestions,
+    )
     return {
         "tool": "archmarshal",
         "root": str(inventory.root),
@@ -39,7 +56,8 @@ def closeout_workspace(root: Path | str, used_skills: list[str] | None = None) -
         "skill_counts_by_kind": dict(Counter(str(skill.get("kind")) for skill in inventory.skills)),
         "diagnostic_summary": severity_counts(diagnostics),
         "cleanup_actions": plan["actions"],
-        "candidate_memory_updates": _candidate_memory_updates(inventory.to_dict()),
+        "candidate_memory_updates": candidate_memory_updates,
+        "recording_policy": recording_policy,
         "original_preservation_policy": {
             "preserve_originals": True,
             "delete_after_summary": False,
@@ -47,13 +65,13 @@ def closeout_workspace(root: Path | str, used_skills: list[str] | None = None) -
             "raw_history_read_policy": "explicit_only",
             "reason": "Summaries and memory candidates must point back to raw material; they do not replace it.",
         },
-        "session_summary": _session_summary(inventory.to_dict(), matched, missing),
-        "preservation_manifest": _preservation_manifest(inventory.to_dict()),
-        "reproduction_checklist": _reproduction_checklist(inventory.to_dict(), matched),
-        "promotion_candidates": _promotion_candidates(inventory.to_dict(), matched),
-        "archive_candidates": _archive_candidates(inventory.to_dict()),
-        "skill_candidates": _skill_candidates(inventory.to_dict(), used_skills),
-        "registry_update_suggestions": _registry_update_suggestions(inventory.to_dict()),
+        "session_summary": session_summary,
+        "preservation_manifest": _preservation_manifest(inventory_dict),
+        "reproduction_checklist": _reproduction_checklist(inventory_dict, matched),
+        "promotion_candidates": promotion_candidates,
+        "archive_candidates": archive_candidates,
+        "skill_candidates": skill_candidates,
+        "registry_update_suggestions": registry_update_suggestions,
         "review_questions": [
             "Did any temporary report contain durable knowledge worth promoting?",
             "Did any repeated workflow deserve a project skill or common project skill?",
@@ -67,6 +85,82 @@ def closeout_workspace(root: Path | str, used_skills: list[str] | None = None) -
             "Use this after project work to preserve reproducible detail without loading raw history by default.",
             "Summaries should never delete or overwrite original project history.",
         ],
+}
+
+
+def _recording_policy(
+    diagnostics: list[Any],
+    missing_skills: list[str],
+    session_summary: dict[str, int],
+    candidate_memory_updates: list[dict[str, Any]],
+    promotion_candidates: list[dict[str, Any]],
+    archive_candidates: list[dict[str, Any]],
+    skill_candidates: list[dict[str, Any]],
+    registry_update_suggestions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    errors = [diagnostic for diagnostic in diagnostics if diagnostic.severity == "error"]
+    novelty_signals: list[str] = []
+    if missing_skills:
+        novelty_signals.append("used_skill_not_registered")
+    if session_summary["generated_skill_count"] > 0:
+        novelty_signals.append("generated_skill_present")
+    if candidate_memory_updates:
+        novelty_signals.append("candidate_memory_updates")
+    if promotion_candidates:
+        novelty_signals.append("promotion_candidates")
+    if archive_candidates:
+        novelty_signals.append("archive_candidates")
+    if skill_candidates:
+        novelty_signals.append("potential_new_skill")
+    if registry_update_suggestions:
+        novelty_signals.append("unregistered_project_files")
+    if errors:
+        novelty_signals.append("governance_errors")
+
+    if not novelty_signals:
+        return {
+            "level": "light",
+            "reason": "Project appears to mostly reuse registered skills and existing governed context.",
+            "record": [
+                "important_changes",
+                "files_touched",
+                "decisions_or_risks_only_if_any",
+            ],
+            "skip_by_default": [
+                "new_memory_promotion",
+                "new_context_module",
+                "new_project_skill",
+                "long_narrative_summary",
+            ],
+        }
+    if set(novelty_signals) <= {"archive_candidates", "unregistered_project_files"}:
+        return {
+            "level": "standard",
+            "reason": "Project has preservation housekeeping but no strong sign of new reusable knowledge.",
+            "novelty_signals": novelty_signals,
+            "record": [
+                "important_changes",
+                "unregistered_or_archive_candidates",
+                "reproduction_notes",
+            ],
+            "skip_by_default": [
+                "new_project_skill",
+                "long_narrative_summary",
+            ],
+        }
+    return {
+        "level": "deep",
+        "reason": "Project has signals of new reusable knowledge, workflow, or governance risk.",
+        "novelty_signals": novelty_signals,
+        "record": [
+            "important_changes",
+            "decisions",
+            "risks",
+            "candidate_memory_updates",
+            "promotion_or_skill_candidates",
+            "reproduction_notes",
+        ],
+        "skip_by_default": [],
     }
 
 
