@@ -1,13 +1,12 @@
 # Lint Rules
 
-This is the first rule list for future `archmarshal lint` and `archmarshal audit` commands.
-
-The MVP inventory script does not enforce every rule yet. These names are stable placeholders for report output.
+These are the rule names currently emitted by `archmarshal lint` and surfaced by `archmarshal audit` / `archmarshal plan`.
 
 ## Skill Rules
 
 ```text
 skill.missing_manifest
+skill.invalid_manifest_yaml
 skill.missing_tags
 skill.missing_triggers
 skill.missing_negative_triggers
@@ -17,17 +16,14 @@ skill.global_too_large
 skill.global_contains_project_fact
 skill.functional_contains_project_fact
 skill.common_project_missing_reproducibility
-skill.script_outside_skill_path
 skill.path_outside_skill_root
 skill.local_path_missing
 skill.local_path_empty
 skill.dependency_file_outside_skill_root
 skill.declared_dependency_file_missing
 skill.command_dependency_missing
-skill.undeclared_external_dependency
 skill.duplicate_name
 skill.overlapping_trigger
-skill.governance_implicit_enabled
 ```
 
 ## Project File Rules
@@ -48,6 +44,7 @@ project.archive_read_policy_not_never_default
 project.inbox_file_too_old
 project.generated_skill_not_registered
 project.context_module_missing_source_files
+project.context_module_invalid_yaml
 project.context_module_not_registered
 project.knowledge_without_read_policy
 project.duplicate_artifact_id

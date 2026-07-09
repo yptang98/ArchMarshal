@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/archmarshal-cover.png" alt="ArchMarshal cover: scattered agent skills and project artifacts flowing into a governed control plane" width="100%">
+  <img src="assets/archmarshal-cover.jpg" alt="ArchMarshal cover: scattered agent skills and project artifacts flowing into a governed control plane" width="100%">
 </p>
 
 <h1 align="center">ArchMarshal</h1>
@@ -13,7 +13,7 @@
   <a href="https://github.com/yptang98/ArchMarshal/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/yptang98/ArchMarshal/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-teal">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
-  <img alt="Status" src="https://img.shields.io/badge/status-governance%20prototype-amber">
+  <img alt="Status" src="https://img.shields.io/badge/status-governance%20prototype-orange">
 </p>
 
 ## Why This Exists
@@ -54,15 +54,16 @@ Open Codex in the workspace you want to inspect and paste:
 Install ArchMarshal from https://github.com/yptang98/ArchMarshal and run a read-only governance check on this workspace.
 
 Please:
-1. Clone ArchMarshal outside this repository if possible. If you need a local tools directory, use .archmarshal/tools/ArchMarshal.
-2. From the ArchMarshal checkout, install it with: python -m pip install -e ".[dev]"
-3. Run its test suite.
-4. Run:
+1. Install it with:
+   python -m pip install "git+https://github.com/yptang98/ArchMarshal.git"
+2. Confirm the CLI works:
+   archmarshal --help
+3. Run:
    archmarshal inventory . --pretty
    archmarshal lint . --pretty
    archmarshal audit . --pretty
    archmarshal plan . --pretty
-5. Do not modify my existing project files. Only report diagnostics, risks, and suggested next steps.
+4. Do not modify my existing project files. Only report diagnostics, risks, and suggested next steps.
 ```
 
 For a quick smoke test inside this repository:
@@ -75,7 +76,7 @@ archmarshal resolve examples/monorepo-project --task "prepare release checklist"
 archmarshal closeout examples/monorepo-project --used-skill skill.common-project.release-checklist --pretty
 ```
 
-## Non-Goals For MVP
+## Current Boundaries
 
 - No GUI.
 - No marketplace.
@@ -173,7 +174,7 @@ python scripts/inventory.py examples/simple-project --pretty
 - `.agent/registry.yaml` is the machine ledger.
 - `.agent/INDEX.md` is the human map.
 
-## MVP Acceptance Checklist
+## What Ships Today
 
 - [x] README
 - [x] Architecture documentation
@@ -214,13 +215,3 @@ python -m archmarshal lint examples/simple-project --pretty
 ## License
 
 MIT
-
-## Social Preview Asset
-
-GitHub currently requires repository social preview images to be uploaded from the web UI: `Settings -> Social preview -> Edit -> Upload an image`.
-
-Use this prepared asset:
-
-```text
-assets/archmarshal-social-preview.jpg
-```
