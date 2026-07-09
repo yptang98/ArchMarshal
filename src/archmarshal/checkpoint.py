@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +13,7 @@ def checkpoint_workspace(
     root: Path | str,
     summary: str,
     task: str | None = None,
+    save_path: str | None = None,
     decisions: list[str] | None = None,
     files: list[str] | None = None,
     next_steps: list[str] | None = None,
@@ -29,8 +29,11 @@ def checkpoint_workspace(
     inventory = collect_inventory(root)
     diagnostics = lint_workspace(root)
     workspace_name = str(inventory.workspace.get("name") or inventory.root.name)
-    checkpoint_id = _checkpoint_id(summary, task, decisions, files, next_steps)
-    suggested_path = f".agent/inbox/checkpoints/{checkpoint_id}.md"
+    created_at = datetime.now(timezone.utc).replace(microsecond=0)
+    filename_stem = _project_file_stem(created_at, task, summary, inventory.naming)
+    checkpoint_id = f"checkpoint.{filename_stem}"
+    checkpoint_dir, save_path_source = _checkpoint_save_dir(inventory.save_paths, save_path)
+    suggested_path = f"{checkpoint_dir}/{filename_stem}.md"
     retrieval_keys = _retrieval_keys(task, summary, decisions)
 
     return {
@@ -38,6 +41,13 @@ def checkpoint_workspace(
         "root": str(inventory.root),
         "mode": "propose_only",
         "stage": "context_checkpoint",
+        "save_path": {
+            "kind": "project_file",
+            "path": checkpoint_dir,
+            "source": save_path_source,
+            "user_configured": save_path_source in {"cli", "workspace"},
+            "requires_user_configuration": save_path_source == "fallback",
+        },
         "original_preservation_policy": {
             "preserve_originals": True,
             "delete_after_summary": False,
@@ -48,7 +58,9 @@ def checkpoint_workspace(
         "checkpoint": {
             "id": checkpoint_id,
             "workspace": workspace_name,
-            "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "created_at": created_at.isoformat(),
+            "filename": f"{filename_stem}.md",
+            "naming_strategy": "time_topic_kind",
             "task": task or "",
             "summary": summary,
             "decisions": decisions,
@@ -96,16 +108,45 @@ def checkpoint_workspace(
     }
 
 
-def _checkpoint_id(
-    summary: str,
+def _project_file_stem(
+    created_at: datetime,
     task: str | None,
-    decisions: list[str],
-    files: list[str],
-    next_steps: list[str],
+    summary: str,
+    naming: dict[str, Any],
 ) -> str:
-    payload = "\n".join([task or "", summary, *decisions, *files, *next_steps])
-    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
-    return f"checkpoint.{digest}"
+    policy = naming.get("project_files") if isinstance(naming, dict) else {}
+    timestamp_format = "%Y%m%d-%H%M%S"
+    max_slug_words = 6
+    if isinstance(policy, dict):
+        timestamp_format = str(policy.get("timestamp_format") or timestamp_format)
+        configured_max = policy.get("max_slug_words")
+        if isinstance(configured_max, int) and configured_max > 0:
+            max_slug_words = min(configured_max, 12)
+    timestamp = created_at.strftime(timestamp_format)
+    topic = _topic_slug(task or summary, max_slug_words)
+    return f"{timestamp}-{topic}-checkpoint"
+
+
+def _checkpoint_save_dir(save_paths: dict[str, Any], override: str | None) -> tuple[str, str]:
+    if override:
+        return _normalize_save_path(override), "cli"
+    project_files = save_paths.get("project_files") if isinstance(save_paths, dict) else {}
+    if isinstance(project_files, dict) and project_files.get("checkpoints"):
+        return _normalize_save_path(str(project_files["checkpoints"])), "workspace"
+    return ".agent/inbox/checkpoints", "fallback"
+
+
+def _normalize_save_path(path: str) -> str:
+    return path.replace("\\", "/").rstrip("/") or "."
+
+
+def _topic_slug(text: str, max_words: int) -> str:
+    normalized = "".join(
+        char.lower() if char.isascii() and char.isalnum() else " "
+        for char in text
+    )
+    words = [word for word in normalized.split() if len(word) >= 3]
+    return "-".join(words[:max_words]) or "checkpoint"
 
 
 def _retrieval_keys(task: str | None, summary: str, decisions: list[str]) -> list[str]:

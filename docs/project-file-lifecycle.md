@@ -103,6 +103,38 @@ Use `archmarshal checkpoint` after context compression or summarization. A
 checkpoint stores the compact state as a candidate history artifact and memory
 record suggestion. It is append-only, explicit-only, and read-only by default.
 
+## Save Paths
+
+Project file save paths belong in `.agent/workspace.yaml` under
+`save_paths.project_files`. At minimum, new projects should declare paths for:
+
+- `checkpoints`
+- `reports`
+- `plans`
+- `history`
+- `knowledge`
+
+Skills can use the default governed skill roots, but project files should use
+explicit user-approved destinations.
+
+## Naming
+
+Project files should use a time-first name plus a short content hint:
+
+```text
+YYYYMMDD-HHMMSS-topic-kind.md
+```
+
+Examples:
+
+```text
+20260709-071035-release-checklist-checkpoint.md
+20260709-093012-api-migration-report.md
+```
+
+The time prefix keeps history sortable. The topic slug keeps files findable
+without reading every artifact.
+
 ## AGENTS.md Role
 
 `AGENTS.md` should be short. It should route the agent to the right index, registry, context modules, and project rules.

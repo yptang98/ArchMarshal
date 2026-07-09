@@ -19,6 +19,8 @@ HISTORICAL_PREFIXES = (
     ".agent/archive/",
     ".agent/cache/",
 )
+REQUIRED_PROJECT_FILE_SAVE_PATHS = ("checkpoints", "reports", "plans", "history", "knowledge")
+REQUIRED_PROJECT_FILE_NAMING_FIELDS = ("strategy", "timezone", "timestamp_format", "max_slug_words")
 
 
 def lint_workspace(root: Path | str) -> list[Diagnostic]:
@@ -191,6 +193,136 @@ def _lint_workspace_manifest(root: Path, data: dict[str, Any]) -> list[Diagnosti
                         "Keep mappings inside the project unless this is an intentional external workspace.",
                     )
                 )
+    diagnostics.extend(_lint_save_paths(root, raw.get("save_paths")))
+    diagnostics.extend(_lint_naming(raw.get("naming")))
+    return diagnostics
+
+
+def _lint_save_paths(root: Path, save_paths: Any) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    if not isinstance(save_paths, dict):
+        return [
+            Diagnostic(
+                "project.save_paths_missing",
+                "warning",
+                "workspace.yaml does not record project save paths.",
+                ".agent/workspace.yaml",
+                "Add save_paths.project_files so project artifacts have user-approved destinations.",
+            )
+        ]
+    project_files = save_paths.get("project_files")
+    if not isinstance(project_files, dict) or not project_files:
+        diagnostics.append(
+            Diagnostic(
+                "project.project_file_save_paths_missing",
+                "warning",
+                "workspace.yaml does not declare project file save paths.",
+                ".agent/workspace.yaml#$.save_paths.project_files",
+                "Declare checkpoints, reports, plans, history, and knowledge save paths.",
+            )
+        )
+        return diagnostics
+    for key in REQUIRED_PROJECT_FILE_SAVE_PATHS:
+        if not project_files.get(key):
+            diagnostics.append(
+                Diagnostic(
+                    "project.project_file_save_paths_missing",
+                    "warning",
+                    f"Project file save path '{key}' is not declared.",
+                    f".agent/workspace.yaml#$.save_paths.project_files.{key}",
+                    "Record user-approved save paths for project files instead of relying on implicit defaults.",
+                )
+            )
+    for key, value in project_files.items():
+        if not isinstance(value, str) or not value:
+            diagnostics.append(
+                Diagnostic(
+                    "project.project_file_save_path_invalid",
+                    "error",
+                    f"Project file save path '{key}' is invalid.",
+                    f".agent/workspace.yaml#$.save_paths.project_files.{key}",
+                    "Use a non-empty relative path string.",
+                )
+            )
+            continue
+        if _path_escapes_root(root, value):
+            diagnostics.append(
+                Diagnostic(
+                    "project.project_file_save_path_outside_root",
+                    "warning",
+                    f"Project file save path '{key}' points outside the project root.",
+                    value,
+                    "Keep project artifact save paths inside the workspace unless explicitly reviewed.",
+                )
+            )
+    return diagnostics
+
+
+def _lint_naming(naming: Any) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    if not isinstance(naming, dict):
+        return [
+            Diagnostic(
+                "project.project_file_naming_missing",
+                "warning",
+                "workspace.yaml does not record a project file naming policy.",
+                ".agent/workspace.yaml#$.naming.project_files",
+                "Use time_topic_kind naming so files sort by time and remain recognizable by content.",
+            )
+        ]
+    project_files = naming.get("project_files")
+    if not isinstance(project_files, dict):
+        return [
+            Diagnostic(
+                "project.project_file_naming_missing",
+                "warning",
+                "workspace.yaml does not declare naming.project_files.",
+                ".agent/workspace.yaml#$.naming.project_files",
+                "Declare strategy, timezone, timestamp_format, and max_slug_words for project files.",
+            )
+        ]
+    for field in REQUIRED_PROJECT_FILE_NAMING_FIELDS:
+        if not project_files.get(field):
+            diagnostics.append(
+                Diagnostic(
+                    "project.project_file_naming_missing",
+                    "warning",
+                    f"Project file naming field '{field}' is not declared.",
+                    f".agent/workspace.yaml#$.naming.project_files.{field}",
+                    "Record a time-first naming policy before creating project artifacts.",
+                )
+            )
+    if project_files.get("strategy") and project_files.get("strategy") != "time_topic_kind":
+        diagnostics.append(
+            Diagnostic(
+                "project.project_file_naming_invalid",
+                "error",
+                "Project file naming strategy is not supported.",
+                ".agent/workspace.yaml#$.naming.project_files.strategy",
+                "Use strategy: time_topic_kind.",
+            )
+        )
+    if project_files.get("timezone") and project_files.get("timezone") != "UTC":
+        diagnostics.append(
+            Diagnostic(
+                "project.project_file_naming_invalid",
+                "error",
+                "Project file naming timezone is not supported.",
+                ".agent/workspace.yaml#$.naming.project_files.timezone",
+                "Use timezone: UTC for stable cross-machine ordering.",
+            )
+        )
+    max_slug_words = project_files.get("max_slug_words")
+    if max_slug_words and not isinstance(max_slug_words, int):
+        diagnostics.append(
+            Diagnostic(
+                "project.project_file_naming_invalid",
+                "error",
+                "Project file naming max_slug_words must be an integer.",
+                ".agent/workspace.yaml#$.naming.project_files.max_slug_words",
+                "Use an integer between 1 and 12.",
+            )
+        )
     return diagnostics
 
 

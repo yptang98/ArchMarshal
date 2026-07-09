@@ -120,7 +120,7 @@ def _session_summary(
     }
 
 
-def _preservation_manifest(inventory: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+def _preservation_manifest(inventory: dict[str, Any]) -> dict[str, Any]:
     artifacts = [
         _artifact_summary(artifact)
         for artifact in inventory["artifacts"]
@@ -160,6 +160,8 @@ def _preservation_manifest(inventory: dict[str, Any]) -> dict[str, list[dict[str
         if not record.get("_load_error")
     ]
     return {
+        "save_paths": inventory.get("save_paths") or {},
+        "naming": inventory.get("naming") or {},
         "active_artifacts": artifacts,
         "explicit_only_artifacts": explicit_only,
         "original_history_artifacts": original_history,
@@ -203,7 +205,29 @@ def _reproduction_checklist(
         if artifact.get("kind") in {"report", "plan", "history", "artifact"}
         or str(artifact.get("path", "")).startswith((".agent/reports/", ".agent/history/", ".agent/archive/", ".agent/inbox/"))
     ]
+    project_file_save_paths = (inventory.get("save_paths") or {}).get("project_files") or {}
+    required_save_paths = {"checkpoints", "reports", "plans", "history", "knowledge"}
+    missing_save_paths = sorted(required_save_paths - set(project_file_save_paths))
+    naming_policy = (inventory.get("naming") or {}).get("project_files") or {}
     return [
+        {
+            "id": "project_file_save_paths_recorded",
+            "status": "ok" if not missing_save_paths else "needs_review",
+            "detail": (
+                "Project file save paths are recorded."
+                if not missing_save_paths
+                else f"Missing project file save path(s): {', '.join(missing_save_paths)}."
+            ),
+        },
+        {
+            "id": "project_file_naming_recorded",
+            "status": "ok" if naming_policy.get("strategy") == "time_topic_kind" else "needs_review",
+            "detail": (
+                "Project file naming uses time_topic_kind."
+                if naming_policy.get("strategy") == "time_topic_kind"
+                else "Project file naming policy is missing or unsupported."
+            ),
+        },
         {
             "id": "source_of_truth_registered",
             "status": "ok" if source_truths else "needs_review",

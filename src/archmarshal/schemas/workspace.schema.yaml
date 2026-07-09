@@ -22,6 +22,56 @@ properties:
         pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
       description:
         type: string
+  save_paths:
+    type: object
+    additionalProperties: false
+    properties:
+      skills:
+        type: object
+        additionalProperties:
+          type: string
+        properties:
+          generated:
+            type: string
+          project:
+            type: string
+      project_files:
+        type: object
+        additionalProperties:
+          type: string
+        properties:
+          checkpoints:
+            type: string
+          reports:
+            type: string
+          plans:
+            type: string
+          history:
+            type: string
+          knowledge:
+            type: string
+          artifacts:
+            type: string
+  naming:
+    type: object
+    additionalProperties: false
+    properties:
+      project_files:
+        type: object
+        additionalProperties: false
+        properties:
+          strategy:
+            enum:
+              - time_topic_kind
+          timezone:
+            enum:
+              - UTC
+          timestamp_format:
+            type: string
+          max_slug_words:
+            type: integer
+            minimum: 1
+            maximum: 12
   paths:
     type: object
     required:

@@ -96,6 +96,15 @@ Summaries are indexes, not replacements. Raw reports, plans, checkpoints, and
 history should remain preserved with explicit-only read policies so later agents
 can reproduce details without loading every artifact by default.
 
+Project file locations should be user-approved. `workspace.yaml` records
+`save_paths.project_files` for checkpoints, reports, plans, history, knowledge,
+and inbox artifacts. Skill outputs can use ArchMarshal's default skill roots,
+but project files should not silently fall into implicit locations.
+
+Project file names are time-first with a content hint, for example
+`20260709-071035-release-checklist-checkpoint.md`. This keeps history sortable
+while still making files recognizable without opening them.
+
 For a quick smoke test inside this repository:
 
 ```bash
@@ -103,6 +112,7 @@ archmarshal inventory examples/simple-project --pretty
 archmarshal lint examples/simple-project --pretty
 archmarshal audit examples/simple-project --pretty
 archmarshal checkpoint examples/simple-project --task "docs pass" --summary "Preserve a compact checkpoint." --pretty
+archmarshal checkpoint examples/simple-project --summary "Override checkpoint location." --save-path ".agent/history/checkpoints" --pretty
 archmarshal resolve examples/monorepo-project --task "prepare release checklist" --pretty
 archmarshal closeout examples/monorepo-project --used-skill skill.common-project.release-checklist --pretty
 ```
@@ -197,6 +207,7 @@ python scripts/inventory.py examples/simple-project --pretty
 - Inventory, lint, audit, and plan are read-only by default.
 - YAML inputs fail softly: bad workspace, registry, skill, or context module YAML becomes a structured diagnostic.
 - Workspace, registry, and skill manifest schemas are enforced during lint.
+- Workspace save paths distinguish default skill roots from user-approved project file destinations.
 - Resolve is advisory and loads only matched skill/context metadata.
 - Closeout summarizes used skills and cleanup actions after project work.
 - Checkpoint records compact state after context compression without modifying files.
@@ -239,6 +250,7 @@ python scripts/inventory.py examples/simple-project --pretty
 - [x] Read-only remediation plan output
 - [x] Task-based skill/context resolver
 - [x] Read-only context checkpoint output for post-compression summaries
+- [x] User-recorded project file save paths
 - [x] Project closeout skill/memory summary
 - [x] Closeout preservation manifest and reproduction checklist
 - [x] Memory store and memory record governance

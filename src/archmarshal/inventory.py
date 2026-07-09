@@ -27,6 +27,22 @@ DEFAULT_PATHS = {
     "inbox": [".agent/inbox"],
 }
 
+DEFAULT_SAVE_PATHS = {
+    "skills": {
+        "generated": ".agents/skills/generated",
+        "project": ".agents/skills/project",
+    },
+    "project_files": {},
+}
+DEFAULT_NAMING = {
+    "project_files": {
+        "strategy": "time_topic_kind",
+        "timezone": "UTC",
+        "timestamp_format": "%Y%m%d-%H%M%S",
+        "max_slug_words": 6,
+    }
+}
+
 HISTORICAL_PATH_KEYS = {"reports", "history", "archive", "cache"}
 RESERVED_AGENT_FILES = {
     ".agent/workspace.yaml",
@@ -42,6 +58,8 @@ class WorkspaceInventory:
     root: Path
     workspace: dict[str, Any]
     paths: dict[str, Any]
+    save_paths: dict[str, Any]
+    naming: dict[str, Any]
     files: dict[str, Any]
     directories: dict[str, Any]
     artifacts: list[dict[str, Any]]
@@ -59,6 +77,8 @@ class WorkspaceInventory:
             "root": str(self.root),
             "workspace": self.workspace,
             "paths": self.paths,
+            "save_paths": self.save_paths,
+            "naming": self.naming,
             "files": self.files,
             "directories": self.directories,
             "artifacts": self.artifacts,
@@ -84,22 +104,51 @@ def _as_list(value: Any) -> list[str]:
     return [str(value)]
 
 
-def _load_workspace(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+def _load_workspace(root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     workspace_file = root / ".agent" / "workspace.yaml"
     if not workspace_file.exists():
-        return {}, DEFAULT_PATHS.copy()
+        return {}, DEFAULT_PATHS.copy(), _default_save_paths(), _default_naming()
     result = load_yaml_safe(workspace_file)
     if result.error:
         return {
             "_load_error": result.error,
             "_source_path": rel(workspace_file, root),
-        }, DEFAULT_PATHS.copy()
+        }, DEFAULT_PATHS.copy(), _default_save_paths(), _default_naming()
     data = result.data if isinstance(result.data, dict) else {}
     paths = DEFAULT_PATHS.copy()
     declared_paths = data.get("paths", {})
     if isinstance(declared_paths, dict):
         paths.update(declared_paths or {})
-    return data.get("workspace", {}) or {}, paths
+    save_paths = _default_save_paths()
+    declared_save_paths = data.get("save_paths", {})
+    if isinstance(declared_save_paths, dict):
+        for key, value in declared_save_paths.items():
+            if isinstance(value, dict) and isinstance(save_paths.get(key), dict):
+                save_paths[key].update(value)
+            else:
+                save_paths[key] = value
+    naming = _default_naming()
+    declared_naming = data.get("naming", {})
+    if isinstance(declared_naming, dict):
+        for key, value in declared_naming.items():
+            if isinstance(value, dict) and isinstance(naming.get(key), dict):
+                naming[key].update(value)
+            else:
+                naming[key] = value
+    return data.get("workspace", {}) or {}, paths, save_paths, naming
+
+
+def _default_save_paths() -> dict[str, Any]:
+    return {
+        "skills": dict(DEFAULT_SAVE_PATHS["skills"]),
+        "project_files": dict(DEFAULT_SAVE_PATHS["project_files"]),
+    }
+
+
+def _default_naming() -> dict[str, Any]:
+    return {
+        "project_files": dict(DEFAULT_NAMING["project_files"]),
+    }
 
 
 def _path_entries(root: Path, paths: dict[str, Any]) -> dict[str, list[Path]]:
@@ -314,7 +363,7 @@ def _detect_memory_locations(root: Path) -> list[dict[str, Any]]:
 
 def collect_inventory(root: Path | str) -> WorkspaceInventory:
     resolved_root = Path(root).resolve()
-    workspace, paths = _load_workspace(resolved_root)
+    workspace, paths, save_paths, naming = _load_workspace(resolved_root)
     entries = _path_entries(resolved_root, paths)
     artifacts = _load_registry(resolved_root)
     memory_stores = _load_memory_stores(resolved_root)
@@ -323,6 +372,8 @@ def collect_inventory(root: Path | str) -> WorkspaceInventory:
         root=resolved_root,
         workspace=workspace,
         paths=paths,
+        save_paths=save_paths,
+        naming=naming,
         files=_file_status(resolved_root),
         directories=_directory_status(resolved_root, entries),
         artifacts=artifacts,

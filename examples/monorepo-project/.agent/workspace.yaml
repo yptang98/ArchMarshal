@@ -3,6 +3,25 @@ workspace:
   version: 0.1.0
   description: Monorepo ArchMarshal example project.
 
+save_paths:
+  skills:
+    generated: .agents/skills/generated
+    project: .agents/skills/project
+  project_files:
+    checkpoints: .agent/inbox/checkpoints
+    reports: .agent/reports
+    plans: .agent/plans
+    history: .agent/history
+    knowledge: .agent/knowledge
+    artifacts: .agent/inbox
+
+naming:
+  project_files:
+    strategy: time_topic_kind
+    timezone: UTC
+    timestamp_format: "%Y%m%d-%H%M%S"
+    max_slug_words: 6
+
 paths:
   project_root: .
   code_roots:

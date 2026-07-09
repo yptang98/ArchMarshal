@@ -38,6 +38,12 @@ project.workspace_missing_metadata
 project.workspace_missing_paths
 project.workspace_invalid_path_entry
 project.workspace_path_outside_root
+project.save_paths_missing
+project.project_file_save_paths_missing
+project.project_file_save_path_invalid
+project.project_file_save_path_outside_root
+project.project_file_naming_missing
+project.project_file_naming_invalid
 project.missing_agent_index
 project.agents_md_too_large
 project.agents_md_contains_history

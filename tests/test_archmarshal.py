@@ -43,6 +43,9 @@ def test_examples_are_clean_and_show_skill_categories(tmp_path: Path) -> None:
     assert {skill["kind"] for skill in monorepo_inventory.skills} == {
         "common_project_skill",
     }
+    assert simple_inventory.save_paths["project_files"]["checkpoints"] == ".agent/inbox/checkpoints"
+    assert simple_inventory.save_paths["skills"]["generated"] == ".agents/skills/generated"
+    assert simple_inventory.naming["project_files"]["strategy"] == "time_topic_kind"
     assert len(simple_inventory.memory_stores) == 1
     assert len(simple_inventory.memory_records) == 1
 
@@ -119,6 +122,66 @@ def test_workspace_paths_warn_when_they_escape_root(tmp_path: Path) -> None:
     )
 
     assert "project.workspace_path_outside_root" in rules(root)
+
+
+def test_workspace_warns_when_project_file_save_paths_are_missing(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    workspace = root / ".agent" / "workspace.yaml"
+    workspace.write_text(
+        """
+workspace:
+  name: simple-project
+  version: 0.1.0
+paths:
+  project_root: .
+  agent_root: .agent
+""".strip(),
+        encoding="utf-8",
+    )
+
+    diagnostics = lint_workspace(root)
+    by_rule = {diagnostic.rule: diagnostic for diagnostic in diagnostics}
+
+    assert by_rule["project.save_paths_missing"].severity == "warning"
+
+
+def test_project_file_save_paths_must_be_valid(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    workspace = root / ".agent" / "workspace.yaml"
+    workspace.write_text(
+        workspace.read_text(encoding="utf-8").replace(
+            "checkpoints: .agent/inbox/checkpoints",
+            "checkpoints: ''",
+        ),
+        encoding="utf-8",
+    )
+
+    assert "project.project_file_save_path_invalid" in rules(root)
+
+
+def test_workspace_warns_when_project_file_naming_is_missing(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    workspace = root / ".agent" / "workspace.yaml"
+    workspace.write_text(
+        """
+workspace:
+  name: simple-project
+  version: 0.1.0
+save_paths:
+  project_files:
+    checkpoints: .agent/inbox/checkpoints
+    reports: .agent/reports
+    plans: .agent/plans
+    history: .agent/history
+    knowledge: .agent/knowledge
+paths:
+  project_root: .
+  agent_root: .agent
+""".strip(),
+        encoding="utf-8",
+    )
+
+    assert "project.project_file_naming_missing" in rules(root)
 
 
 def test_detects_overlapping_skill_trigger(tmp_path: Path) -> None:
@@ -455,6 +518,10 @@ def test_checkpoint_preserves_compaction_summary_without_mutating_project(tmp_pa
 
     assert before_files == after_files
     assert result["mode"] == "propose_only"
+    assert result["save_path"]["source"] == "workspace"
+    assert result["save_path"]["path"] == ".agent/inbox/checkpoints"
+    assert result["checkpoint"]["filename"].endswith("-new-project-setup-checkpoint.md")
+    assert result["checkpoint"]["filename"][:8].isdigit()
     assert result["original_preservation_policy"]["delete_after_summary"] is False
     assert result["registry_update_suggestions"][0]["update_policy"] == "append_only"
     assert result["registry_update_suggestions"][0]["read_policy"] == "explicit_only"
@@ -483,6 +550,26 @@ def test_cli_checkpoint_outputs_preservation_policy(tmp_path: Path, capsys) -> N
     assert payload["stage"] == "context_checkpoint"
     assert payload["original_preservation_policy"]["preserve_originals"] is True
     assert payload["registry_update_suggestions"][0]["preserve_original"] is True
+
+
+def test_cli_checkpoint_save_path_override_is_recorded(tmp_path: Path, capsys) -> None:
+    root = copy_example(tmp_path, "simple-project")
+
+    assert main(
+        [
+            "checkpoint",
+            str(root),
+            "--summary",
+            "Compressed context after release work.",
+            "--save-path",
+            ".agent/history/release-checkpoints",
+        ]
+    ) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["save_path"]["source"] == "cli"
+    assert payload["save_path"]["path"] == ".agent/history/release-checkpoints"
+    assert payload["checkpoint"]["suggested_path"].startswith(".agent/history/release-checkpoints/")
 
 
 def test_cli_inventory_serializes_yaml_dates(tmp_path: Path, capsys) -> None:

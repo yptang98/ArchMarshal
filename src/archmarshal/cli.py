@@ -31,6 +31,10 @@ def main(argv: list[str] | None = None) -> int:
     checkpoint_parser.add_argument("--summary", required=True, help="Compact summary to preserve.")
     checkpoint_parser.add_argument("--task", default="", help="Task or project stage being checkpointed.")
     checkpoint_parser.add_argument(
+        "--save-path",
+        help="User-approved project-file directory for this checkpoint. Overrides workspace save_paths.",
+    )
+    checkpoint_parser.add_argument(
         "--decision",
         action="append",
         default=[],
@@ -116,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
                 root,
                 summary=args.summary,
                 task=args.task,
+                save_path=args.save_path,
                 decisions=args.decision,
                 files=args.file,
                 next_steps=args.next_step,

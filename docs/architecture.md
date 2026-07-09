@@ -72,6 +72,17 @@ Workspace, registry, and skill manifest YAML files are parsed fail-soft. Invalid
 YAML becomes a structured lint diagnostic, and valid YAML is checked against the
 packaged JSON Schemas before downstream rules run.
 
+`save_paths` records where new material should be preserved. Skill save paths
+can follow ArchMarshal defaults because skills live under governed skill roots.
+Project files are different: checkpoints, reports, plans, history, knowledge,
+and inbox artifacts should use user-approved destinations so reproduction
+materials do not drift into hidden implicit locations.
+
+Project file naming is also governed. The default strategy is
+`time_topic_kind`: UTC timestamp first, then a short task/content slug, then the
+artifact kind. This makes raw history sortable by time and recognizable by
+project content.
+
 ## Historical Artifact Layer
 
 Historical artifacts preserve process, evidence, reports, temporary analysis, and old plans. They are not loaded by default.
