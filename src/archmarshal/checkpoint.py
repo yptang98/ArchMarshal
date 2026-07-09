@@ -42,9 +42,10 @@ def checkpoint_workspace(
         "mode": "propose_only",
         "stage": "context_checkpoint",
         "recording_policy": {
-            "default_level": "light",
+            "mode": "auto",
+            "level": "light",
             "record": ["important_changes", "decisions", "risks", "next_steps"],
-            "reason": "A checkpoint should preserve what must survive compression, not create a heavyweight project summary by default.",
+            "reason": "Checkpoint depth is auto-selected; routine checkpoints stay light unless the project shows new reusable knowledge or workflow changes.",
         },
         "save_path": {
             "kind": "project_file",

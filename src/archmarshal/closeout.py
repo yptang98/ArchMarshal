@@ -119,6 +119,7 @@ def _recording_policy(
 
     if not novelty_signals:
         return {
+            "mode": "auto",
             "level": "light",
             "reason": "Project appears to mostly reuse registered skills and existing governed context.",
             "record": [
@@ -135,6 +136,7 @@ def _recording_policy(
         }
     if set(novelty_signals) <= {"archive_candidates", "unregistered_project_files"}:
         return {
+            "mode": "auto",
             "level": "standard",
             "reason": "Project has preservation housekeeping but no strong sign of new reusable knowledge.",
             "novelty_signals": novelty_signals,
@@ -149,6 +151,7 @@ def _recording_policy(
             ],
         }
     return {
+        "mode": "auto",
         "level": "deep",
         "reason": "Project has signals of new reusable knowledge, workflow, or governance risk.",
         "novelty_signals": novelty_signals,

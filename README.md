@@ -55,33 +55,28 @@ short lifecycle words and keep giving normal project instructions.
 ### 1. Copy This Into Codex Once
 
 ```text
-You are Codex working in this repository.
+Codex, install ArchMarshal for this project:
+https://github.com/yptang98/ArchMarshal
 
-Install ArchMarshal from https://github.com/yptang98/ArchMarshal.
+After installing it, let me use two short lifecycle words:
 
-After installation, treat these user messages as ArchMarshal lifecycle shortcuts:
+- When I type `archmarshal-start`, run ArchMarshal's project-start check for
+  the current project. Check save paths, naming, and memory/history rules, then
+  keep using ArchMarshal quietly while I give normal project instructions.
 
-- archmarshal-start:
-  Internally call the installed ArchMarshal start entrypoint for this project.
-  Summarize whether save paths, naming policy, and memory governance are ready,
-  then keep managing the project under ArchMarshal rules while I give normal
-  project instructions.
-
-- archmarshal-end:
-  Internally call the installed ArchMarshal end entrypoint for this project.
-  Produce a preservation and reproducibility summary. Do not modify files
-  unless I explicitly approve.
+- When I type `archmarshal-end`, run ArchMarshal's project closeout for the
+  current project or phase. Give me a preservation and reproducibility summary.
+  Do not modify files unless I explicitly approve.
 
 During the project, if context is compressed or I ask for a checkpoint, create
 an ArchMarshal checkpoint proposal. Summaries are indexes, not replacements:
 never delete raw reports, plans, checkpoints, notes, or history.
 
-At project closeout, use ArchMarshal's recording_policy. If the project mostly
-reused existing skills, only record important changes, decisions, risks, and
-files touched. Only suggest memory/context/skill promotion when the work created
-new reusable knowledge or a new workflow.
+Use automatic recording depth. If the project mostly reuses existing skills,
+keep the record light. Only go deeper when the work creates new reusable
+knowledge, a new workflow, or a real governance risk.
 
-Only show me concise results. Do not make me type long ArchMarshal commands.
+Keep the output concise. Do not make me type long ArchMarshal commands.
 ```
 
 ### 2. Start A Project
@@ -111,8 +106,8 @@ See [Getting Started](docs/getting-started.md) for the minimal prompts.
 Summaries are indexes, not replacements. Raw reports, plans, checkpoints, and
 history should remain preserved with explicit-only read policies.
 
-ArchMarshal does not force heavyweight summaries. Routine projects that mostly
-reuse existing skills should stay light; novel work can opt into deeper
+ArchMarshal does not force heavyweight summaries. Recording depth is automatic:
+routine skill reuse should stay light, while novel work can produce deeper
 recording and promotion suggestions.
 
 ## Current Boundaries

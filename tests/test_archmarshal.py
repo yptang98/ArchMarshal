@@ -532,7 +532,8 @@ def test_checkpoint_preserves_compaction_summary_without_mutating_project(tmp_pa
 
     assert before_files == after_files
     assert result["mode"] == "propose_only"
-    assert result["recording_policy"]["default_level"] == "light"
+    assert result["recording_policy"]["mode"] == "auto"
+    assert result["recording_policy"]["level"] == "light"
     assert result["save_path"]["source"] == "workspace"
     assert result["save_path"]["path"] == ".agent/inbox/checkpoints"
     assert result["checkpoint"]["filename"].endswith("-new-project-setup-checkpoint.md")
@@ -566,6 +567,7 @@ def test_end_workspace_wraps_closeout(tmp_path: Path) -> None:
     assert result["mode"] == "read_only"
     assert result["used_skills"][0]["id"] == "skill.common-project.release-checklist"
     assert result["original_preservation_policy"]["preserve_originals"] is True
+    assert result["recording_policy"]["mode"] == "auto"
     assert result["recording_policy"]["level"] == "light"
 
 

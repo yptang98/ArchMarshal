@@ -27,7 +27,7 @@ This document maps the core product needs to concrete ArchMarshal behavior.
 | Dynamic modular skill loading should stay flexible. | `archmarshal resolve --task` scores skills, context modules, and memory records from triggers, tags, retrieval keys, negative triggers, and read policies without loading historical directories. | `src/archmarshal/resolver.py`, `tests/test_archmarshal.py` |
 | Context compression should preserve key project state. | `archmarshal checkpoint` creates a read-only candidate checkpoint with summary, decisions, key files, next steps, and memory-record suggestions. | `src/archmarshal/checkpoint.py`, `tests/test_archmarshal.py` |
 | Project completion should produce skill/memory cleanup. | `archmarshal closeout --used-skill` summarizes used skills, preservation needs, reproduction checks, missing skill references, diagnostics, and propose-only cleanup actions. | `src/archmarshal/closeout.py`, `tests/test_archmarshal.py` |
-| Recording depth should match project novelty. | Closeout emits `recording_policy` so routine skill reuse only records important changes, while novel work can suggest memory/context/skill promotion. | `recording_policy.level`, `src/archmarshal/closeout.py` |
+| Recording depth should be automatic and novelty-aware. | Checkpoint and closeout emit `recording_policy.mode: auto`; routine skill reuse only records important changes, while novel work can suggest memory/context/skill promotion. | `recording_policy.mode`, `recording_policy.level`, `src/archmarshal/checkpoint.py`, `src/archmarshal/closeout.py` |
 
 ## Current Product Boundary
 

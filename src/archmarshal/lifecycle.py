@@ -25,7 +25,7 @@ def start_workspace(root: Path | str) -> dict[str, Any]:
         "diagnostics": [diagnostic.to_dict() for diagnostic in diagnostics],
         "codex_contract": [
             "Use ArchMarshal checkpoint after context compression.",
-            "Choose recording depth by project novelty; routine skill reuse only needs important changes.",
+            "Use auto recording depth; routine skill reuse only needs important changes.",
             "Keep summaries as indexes; do not delete raw reports, plans, checkpoints, or notes.",
             "Use user-approved project file save paths.",
             "Use time-first project file names with content hints.",
@@ -43,7 +43,7 @@ def end_workspace(root: Path | str, used_skills: list[str] | None = None) -> dic
     payload["stage"] = "end"
     payload["mode"] = "read_only"
     payload["codex_contract"] = [
-        "Follow recording_policy; do not create heavy summaries for routine skill reuse.",
+        "Follow recording_policy mode=auto; do not create heavy summaries for routine skill reuse.",
         "Preserve original project history before distilling memory.",
         "Review candidate memory updates before promotion.",
         "Keep generated summaries explicit-only unless reviewed.",
