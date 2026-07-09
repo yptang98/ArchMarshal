@@ -35,7 +35,7 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 - Governs **memory stores and memory records** with ownership, privacy, evidence, review status, retrieval keys, and forget/supersession policy.
 - Promotes only distilled reusable knowledge into **context modules**.
 - Detects skill conflicts, missing manifests, unsafe read policies, unregistered generated skills, unregistered memory locations, and workspace mappings that could bloat context.
-- Provides read-only `inventory`, `lint`, `audit`, `plan`, `resolve`, and `closeout` commands before any apply-style automation exists.
+- Provides Codex-facing `archmarshal-start` and `archmarshal-end` entrypoints, plus read-only lower-level commands before any apply-style automation exists.
 
 ## Design Goals
 
@@ -49,84 +49,55 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 
 ## Quick Start
 
-If you are not sure what to do first, start with the practical walkthrough:
-[Getting Started](docs/getting-started.md).
+ArchMarshal is meant to be called through Codex. You copy a short instruction;
+Codex runs the underlying command and shows you the result.
 
-Most users only need three calls:
-
-```bash
-archmarshal lint . --pretty
-archmarshal checkpoint . --task "<task>" --summary "<summary>" --pretty
-archmarshal closeout . --used-skill "<skill-id>" --pretty
-```
-
-Recommended use is lightweight. Start ArchMarshal at the beginning of a new
-project or new project phase, then use it to keep checkpoints and closeout
-records. Retrofitting a large existing workspace is possible, but should stay
-read-only until a human reviews every suggested change.
-
-Open Codex in the workspace you want to inspect and paste:
+### 1. Install
 
 ```text
-Install ArchMarshal from https://github.com/yptang98/ArchMarshal and run a read-only governance check on this workspace.
+Codex, install ArchMarshal in this project from:
+https://github.com/yptang98/ArchMarshal
 
-Please:
-1. Install it with:
-   python -m pip install "git+https://github.com/yptang98/ArchMarshal.git"
-2. Confirm the CLI works:
-   archmarshal --help
-3. Run:
-   archmarshal inventory . --pretty
-   archmarshal lint . --pretty
-   archmarshal audit . --pretty
-   archmarshal resolve . --task "<describe my task>" --pretty
-   archmarshal plan . --pretty
-4. Do not modify my existing project files. Only report diagnostics, risks, and suggested next steps.
+After installing, only confirm it works. Do not modify project files.
 ```
 
-After a context compaction or summarization event, preserve the key state as a
-candidate checkpoint:
+### 2. Project Start
 
-```bash
-archmarshal checkpoint . \
-  --task "new project setup" \
-  --summary "What changed, what matters, and what remains unresolved." \
-  --decision "Important decision that must survive compression." \
-  --file ".agent/registry.yaml" \
-  --next-step "Review candidate memory before promotion." \
-  --pretty
+```text
+Codex, run archmarshal-start for this project.
+
+Then manage this project using the ArchMarshal rules:
+- preserve raw history
+- checkpoint after context compression
+- keep project files in user-approved save paths
+- use time-first file names
 ```
 
-At project completion, produce a read-only preservation and reproduction view:
+After Codex compresses or summarizes context:
 
-```bash
-archmarshal closeout . --used-skill skill.common-project.release-checklist --pretty
+```text
+Codex, call ArchMarshal checkpoint.
+
+Task: <what we are doing>
+Summary: <what must be remembered>
+
+Do not delete raw history. Show me the suggested checkpoint file path.
 ```
+
+### 3. Project End
+
+```text
+Codex, run archmarshal-end for this project.
+
+Tell me what must be preserved so the project can be reproduced later.
+Do not modify files unless I explicitly approve it.
+```
+
+That is the main workflow: install, start, checkpoint after compression, end.
+See [Getting Started](docs/getting-started.md) for the minimal prompts.
 
 Summaries are indexes, not replacements. Raw reports, plans, checkpoints, and
-history should remain preserved with explicit-only read policies so later agents
-can reproduce details without loading every artifact by default.
-
-Project file locations should be user-approved. `workspace.yaml` records
-`save_paths.project_files` for checkpoints, reports, plans, history, knowledge,
-and inbox artifacts. Skill outputs can use ArchMarshal's default skill roots,
-but project files should not silently fall into implicit locations.
-
-Project file names are time-first with a content hint, for example
-`20260709-071035-release-checklist-checkpoint.md`. This keeps history sortable
-while still making files recognizable without opening them.
-
-For a quick smoke test inside this repository:
-
-```bash
-archmarshal inventory examples/simple-project --pretty
-archmarshal lint examples/simple-project --pretty
-archmarshal audit examples/simple-project --pretty
-archmarshal checkpoint examples/simple-project --task "docs pass" --summary "Preserve a compact checkpoint." --pretty
-archmarshal checkpoint examples/simple-project --summary "Override checkpoint location." --save-path ".agent/history/checkpoints" --pretty
-archmarshal resolve examples/monorepo-project --task "prepare release checklist" --pretty
-archmarshal closeout examples/monorepo-project --used-skill skill.common-project.release-checklist --pretty
-```
+history should remain preserved with explicit-only read policies.
 
 ## Current Boundaries
 
@@ -187,7 +158,10 @@ Historical Artifact Layer
 
 The layers are deliberately asymmetric. Global policy should be small and stable. Skills can be numerous, but must be classifiable and reproducible. Project workspaces can be messy, so ArchMarshal gives them registries, indexes, and lifecycle rules instead of pretending every file is a module.
 
-## CLI
+## Developer CLI Reference
+
+Most users should ask Codex to call ArchMarshal. This section is only for
+maintainers who want to run the underlying CLI directly.
 
 Install locally for development:
 
@@ -198,12 +172,14 @@ pip install -e .
 Run read-only commands:
 
 ```bash
+archmarshal-start examples/simple-project --pretty
 archmarshal inventory examples/simple-project --pretty
 archmarshal lint examples/simple-project --pretty
 archmarshal audit examples/simple-project --pretty
 archmarshal plan examples/simple-project --pretty
 archmarshal resolve examples/monorepo-project --task "prepare release checklist" --pretty
 archmarshal closeout examples/monorepo-project --used-skill skill.common-project.release-checklist --pretty
+archmarshal-end examples/monorepo-project --used-skill skill.common-project.release-checklist --pretty
 ```
 
 The compatibility wrapper still works:
@@ -257,6 +233,7 @@ python scripts/inventory.py examples/simple-project --pretty
 - [x] Lint rule list
 - [x] Audit report sample
 - [x] Executable CLI package
+- [x] Codex-facing `archmarshal-start` and `archmarshal-end` entrypoints
 - [x] Governance lint rules
 - [x] Fail-soft YAML parsing for workspace, registry, skill manifests, and context modules
 - [x] Read-only remediation plan output

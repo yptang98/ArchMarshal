@@ -12,6 +12,7 @@ from .closeout import closeout_workspace
 from .diagnostics import Diagnostic, severity_counts
 from .inventory import collect_inventory
 from .lint import lint_workspace
+from .lifecycle import end_workspace, start_workspace
 from .planner import plan_workspace
 from .resolver import resolve_workspace
 
@@ -23,6 +24,14 @@ def main(argv: list[str] | None = None) -> int:
     _add_root_command(subparsers, "inventory", "Scan workspace structure without modifying files.")
     _add_root_command(subparsers, "audit", "Summarize governance risks.")
     _add_root_command(subparsers, "plan", "Generate read-only remediation actions.")
+    _add_root_command(subparsers, "start", "Start ArchMarshal read-only project governance.")
+    end_parser = _add_root_command(subparsers, "end", "Close out ArchMarshal project governance.")
+    end_parser.add_argument(
+        "--used-skill",
+        action="append",
+        default=[],
+        help="Skill id used in the project session. Repeat as needed.",
+    )
     checkpoint_parser = _add_root_command(
         subparsers,
         "checkpoint",
@@ -114,6 +123,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "plan":
         _print_json(plan_workspace(root), args.pretty)
         return 0
+    if args.command == "start":
+        _print_json(start_workspace(root), args.pretty)
+        return 0
+    if args.command == "end":
+        _print_json(end_workspace(root, args.used_skill), args.pretty)
+        return 0
     if args.command == "checkpoint":
         _print_json(
             checkpoint_workspace(
@@ -140,6 +155,30 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
+def start_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="archmarshal-start")
+    parser.add_argument("root", nargs="?", default=".", help="Workspace root to inspect.")
+    parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+    args = parser.parse_args(argv)
+    _print_json(start_workspace(Path(args.root)), args.pretty)
+    return 0
+
+
+def end_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="archmarshal-end")
+    parser.add_argument("root", nargs="?", default=".", help="Workspace root to inspect.")
+    parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+    parser.add_argument(
+        "--used-skill",
+        action="append",
+        default=[],
+        help="Skill id used in the project session. Repeat as needed.",
+    )
+    args = parser.parse_args(argv)
+    _print_json(end_workspace(Path(args.root), args.used_skill), args.pretty)
+    return 0
+
+
 def _add_root_command(subparsers: Any, name: str, help_text: str) -> argparse.ArgumentParser:
     command = subparsers.add_parser(name, help=help_text)
     command.add_argument("root", nargs="?", default=".", help="Workspace root to inspect.")
@@ -157,4 +196,4 @@ def _json_default(value: Any) -> str:
     return str(value)
 
 
-__all__ = ["main"]
+__all__ = ["end_main", "main", "start_main"]

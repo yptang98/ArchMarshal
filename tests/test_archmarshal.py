@@ -6,9 +6,10 @@ from pathlib import Path
 
 from archmarshal.audit import audit_workspace
 from archmarshal.checkpoint import checkpoint_workspace
-from archmarshal.cli import main
+from archmarshal.cli import end_main, main, start_main
 from archmarshal.closeout import closeout_workspace
 from archmarshal.inventory import collect_inventory
+from archmarshal.lifecycle import end_workspace, start_workspace
 from archmarshal.lint import lint_workspace
 from archmarshal.planner import plan_workspace
 from archmarshal.resolver import resolve_workspace
@@ -528,6 +529,41 @@ def test_checkpoint_preserves_compaction_summary_without_mutating_project(tmp_pa
     assert result["registry_update_suggestions"][0]["preserve_original"] is True
     assert result["suggested_memory_record"]["status"] == "candidate"
     assert result["suggested_memory_record"]["review_status"] == "pending_human"
+
+
+def test_start_workspace_returns_codex_contract(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+
+    result = start_workspace(root)
+
+    assert result["stage"] == "start"
+    assert result["mode"] == "read_only"
+    assert result["project_ready"] is True
+    assert result["save_paths"]["project_files"]["checkpoints"] == ".agent/inbox/checkpoints"
+    assert any("checkpoint" in item for item in result["codex_contract"])
+
+
+def test_end_workspace_wraps_closeout(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "monorepo-project")
+
+    result = end_workspace(root, ["skill.common-project.release-checklist"])
+
+    assert result["stage"] == "end"
+    assert result["mode"] == "read_only"
+    assert result["used_skills"][0]["id"] == "skill.common-project.release-checklist"
+    assert result["original_preservation_policy"]["preserve_originals"] is True
+
+
+def test_cli_start_and_end_entrypoints(tmp_path: Path, capsys) -> None:
+    root = copy_example(tmp_path, "simple-project")
+
+    assert start_main([str(root)]) == 0
+    start_payload = json.loads(capsys.readouterr().out)
+    assert start_payload["stage"] == "start"
+
+    assert end_main([str(root)]) == 0
+    end_payload = json.loads(capsys.readouterr().out)
+    assert end_payload["stage"] == "end"
 
 
 def test_cli_checkpoint_outputs_preservation_policy(tmp_path: Path, capsys) -> None:

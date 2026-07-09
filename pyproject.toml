@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "archmarshal"
-version = "0.3.3"
+version = "0.3.4"
 description = "A lightweight control plane for agent workspace skills, context modules, and project artifacts."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,6 +21,8 @@ dev = [
 
 [project.scripts]
 archmarshal = "archmarshal.cli:main"
+archmarshal-start = "archmarshal.cli:start_main"
+archmarshal-end = "archmarshal.cli:end_main"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -1,91 +1,69 @@
 # Getting Started
 
-ArchMarshal has one simple job:
+Use ArchMarshal by asking Codex to call it. You do not need to remember command
+line flags.
 
-> Keep project memory findable after context gets compressed.
+## 1. Install
 
-It is read-only by default. It prints JSON suggestions and does not modify your
-project files.
+Paste this into Codex while you are in your project:
 
-## Install
+```text
+Codex, install ArchMarshal in this project from:
+https://github.com/yptang98/ArchMarshal
 
-```bash
-python -m pip install "git+https://github.com/yptang98/ArchMarshal.git"
+After installing, only confirm it works. Do not modify project files.
 ```
 
-## The 3 Calls
+## 2. Project Start
 
-Use these from your project root.
+When a project starts:
 
-### 1. Check The Project
+```text
+Codex, run archmarshal-start for this project.
 
-```bash
-archmarshal lint . --pretty
+Then manage this project using the ArchMarshal rules:
+- preserve raw history
+- checkpoint after context compression
+- keep project files in user-approved save paths
+- use time-first file names
 ```
 
-Use this when starting a project or when something feels messy.
+## 3. After Context Compression
 
-### 2. Save A Checkpoint After Context Compression
+When Codex has summarized or compressed context:
 
-```bash
-archmarshal checkpoint . --task "<what you are doing>" --summary "<what must be remembered>" --pretty
+```text
+Codex, call ArchMarshal checkpoint.
+
+Task: <what we are doing>
+Summary: <what must be remembered>
+
+Do not delete raw history. Show me the suggested checkpoint file path.
 ```
 
 Example:
 
-```bash
-archmarshal checkpoint . --task "release checklist" --summary "Release checklist is drafted; CI risk remains unresolved." --pretty
+```text
+Codex, call ArchMarshal checkpoint.
+
+Task: release checklist
+Summary: Release checklist is drafted; CI risk remains unresolved.
+
+Do not delete raw history. Show me the suggested checkpoint file path.
 ```
 
-This suggests a file name like:
+## 4. At The End
+
+When a project or phase is done:
 
 ```text
-.agent/inbox/checkpoints/20260709-071543-release-checklist-checkpoint.md
+Codex, run archmarshal-end for this project.
+
+Tell me what must be preserved so the project can be reproduced later.
+Do not modify files unless I explicitly approve it.
 ```
 
-If you want a specific save folder:
+## Rule
 
-```bash
-archmarshal checkpoint . --summary "<summary>" --save-path ".agent/history/checkpoints" --pretty
-```
-
-### 3. Close Out A Project Or Phase
-
-```bash
-archmarshal closeout . --pretty
-```
-
-If you used a skill:
-
-```bash
-archmarshal closeout . --used-skill skill.common-project.release-checklist --pretty
-```
-
-This tells you what to preserve so the project can be reproduced later.
-
-## Optional
-
-Ask what skill/context may help with a task:
-
-```bash
-archmarshal resolve . --task "<task>" --pretty
-```
-
-See everything ArchMarshal can see:
-
-```bash
-archmarshal inventory . --pretty
-```
-
-Get a read-only improvement plan:
-
-```bash
-archmarshal plan . --pretty
-```
-
-## Rule Of Thumb
-
-Do not delete raw history just because you made a summary.
-
-Summaries are indexes. Original reports, plans, checkpoints, and notes should
-stay preserved in explicit-only locations.
+Summaries are only indexes. Keep the original reports, plans, checkpoints, and
+notes preserved.
