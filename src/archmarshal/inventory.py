@@ -32,6 +32,8 @@ RESERVED_AGENT_FILES = {
     ".agent/workspace.yaml",
     ".agent/INDEX.md",
     ".agent/registry.yaml",
+    ".agent/memory-stores.yaml",
+    ".agent/memory-records.yaml",
 }
 
 
@@ -45,6 +47,9 @@ class WorkspaceInventory:
     artifacts: list[dict[str, Any]]
     skills: list[dict[str, Any]]
     context_modules: list[dict[str, Any]]
+    memory_stores: list[dict[str, Any]]
+    memory_records: list[dict[str, Any]]
+    detected_memory_locations: list[dict[str, Any]]
     unregistered_agent_files: list[str]
 
     def to_dict(self) -> dict[str, Any]:
@@ -59,6 +64,9 @@ class WorkspaceInventory:
             "artifacts": self.artifacts,
             "skills": self.skills,
             "context_modules": self.context_modules,
+            "memory_stores": self.memory_stores,
+            "memory_records": self.memory_records,
+            "detected_memory_locations": self.detected_memory_locations,
             "unregistered_agent_files": self.unregistered_agent_files,
             "notes": [
                 "Read-only scan; no files were modified.",
@@ -102,6 +110,8 @@ def _file_status(root: Path) -> dict[str, dict[str, Any]]:
         "workspace_yaml": root / ".agent" / "workspace.yaml",
         "index_md": root / ".agent" / "INDEX.md",
         "registry_yaml": root / ".agent" / "registry.yaml",
+        "memory_stores_yaml": root / ".agent" / "memory-stores.yaml",
+        "memory_records_yaml": root / ".agent" / "memory-records.yaml",
     }
     return {
         key: {
@@ -143,6 +153,36 @@ def _load_registry(root: Path) -> list[dict[str, Any]]:
     data = load_yaml(registry_file)
     artifacts = data.get("artifacts", []) if isinstance(data, dict) else []
     return [item for item in artifacts if isinstance(item, dict)]
+
+
+def _load_memory_stores(root: Path) -> list[dict[str, Any]]:
+    memory_file = root / ".agent" / "memory-stores.yaml"
+    if not memory_file.exists():
+        return []
+    try:
+        data = load_yaml(memory_file)
+    except Exception as exc:  # pragma: no cover - surfaced as data for lint
+        return [{"_load_error": str(exc), "_memory_file": rel(memory_file, root)}]
+    stores = data.get("memory_stores", []) if isinstance(data, dict) else []
+    result = [item for item in stores if isinstance(item, dict)]
+    for item in result:
+        item["_memory_file"] = rel(memory_file, root)
+    return result
+
+
+def _load_memory_records(root: Path) -> list[dict[str, Any]]:
+    memory_file = root / ".agent" / "memory-records.yaml"
+    if not memory_file.exists():
+        return []
+    try:
+        data = load_yaml(memory_file)
+    except Exception as exc:  # pragma: no cover - surfaced as data for lint
+        return [{"_load_error": str(exc), "_memory_file": rel(memory_file, root)}]
+    records = data.get("memory_records", []) if isinstance(data, dict) else []
+    result = [item for item in records if isinstance(item, dict)]
+    for item in result:
+        item["_memory_file"] = rel(memory_file, root)
+    return result
 
 
 def _load_skill_manifest(manifest_path: Path, root: Path) -> dict[str, Any]:
@@ -221,11 +261,38 @@ def _unregistered_agent_files(root: Path, artifacts: list[dict[str, Any]]) -> li
     return sorted(unregistered)
 
 
+def _detect_memory_locations(root: Path) -> list[dict[str, Any]]:
+    candidates = [
+        ("claude_project_memory", "CLAUDE.md"),
+        ("cursor_rules", ".cursor/rules"),
+        ("continue_rules", ".continue/rules"),
+        ("windsurf_rules", ".windsurf/rules"),
+        ("codex_project_memories", ".codex/memories"),
+        ("claude_local_state", ".claude"),
+        ("agent_memory_bank", "memory-bank"),
+    ]
+    detected: list[dict[str, Any]] = []
+    for kind, relative_path in candidates:
+        path = root / relative_path
+        if path.exists():
+            detected.append(
+                {
+                    "kind": kind,
+                    "path": relative_path,
+                    "is_dir": path.is_dir(),
+                    "file_count": len(list_files(path)) if path.is_dir() else 1,
+                }
+            )
+    return detected
+
+
 def collect_inventory(root: Path | str) -> WorkspaceInventory:
     resolved_root = Path(root).resolve()
     workspace, paths = _load_workspace(resolved_root)
     entries = _path_entries(resolved_root, paths)
     artifacts = _load_registry(resolved_root)
+    memory_stores = _load_memory_stores(resolved_root)
+    memory_records = _load_memory_records(resolved_root)
     return WorkspaceInventory(
         root=resolved_root,
         workspace=workspace,
@@ -235,5 +302,8 @@ def collect_inventory(root: Path | str) -> WorkspaceInventory:
         artifacts=artifacts,
         skills=_find_skills(resolved_root, entries),
         context_modules=_find_context_modules(resolved_root, entries),
+        memory_stores=memory_stores,
+        memory_records=memory_records,
+        detected_memory_locations=_detect_memory_locations(resolved_root),
         unregistered_agent_files=_unregistered_agent_files(resolved_root, artifacts),
     )

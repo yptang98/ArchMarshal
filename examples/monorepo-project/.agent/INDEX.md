@@ -9,6 +9,11 @@
 
 - `.agent/context-modules/release/module.yaml`
 
+## Memory Governance
+
+- `.agent/memory-stores.yaml`
+- `.agent/memory-records.yaml`
+
 ## Code Roots
 
 - `packages/api/`

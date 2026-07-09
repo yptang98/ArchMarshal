@@ -34,6 +34,7 @@ ACTION_BY_RULE = {
     "skill.dependency_file_outside_skill_root": "Copy dependency files into the skill directory or declare an external command dependency.",
     "skill.declared_dependency_file_missing": "Add the missing dependency file under the skill directory.",
     "skill.command_dependency_missing": "Install the declared command dependency or run the skill in a prepared environment.",
+    "skill.memory_side_effect_undeclared": "Declare memory_effects for skills that read, write, or propose durable memory.",
     "skill.missing_tags": "Add tags to the skill manifest.",
     "skill.missing_triggers": "Add explicit triggers to the skill manifest.",
     "skill.missing_negative_triggers": "Add negative_triggers to reduce skill conflicts.",
@@ -43,6 +44,19 @@ ACTION_BY_RULE = {
     "skill.global_too_large": "Split procedural details out of global policy.",
     "skill.global_contains_project_fact": "Move project facts from global policy into project knowledge or context modules.",
     "skill.functional_contains_project_fact": "Move project-private details into project skills.",
+    "memory.store_unregistered": "Register detected memory/rule locations in .agent/memory-stores.yaml.",
+    "memory.store_yaml_invalid": "Fix .agent/memory-stores.yaml syntax.",
+    "memory.store_missing_required_field": "Add required memory store metadata.",
+    "memory.store_path_missing": "Create the filesystem memory store path or remove the stale declaration.",
+    "memory.no_forget_policy": "Declare forget_policy or supersession_policy for the memory store.",
+    "memory.default_blob_too_large": "Split default-loaded memory into smaller records or make retrieval task-based.",
+    "memory.record_yaml_invalid": "Fix .agent/memory-records.yaml syntax.",
+    "memory.record_missing_required_field": "Add required memory record metadata.",
+    "memory.record_unknown_store": "Declare the referenced memory store or fix store_id.",
+    "memory.record_content_missing": "Create the content file or fix content_path.",
+    "memory.no_source_evidence": "Attach evidence_refs before activating or promoting the memory record.",
+    "memory.generated_unreviewed": "Keep generated memory as candidate until reviewed.",
+    "memory.conflicting_records": "Mark one memory record as superseded or narrow the retrieval keys.",
 }
 
 

@@ -22,6 +22,9 @@ def audit_workspace(root: Path | str) -> dict[str, Any]:
             "artifact_count": len(inventory.artifacts),
             "skill_count": len(inventory.skills),
             "context_module_count": len(inventory.context_modules),
+            "memory_store_count": len(inventory.memory_stores),
+            "memory_record_count": len(inventory.memory_records),
+            "detected_memory_location_count": len(inventory.detected_memory_locations),
             "unregistered_agent_file_count": len(inventory.unregistered_agent_files),
         },
         "risk_model": _risk_model(diagnostics),
@@ -60,6 +63,13 @@ def _risk_model(diagnostics: list[Diagnostic]) -> list[dict[str, str]]:
                 "risk": "Promoted context lacks provenance back to source files.",
             }
         )
+    if any(rule.startswith("memory.") for rule in rules):
+        risks.append(
+            {
+                "area": "memory-governance",
+                "risk": "Memory stores or records may be hidden, unreviewed, unscoped, or missing evidence.",
+            }
+        )
     if not risks:
         risks.append(
             {
@@ -68,4 +78,3 @@ def _risk_model(diagnostics: list[Diagnostic]) -> list[dict[str, str]]:
             }
         )
     return risks
-

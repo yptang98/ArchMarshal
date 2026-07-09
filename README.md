@@ -32,8 +32,9 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 - Lets **functional skills** grow richly with tags, triggers, and negative triggers.
 - Makes **common project skills** reproducible by keeping scripts, templates, references, and dependency files inside the skill path.
 - Manages **project files** through workspace path mappings, registries, read policies, and lifecycle states.
+- Governs **memory stores and memory records** with ownership, privacy, evidence, review status, retrieval keys, and forget/supersession policy.
 - Promotes only distilled reusable knowledge into **context modules**.
-- Detects skill conflicts, missing manifests, unsafe read policies, unregistered generated skills, and workspace mappings that could bloat context.
+- Detects skill conflicts, missing manifests, unsafe read policies, unregistered generated skills, unregistered memory locations, and workspace mappings that could bloat context.
 - Provides read-only `inventory`, `lint`, `audit`, `plan`, `resolve`, and `closeout` commands before any apply-style automation exists.
 
 ## Design Goals
@@ -62,6 +63,7 @@ Please:
    archmarshal inventory . --pretty
    archmarshal lint . --pretty
    archmarshal audit . --pretty
+   archmarshal resolve . --task "<describe my task>" --pretty
    archmarshal plan . --pretty
 4. Do not modify my existing project files. Only report diagnostics, risks, and suggested next steps.
 ```
@@ -100,7 +102,9 @@ ArchMarshal/
 ├─ schemas/
 │  ├─ workspace.schema.yaml
 │  ├─ skill-manifest.schema.yaml
-│  └─ artifact-registry.schema.yaml
+│  ├─ artifact-registry.schema.yaml
+│  ├─ memory-stores.schema.yaml
+│  └─ memory-records.schema.yaml
 ├─ scripts/
 │  └─ inventory.py
 ├─ src/
@@ -172,6 +176,8 @@ python scripts/inventory.py examples/simple-project --pretty
 - New non-source artifacts should first enter `.agent/inbox/`.
 - `AGENTS.md` is an entry router, not a history dump.
 - `.agent/registry.yaml` is the machine ledger.
+- `.agent/memory-stores.yaml` declares governed memory stores.
+- `.agent/memory-records.yaml` declares reviewed or candidate memory records.
 - `.agent/INDEX.md` is the human map.
 
 ## What Ships Today
@@ -197,7 +203,13 @@ python scripts/inventory.py examples/simple-project --pretty
 - [x] Read-only remediation plan output
 - [x] Task-based skill/context resolver
 - [x] Project closeout skill/memory summary
+- [x] Memory store and memory record governance
+- [x] Memory-aware resolve and closeout candidate output
 - [x] Tests for clean examples, missing entry files, skill conflicts, and historical read policy
+
+## Research Notes
+
+- [Agent Memory and Skill Organization Landscape](docs/agent-memory-landscape-2026.md): design direction for memory stores, memory records, retrieval budgets, and closeout-driven promotion.
 
 ## Development
 

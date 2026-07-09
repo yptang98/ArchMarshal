@@ -9,6 +9,11 @@
 
 - `.agent/context-modules/architecture/module.yaml`
 
+## Memory Governance
+
+- `.agent/memory-stores.yaml`
+- `.agent/memory-records.yaml`
+
 ## Explicit-Only
 
 - `.agent/reports/`

@@ -18,6 +18,12 @@ def resolve_workspace(root: Path | str, task: str) -> dict[str, Any]:
         "task": task,
         "suggested_skills": _match_skills(inventory.skills, task_text),
         "suggested_context_modules": _match_context_modules(inventory.context_modules, task_text),
+        "suggested_memory_records": _match_memory_records(inventory.memory_records, task_text),
+        "memory_budget": {
+            "max_records": 5,
+            "max_tokens": 6000,
+            "prefer_reviewed": True,
+        },
         "explicit_only_paths": _historical_paths(inventory.paths),
         "notes": [
             "Resolution is advisory and read-only.",
@@ -99,6 +105,38 @@ def _match_context_modules(modules: list[dict[str, Any]], task_text: str) -> lis
     return sorted(matches, key=lambda item: (-item["score"], str(item["id"])))
 
 
+def _match_memory_records(records: list[dict[str, Any]], task_text: str) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for record in records:
+        if record.get("status") not in {"active", "promoted"}:
+            continue
+        key_matches = [item for item in record.get("retrieval_keys") or [] if _contains(task_text, str(item))]
+        namespace_matches = [item for item in record.get("namespace") or [] if _contains(task_text, str(item))]
+        policy_matches = []
+        read_policy = record.get("read_policy")
+        if read_policy and _policy_matches_task(str(read_policy), task_text):
+            policy_matches.append(read_policy)
+        score = len(key_matches) * 3 + len(namespace_matches) + len(policy_matches)
+        if score <= 0:
+            continue
+        matches.append(
+            {
+                "id": record.get("id"),
+                "store_id": record.get("store_id"),
+                "score": score,
+                "content_path": record.get("content_path"),
+                "review_status": record.get("review_status"),
+                "confidence": record.get("confidence"),
+                "key_matches": key_matches,
+                "namespace_matches": namespace_matches,
+                "read_policy_matches": policy_matches,
+                "inject": False,
+                "read_first": True,
+            }
+        )
+    return sorted(matches, key=lambda item: (-item["score"], str(item["id"])))[:5]
+
+
 def _policy_matches_task(policy: str, task_text: str) -> bool:
     if policy in {"default", "task_based", "when_task_matches"}:
         return True
@@ -118,4 +156,3 @@ def _historical_paths(paths: dict[str, Any]) -> list[str]:
         else:
             result.extend(str(item) for item in value)
     return result
-

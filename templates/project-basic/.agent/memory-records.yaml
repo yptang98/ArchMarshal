@@ -1,0 +1,21 @@
+memory_records:
+  - id: mem.project.architecture
+    store_id: memory.project.context
+    kind: semantic
+    scope: project
+    namespace:
+      - project
+      - architecture
+    status: candidate
+    content_path: .agent/knowledge/architecture.md
+    evidence_refs:
+      - project.architecture
+    confidence: reviewed
+    review_status: reviewed
+    supersedes: []
+    last_verified: 2026-07-09
+    retrieval_keys:
+      - architecture
+      - project structure
+    read_policy: on_architecture_tasks
+    ttl_days: 180

@@ -22,6 +22,7 @@ skill.local_path_empty
 skill.dependency_file_outside_skill_root
 skill.declared_dependency_file_missing
 skill.command_dependency_missing
+skill.memory_side_effect_undeclared
 skill.duplicate_name
 skill.overlapping_trigger
 ```
@@ -49,6 +50,24 @@ project.context_module_not_registered
 project.knowledge_without_read_policy
 project.duplicate_artifact_id
 project.artifact_path_missing
+```
+
+## Memory Rules
+
+```text
+memory.store_unregistered
+memory.store_yaml_invalid
+memory.store_missing_required_field
+memory.store_path_missing
+memory.no_forget_policy
+memory.default_blob_too_large
+memory.record_yaml_invalid
+memory.record_missing_required_field
+memory.record_unknown_store
+memory.record_content_missing
+memory.no_source_evidence
+memory.generated_unreviewed
+memory.conflicting_records
 ```
 
 ## Severity Guidance

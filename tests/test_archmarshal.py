@@ -42,6 +42,8 @@ def test_examples_are_clean_and_show_skill_categories(tmp_path: Path) -> None:
     assert {skill["kind"] for skill in monorepo_inventory.skills} == {
         "common_project_skill",
     }
+    assert len(simple_inventory.memory_stores) == 1
+    assert len(simple_inventory.memory_records) == 1
 
 
 def test_missing_project_entry_files_are_errors(tmp_path: Path) -> None:
@@ -143,6 +145,44 @@ def test_report_default_read_policy_is_error(tmp_path: Path) -> None:
     assert "project.report_read_policy_not_explicit" in rules(root)
 
 
+def test_detects_unregistered_memory_locations(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    rules_dir = root / ".cursor" / "rules"
+    rules_dir.mkdir(parents=True)
+    (rules_dir / "project.md").write_text("Always use the hidden local rule.\n", encoding="utf-8")
+
+    assert "memory.store_unregistered" in rules(root)
+
+
+def test_memory_records_require_evidence_before_activation(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    records = root / ".agent" / "memory-records.yaml"
+    records.write_text(
+        records.read_text(encoding="utf-8").replace(
+            "confidence: reviewed\n    review_status: reviewed",
+            "confidence: generated\n    review_status: pending_human",
+        ),
+        encoding="utf-8",
+    )
+
+    result = rules(root)
+    assert "memory.generated_unreviewed" in result
+
+
+def test_memory_record_unknown_store_is_error(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    records = root / ".agent" / "memory-records.yaml"
+    records.write_text(
+        records.read_text(encoding="utf-8").replace(
+            "store_id: memory.project.context",
+            "store_id: memory.unknown.context",
+        ),
+        encoding="utf-8",
+    )
+
+    assert "memory.record_unknown_store" in rules(root)
+
+
 def test_common_project_skill_reproducibility_paths_are_verified(tmp_path: Path) -> None:
     root = copy_example(tmp_path, "monorepo-project")
     skill_dir = root / ".agents" / "skills" / "common-project" / "release-checklist"
@@ -207,6 +247,20 @@ def test_missing_command_dependency_is_warning(tmp_path: Path) -> None:
     assert by_rule["skill.command_dependency_missing"].severity == "warning"
 
 
+def test_skill_memory_writes_require_memory_effects(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    manifest = root / ".agents" / "skills" / "functional" / "doc-summary" / "manifest.yaml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            "    - project.knowledge",
+            "    - memory.project.context",
+        ),
+        encoding="utf-8",
+    )
+
+    assert "skill.memory_side_effect_undeclared" in rules(root)
+
+
 def test_audit_and_plan_are_read_only_views(tmp_path: Path) -> None:
     root = copy_example(tmp_path, "simple-project")
 
@@ -228,6 +282,7 @@ def test_resolve_suggests_task_relevant_modules(tmp_path: Path) -> None:
     assert doc_result["suggested_skills"][0]["id"] == "skill.functional.doc-summary"
     assert release_result["suggested_skills"][0]["id"] == "skill.common-project.release-checklist"
     assert release_result["suggested_context_modules"][0]["id"] == "context.release"
+    assert release_result["suggested_memory_records"][0]["id"] == "mem.monorepo.release"
     assert ".agent/reports" in release_result["explicit_only_paths"]
 
 
@@ -239,6 +294,33 @@ def test_closeout_reports_used_skills(tmp_path: Path) -> None:
     assert result["used_skills"][0]["id"] == "skill.common-project.release-checklist"
     assert result["missing_used_skills"] == ["skill.missing"]
     assert result["diagnostic_summary"]["error"] == 0
+
+
+def test_closeout_proposes_memory_candidates_from_reports(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    reports = root / ".agent" / "reports"
+    reports.mkdir(exist_ok=True)
+    (reports / "learning.md").write_text("# Learning\n\nUseful durable lesson.\n", encoding="utf-8")
+    registry = root / ".agent" / "registry.yaml"
+    registry.write_text(
+        registry.read_text(encoding="utf-8")
+        + """
+
+  - id: report.learning
+    kind: report
+    path: .agent/reports/learning.md
+    status: raw
+    read_policy: explicit_only
+    update_policy: generated
+    source_of_truth: false
+    tags:
+      - learning
+""",
+        encoding="utf-8",
+    )
+
+    result = closeout_workspace(root, [])
+    assert result["candidate_memory_updates"][0]["source_artifact"] == "report.learning"
 
 
 def test_cli_lint_exit_codes(tmp_path: Path, capsys) -> None:

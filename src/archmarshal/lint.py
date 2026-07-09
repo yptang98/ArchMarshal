@@ -27,6 +27,8 @@ def lint_workspace(root: Path | str) -> list[Diagnostic]:
     diagnostics.extend(_lint_workspace_manifest(inventory.root, inventory.to_dict()))
     diagnostics.extend(_lint_registry(inventory.to_dict()))
     diagnostics.extend(_lint_context_modules(inventory.to_dict()))
+    diagnostics.extend(_lint_memory_stores(inventory.root, inventory.to_dict()))
+    diagnostics.extend(_lint_memory_records(inventory.root, inventory.to_dict()))
     diagnostics.extend(_lint_skills(inventory.root, inventory.to_dict()))
     return diagnostics
 
@@ -306,6 +308,178 @@ def _lint_context_modules(data: dict[str, Any]) -> list[Diagnostic]:
     return diagnostics
 
 
+def _lint_memory_stores(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    registered_paths = {
+        str(store.get("path", "")).replace("\\", "/")
+        for store in data["memory_stores"]
+        if store.get("path")
+    }
+    for detected in data["detected_memory_locations"]:
+        detected_path = str(detected.get("path", "")).replace("\\", "/")
+        if detected_path and detected_path not in registered_paths:
+            diagnostics.append(
+                Diagnostic(
+                    "memory.store_unregistered",
+                    "warning",
+                    "Detected a memory or rule location that is not declared in .agent/memory-stores.yaml.",
+                    detected_path,
+                    "Register the store so ownership, privacy, read policy, and promotion rules are explicit.",
+                )
+            )
+    for store in data["memory_stores"]:
+        path = str(store.get("_memory_file", ".agent/memory-stores.yaml"))
+        if store.get("_load_error"):
+            diagnostics.append(
+                Diagnostic(
+                    "memory.store_yaml_invalid",
+                    "error",
+                    f"memory-stores.yaml could not be parsed: {store['_load_error']}",
+                    path,
+                    "Fix memory-stores.yaml syntax.",
+                )
+            )
+            continue
+        for field in ["id", "name", "scope", "store_type", "path", "read_policy", "write_policy", "owner", "privacy"]:
+            if not store.get(field):
+                diagnostics.append(
+                    Diagnostic(
+                        "memory.store_missing_required_field",
+                        "error",
+                        f"Memory store is missing required field '{field}'.",
+                        path,
+                        "Declare memory store identity, ownership, privacy, and read/write policy.",
+                    )
+                )
+        store_path = str(store.get("path", ""))
+        if store.get("store_type") == "filesystem" and store_path and not _is_external_path(store_path):
+            target = (root / store_path).resolve()
+            if not target.exists():
+                diagnostics.append(
+                    Diagnostic(
+                        "memory.store_path_missing",
+                        "warning",
+                        "Filesystem memory store path does not exist.",
+                        store_path,
+                        "Create the store path or remove the stale memory store declaration.",
+                    )
+                )
+        if "forget_policy" not in store and "supersession_policy" not in store:
+            diagnostics.append(
+                Diagnostic(
+                    "memory.no_forget_policy",
+                    "warning",
+                    "Memory store has no forget or supersession policy.",
+                    path,
+                    "Declare how memory records are deleted, archived, superseded, or exported.",
+                )
+            )
+        read_policy = store.get("read_policy")
+        if read_policy == "default":
+            target = root / store_path
+            budget = int(store.get("default_token_budget") or 4000)
+            for file_path in list_files(target) if target.exists() else []:
+                estimated_tokens = max(1, file_path.stat().st_size // 4)
+                if estimated_tokens > budget:
+                    diagnostics.append(
+                        Diagnostic(
+                            "memory.default_blob_too_large",
+                            "warning",
+                            "Default-loaded memory file exceeds the store token budget.",
+                            _relative_or_absolute(file_path, root),
+                            "Use task_based retrieval or split the memory into smaller records.",
+                        )
+                    )
+    return diagnostics
+
+
+def _lint_memory_records(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    store_ids = {str(store.get("id")) for store in data["memory_stores"] if store.get("id")}
+    active_keys: dict[str, list[str]] = defaultdict(list)
+    for record in data["memory_records"]:
+        path = str(record.get("_memory_file", ".agent/memory-records.yaml"))
+        if record.get("_load_error"):
+            diagnostics.append(
+                Diagnostic(
+                    "memory.record_yaml_invalid",
+                    "error",
+                    f"memory-records.yaml could not be parsed: {record['_load_error']}",
+                    path,
+                    "Fix memory-records.yaml syntax.",
+                )
+            )
+            continue
+        for field in ["id", "store_id", "kind", "scope", "namespace", "status", "content_path", "confidence", "review_status", "retrieval_keys", "read_policy"]:
+            if not record.get(field):
+                diagnostics.append(
+                    Diagnostic(
+                        "memory.record_missing_required_field",
+                        "error",
+                        f"Memory record is missing required field '{field}'.",
+                        path,
+                        "Declare memory record identity, provenance, review state, and retrieval metadata.",
+                    )
+                )
+        store_id = str(record.get("store_id", ""))
+        if store_id and store_id not in store_ids:
+            diagnostics.append(
+                Diagnostic(
+                    "memory.record_unknown_store",
+                    "error",
+                    "Memory record references an unknown memory store.",
+                    path,
+                    "Declare the store in .agent/memory-stores.yaml or fix store_id.",
+                )
+            )
+        content_path = str(record.get("content_path", ""))
+        if content_path and not (root / content_path).exists():
+            diagnostics.append(
+                Diagnostic(
+                    "memory.record_content_missing",
+                    "error",
+                    "Memory record content_path does not exist.",
+                    content_path,
+                    "Create the content file or update the memory record path.",
+                )
+            )
+        if record.get("status") in {"active", "promoted"} and not record.get("evidence_refs"):
+            diagnostics.append(
+                Diagnostic(
+                    "memory.no_source_evidence",
+                    "error",
+                    "Active or promoted memory record has no source evidence.",
+                    path,
+                    "Add evidence_refs pointing to reports, decisions, or reviewed artifacts.",
+                )
+            )
+        if record.get("status") in {"active", "promoted"} and record.get("confidence") == "generated" and record.get("review_status") != "reviewed":
+            diagnostics.append(
+                Diagnostic(
+                    "memory.generated_unreviewed",
+                    "error",
+                    "Generated memory is active without review.",
+                    path,
+                    "Keep generated memory as candidate until reviewed or mark review_status: reviewed.",
+                )
+            )
+        if record.get("status") in {"active", "promoted"}:
+            for key in record.get("retrieval_keys") or []:
+                active_keys[str(key).lower()].append(str(record.get("id", path)))
+    for key, record_ids in active_keys.items():
+        if len(record_ids) > 1:
+            diagnostics.append(
+                Diagnostic(
+                    "memory.conflicting_records",
+                    "warning",
+                    f"Multiple active memory records share retrieval key '{key}'.",
+                    ", ".join(record_ids),
+                    "Check whether one record supersedes another or narrow their retrieval keys.",
+                )
+            )
+    return diagnostics
+
+
 def _lint_skills(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
     names: dict[str, list[str]] = defaultdict(list)
@@ -349,6 +523,7 @@ def _lint_skills(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
         diagnostics.extend(_lint_skill_required_fields(skill, manifest_path))
         diagnostics.extend(_lint_skill_reproducibility(skill, manifest_path))
         diagnostics.extend(_lint_skill_local_paths(root, skill, manifest_path))
+        diagnostics.extend(_lint_skill_memory_effects(skill, manifest_path))
         diagnostics.extend(_lint_skill_boundaries(root, skill, manifest_path))
         if "/generated/" in skill_dir.replace("\\", "/") and skill_dir not in generated_registry_paths:
             diagnostics.append(
@@ -539,6 +714,24 @@ def _lint_skill_local_paths(root: Path, skill: dict[str, Any], manifest_path: st
     return diagnostics
 
 
+def _lint_skill_memory_effects(skill: dict[str, Any], manifest_path: str) -> list[Diagnostic]:
+    permissions = skill.get("permissions") or {}
+    writes = [str(item) for item in permissions.get("writes") or []]
+    proposes = [str(item) for item in permissions.get("proposes") or []]
+    memoryish_permissions = [item for item in writes + proposes if item.startswith("memory.") or item.startswith("mem.")]
+    if memoryish_permissions and not skill.get("memory_effects"):
+        return [
+            Diagnostic(
+                "skill.memory_side_effect_undeclared",
+                "error",
+                "Skill declares memory writes/proposals but has no memory_effects section.",
+                manifest_path,
+                "Declare memory_effects reads/writes/consolidates/forbidden and memory budgets.",
+            )
+        ]
+    return []
+
+
 def _is_relative_to(path: Path, parent: Path) -> bool:
     try:
         path.relative_to(parent)
@@ -552,6 +745,11 @@ def _relative_or_absolute(path: Path, root: Path) -> str:
         return path.relative_to(root.resolve()).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def _is_external_path(path: str) -> bool:
+    expanded = Path(path).expanduser()
+    return path.startswith("~") or expanded.is_absolute()
 
 
 def _lint_skill_boundaries(root: Path, skill: dict[str, Any], manifest_path: str) -> list[Diagnostic]:

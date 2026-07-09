@@ -1,0 +1,21 @@
+memory_records:
+  - id: mem.simple.architecture
+    store_id: memory.project.context
+    kind: semantic
+    scope: project
+    namespace:
+      - simple-project
+      - architecture
+    status: active
+    content_path: .agent/knowledge/architecture.md
+    evidence_refs:
+      - project.architecture
+    confidence: reviewed
+    review_status: reviewed
+    supersedes: []
+    last_verified: 2026-07-09
+    retrieval_keys:
+      - architecture
+      - source root
+    read_policy: on_architecture_tasks
+    ttl_days: 180

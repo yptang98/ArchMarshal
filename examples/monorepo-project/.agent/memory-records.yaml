@@ -1,0 +1,22 @@
+memory_records:
+  - id: mem.monorepo.release
+    store_id: memory.project.context
+    kind: procedural
+    scope: project
+    namespace:
+      - monorepo-project
+      - release
+    status: active
+    content_path: .agent/knowledge/release.md
+    evidence_refs:
+      - project.release
+    confidence: reviewed
+    review_status: reviewed
+    supersedes: []
+    last_verified: 2026-07-09
+    retrieval_keys:
+      - release
+      - release checklist
+      - release readiness
+    read_policy: on_release_tasks
+    ttl_days: 180

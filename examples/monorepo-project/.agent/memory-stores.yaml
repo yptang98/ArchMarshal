@@ -1,0 +1,17 @@
+memory_stores:
+  - id: memory.project.context
+    name: Monorepo project context memory
+    scope: project
+    store_type: filesystem
+    path: .agent/knowledge
+    namespace:
+      - monorepo-project
+      - context
+    read_policy: task_based
+    write_policy: agent_propose_diff
+    owner: team
+    privacy: team
+    exportable: true
+    versioning: git
+    supersession_policy: mark_superseded_then_archive
+    default_token_budget: 4000

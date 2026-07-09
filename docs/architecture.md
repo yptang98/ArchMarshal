@@ -59,6 +59,8 @@ A project workspace contains source code, configuration, documentation, project 
 - `.agent/workspace.yaml` as path mapping.
 - `.agent/INDEX.md` as the human map.
 - `.agent/registry.yaml` as the artifact ledger.
+- `.agent/memory-stores.yaml` as the governed memory-store ledger.
+- `.agent/memory-records.yaml` as the evidence-backed memory-record ledger.
 - `.agents/global/` for lightweight global policy skills.
 - `.agents/skills/functional/` for reusable functional skills.
 - `.agents/skills/common-project/` for reproducible engineering workflow skills.
@@ -102,6 +104,12 @@ Good context module subjects:
 - Security constraints.
 
 Each module should declare read policies, negative triggers, source files, historical references, and related skills.
+
+## Memory Stores And Records
+
+Memory stores are governed pointers to places where durable or candidate memories live. They may be local files, markdown folders, SQLite databases, MCP stores, vector stores, or managed services. ArchMarshal records store ownership, privacy, read/write policy, exportability, versioning, and forget/supersession behavior.
+
+Memory records are small metadata entries that point to content and evidence. They track namespace, retrieval keys, confidence, review status, supersession, and read policy. This keeps memory promotion explicit: generated notes stay candidates until reviewed, and reviewed memory can be resolved by task without loading every historical artifact.
 
 ## Operation Model
 

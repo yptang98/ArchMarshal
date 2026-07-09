@@ -13,6 +13,11 @@ This file is the human map for the project workspace.
 
 - `.agent/context-modules/`
 
+## Memory Governance
+
+- `.agent/memory-stores.yaml`
+- `.agent/memory-records.yaml`
+
 ## Explicit-Only History
 
 - `.agent/reports/`

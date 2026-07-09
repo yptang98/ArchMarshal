@@ -39,6 +39,7 @@ def closeout_workspace(root: Path | str, used_skills: list[str] | None = None) -
         "skill_counts_by_kind": dict(Counter(str(skill.get("kind")) for skill in inventory.skills)),
         "diagnostic_summary": severity_counts(diagnostics),
         "cleanup_actions": plan["actions"],
+        "candidate_memory_updates": _candidate_memory_updates(inventory.to_dict()),
         "review_questions": [
             "Did any temporary report contain durable knowledge worth promoting?",
             "Did any repeated workflow deserve a project skill or common project skill?",
@@ -51,3 +52,31 @@ def closeout_workspace(root: Path | str, used_skills: list[str] | None = None) -
         ],
     }
 
+
+def _candidate_memory_updates(inventory: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    known_evidence = {
+        str(ref)
+        for record in inventory["memory_records"]
+        for ref in (record.get("evidence_refs") or [])
+    }
+    for artifact in inventory["artifacts"]:
+        artifact_id = str(artifact.get("id", ""))
+        kind = artifact.get("kind")
+        status = artifact.get("status")
+        if kind not in {"report", "plan", "history"}:
+            continue
+        if status not in {"raw", "active", "distilled"}:
+            continue
+        if artifact_id in known_evidence:
+            continue
+        candidates.append(
+            {
+                "source_artifact": artifact_id,
+                "source_path": artifact.get("path"),
+                "candidate_status": "needs_review",
+                "suggested_target": "memory_record_candidate",
+                "reason": "Explicit-only artifact may contain durable learning; review before promotion.",
+            }
+        )
+    return candidates
