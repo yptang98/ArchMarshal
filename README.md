@@ -48,14 +48,24 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 
 ## Quick Start
 
-```bash
-git clone https://github.com/yptang98/ArchMarshal.git
-cd ArchMarshal
-pip install -e ".[dev]"
-python -m pytest
+Open Codex in the workspace you want to inspect and paste:
+
+```text
+Install ArchMarshal from https://github.com/yptang98/ArchMarshal and run a read-only governance check on this workspace.
+
+Please:
+1. Clone ArchMarshal outside this repository if possible. If you need a local tools directory, use .archmarshal/tools/ArchMarshal.
+2. From the ArchMarshal checkout, install it with: python -m pip install -e ".[dev]"
+3. Run its test suite.
+4. Run:
+   archmarshal inventory . --pretty
+   archmarshal lint . --pretty
+   archmarshal audit . --pretty
+   archmarshal plan . --pretty
+5. Do not modify my existing project files. Only report diagnostics, risks, and suggested next steps.
 ```
 
-Run the governance CLI against the examples:
+For a quick smoke test inside this repository:
 
 ```bash
 archmarshal inventory examples/simple-project --pretty
