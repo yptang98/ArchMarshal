@@ -49,51 +49,58 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 
 ## Quick Start
 
-ArchMarshal is meant to be called through Codex. You copy a short instruction;
-Codex runs the underlying command and shows you the result.
+ArchMarshal is meant to be installed into a Codex session. After that, you use
+short lifecycle words and keep giving normal project instructions.
 
-### 1. Install
-
-```text
-Codex, install ArchMarshal in this project from:
-https://github.com/yptang98/ArchMarshal
-
-After installing, only confirm it works. Do not modify project files.
-```
-
-### 2. Project Start
+### 1. Copy This Into Codex Once
 
 ```text
-Codex, run archmarshal-start for this project.
+You are Codex working in this repository.
 
-Then manage this project using the ArchMarshal rules:
-- preserve raw history
-- checkpoint after context compression
-- keep project files in user-approved save paths
-- use time-first file names
+Install ArchMarshal from https://github.com/yptang98/ArchMarshal.
+
+After installation, treat these user messages as ArchMarshal lifecycle shortcuts:
+
+- archmarshal-start:
+  Internally call the installed ArchMarshal start entrypoint for this project.
+  Summarize whether save paths, naming policy, and memory governance are ready,
+  then keep managing the project under ArchMarshal rules while I give normal
+  project instructions.
+
+- archmarshal-end:
+  Internally call the installed ArchMarshal end entrypoint for this project.
+  Produce a preservation and reproducibility summary. Do not modify files
+  unless I explicitly approve.
+
+During the project, if context is compressed or I ask for a checkpoint, create
+an ArchMarshal checkpoint proposal. Summaries are indexes, not replacements:
+never delete raw reports, plans, checkpoints, notes, or history.
+
+Only show me concise results. Do not make me type long ArchMarshal commands.
 ```
 
-After Codex compresses or summarizes context:
+### 2. Start A Project
 
 ```text
-Codex, call ArchMarshal checkpoint.
-
-Task: <what we are doing>
-Summary: <what must be remembered>
-
-Do not delete raw history. Show me the suggested checkpoint file path.
+archmarshal-start
 ```
 
-### 3. Project End
+Then continue with normal work:
 
 ```text
-Codex, run archmarshal-end for this project.
-
-Tell me what must be preserved so the project can be reproduced later.
-Do not modify files unless I explicitly approve it.
+Build the release checklist.
+Refactor the API client.
+Write the benchmark report.
 ```
 
-That is the main workflow: install, start, checkpoint after compression, end.
+### 3. End A Project
+
+```text
+archmarshal-end
+```
+
+That is the main workflow: install prompt, `archmarshal-start`, normal project
+instructions, `archmarshal-end`.
 See [Getting Started](docs/getting-started.md) for the minimal prompts.
 
 Summaries are indexes, not replacements. Raw reports, plans, checkpoints, and

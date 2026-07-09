@@ -1,66 +1,60 @@
 # Getting Started
 
-Use ArchMarshal by asking Codex to call it. You do not need to remember command
-line flags.
+Use ArchMarshal by installing it into a Codex session. After that, you type one
+short lifecycle word and continue with normal project instructions.
 
-## 1. Install
+## 1. Install Prompt
 
-Paste this into Codex while you are in your project:
+Paste this into Codex once:
 
 ```text
-Codex, install ArchMarshal in this project from:
-https://github.com/yptang98/ArchMarshal
+You are Codex working in this repository.
 
-After installing, only confirm it works. Do not modify project files.
+Install ArchMarshal from https://github.com/yptang98/ArchMarshal.
+
+After installation, treat these user messages as ArchMarshal lifecycle shortcuts:
+
+- archmarshal-start:
+  Internally call the installed ArchMarshal start entrypoint for this project.
+  Summarize whether save paths, naming policy, and memory governance are ready,
+  then keep managing the project under ArchMarshal rules while I give normal
+  project instructions.
+
+- archmarshal-end:
+  Internally call the installed ArchMarshal end entrypoint for this project.
+  Produce a preservation and reproducibility summary. Do not modify files
+  unless I explicitly approve.
+
+During the project, if context is compressed or I ask for a checkpoint, create
+an ArchMarshal checkpoint proposal. Summaries are indexes, not replacements:
+never delete raw reports, plans, checkpoints, notes, or history.
+
+Only show me concise results. Do not make me type long ArchMarshal commands.
 ```
 
-## 2. Project Start
+## 2. Start
 
-When a project starts:
+When the project starts, type:
 
 ```text
-Codex, run archmarshal-start for this project.
-
-Then manage this project using the ArchMarshal rules:
-- preserve raw history
-- checkpoint after context compression
-- keep project files in user-approved save paths
-- use time-first file names
+archmarshal-start
 ```
 
-## 3. After Context Compression
-
-When Codex has summarized or compressed context:
+Then give normal instructions, for example:
 
 ```text
-Codex, call ArchMarshal checkpoint.
-
-Task: <what we are doing>
-Summary: <what must be remembered>
-
-Do not delete raw history. Show me the suggested checkpoint file path.
+Build the release checklist.
+Analyze the benchmark result.
+Prepare the project report.
 ```
 
-Example:
+Codex should use ArchMarshal in the background when checkpoints or closeout are
+needed.
+
+## 3. End
 
 ```text
-Codex, call ArchMarshal checkpoint.
-
-Task: release checklist
-Summary: Release checklist is drafted; CI risk remains unresolved.
-
-Do not delete raw history. Show me the suggested checkpoint file path.
-```
-
-## 4. At The End
-
-When a project or phase is done:
-
-```text
-Codex, run archmarshal-end for this project.
-
-Tell me what must be preserved so the project can be reproduced later.
-Do not modify files unless I explicitly approve it.
+archmarshal-end
 ```
 
 ## Rule
