@@ -49,6 +49,17 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 
 ## Quick Start
 
+If you are not sure what to do first, start with the practical walkthrough:
+[Getting Started](docs/getting-started.md).
+
+Most users only need three calls:
+
+```bash
+archmarshal lint . --pretty
+archmarshal checkpoint . --task "<task>" --summary "<summary>" --pretty
+archmarshal closeout . --used-skill "<skill-id>" --pretty
+```
+
 Recommended use is lightweight. Start ArchMarshal at the beginning of a new
 project or new project phase, then use it to keep checkpoints and closeout
 records. Retrofitting a large existing workspace is possible, but should stay
@@ -135,6 +146,7 @@ ArchMarshal/
 ├─ README.md
 ├─ docs/
 │  ├─ architecture.md
+│  ├─ getting-started.md
 │  ├─ skill-taxonomy.md
 │  ├─ project-file-lifecycle.md
 │  ├─ product-requirements.md
