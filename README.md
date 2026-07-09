@@ -1,10 +1,42 @@
-# ArchMarshal
+<p align="center">
+  <img src="assets/archmarshal-cover.png" alt="ArchMarshal cover: scattered agent skills and project artifacts flowing into a governed control plane" width="100%">
+</p>
 
-ArchMarshal is a lightweight control plane for agent workspaces. It treats skills as dynamic capability nodes, project skills as reproducible engineering workflows, and project files as lifecycle-managed artifacts.
+<h1 align="center">ArchMarshal</h1>
 
-The first version is intentionally conservative: it defines structure, schemas, templates, examples, and read-only inventory, lint, audit, and plan behavior before any apply-style automation exists.
+<p align="center">
+  <strong>A lightweight control plane for agent workspaces.</strong><br>
+  Keep skills modular, project memory lifecycle-managed, and agents fast as your workspace grows.
+</p>
 
-## Goals
+<p align="center">
+  <a href="https://github.com/yptang98/ArchMarshal/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/yptang98/ArchMarshal/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-teal">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
+  <img alt="Status" src="https://img.shields.io/badge/status-governance%20prototype-amber">
+</p>
+
+## Why This Exists
+
+Agent workspaces age. Every project leaves behind skills, reports, plans, generated tools, memory snippets, and "temporary" notes that quietly become permanent. After enough projects, the agent gets heavier: global skills pile up, project memory becomes hard to scan, and overlapping skill triggers start fighting each other.
+
+ArchMarshal exists for one core reason:
+
+> **Agents should become sharper over time, not heavier.**
+
+It treats skills as dynamic capability nodes, treats project memory as lifecycle-managed assets, and gives the workspace a registry, index, resolver, and closeout loop so useful context can be promoted while historical clutter stays explicit-only.
+
+## What ArchMarshal Does
+
+- Keeps **global skills** tiny and highest-priority.
+- Lets **functional skills** grow richly with tags, triggers, and negative triggers.
+- Makes **common project skills** reproducible by keeping scripts, templates, references, and dependency files inside the skill path.
+- Manages **project files** through workspace path mappings, registries, read policies, and lifecycle states.
+- Promotes only distilled reusable knowledge into **context modules**.
+- Detects skill conflicts, missing manifests, unsafe read policies, unregistered generated skills, and workspace mappings that could bloat context.
+- Provides read-only `inventory`, `lint`, `audit`, `plan`, `resolve`, and `closeout` commands before any apply-style automation exists.
+
+## Design Goals
 
 - Keep global agent policy tiny, explicit, and highest priority.
 - Separate functional skills from common project skills and project-specific skills.
@@ -13,6 +45,25 @@ The first version is intentionally conservative: it defines structure, schemas, 
 - Promote only distilled, reusable knowledge into context modules.
 - Generate reports and plans before any workspace-changing operation.
 - Prefer archive over delete.
+
+## Quick Start
+
+```bash
+git clone https://github.com/yptang98/ArchMarshal.git
+cd ArchMarshal
+pip install -e ".[dev]"
+python -m pytest
+```
+
+Run the governance CLI against the examples:
+
+```bash
+archmarshal inventory examples/simple-project --pretty
+archmarshal lint examples/simple-project --pretty
+archmarshal audit examples/simple-project --pretty
+archmarshal resolve examples/monorepo-project --task "prepare release checklist" --pretty
+archmarshal closeout examples/monorepo-project --used-skill skill.common-project.release-checklist --pretty
+```
 
 ## Non-Goals For MVP
 
@@ -69,7 +120,7 @@ Historical Artifact Layer
 
 The layers are deliberately asymmetric. Global policy should be small and stable. Skills can be numerous, but must be classifiable and reproducible. Project workspaces can be messy, so ArchMarshal gives them registries, indexes, and lifecycle rules instead of pretending every file is a module.
 
-## Suggested CLI Shape
+## CLI
 
 Install locally for development:
 
@@ -148,4 +199,18 @@ When running without installing the package:
 ```bash
 $env:PYTHONPATH='src'
 python -m archmarshal lint examples/simple-project --pretty
+```
+
+## License
+
+MIT
+
+## Social Preview Asset
+
+GitHub currently requires repository social preview images to be uploaded from the web UI: `Settings -> Social preview -> Edit -> Upload an image`.
+
+Use this prepared asset:
+
+```text
+assets/archmarshal-social-preview.jpg
 ```
