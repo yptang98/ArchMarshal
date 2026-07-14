@@ -6,10 +6,10 @@ from pathlib import Path
 
 import yaml
 
-from archmarshal.audit import audit_workspace
 from archmarshal.adoption import adopt_workspace, plan_adoption
-from archmarshal.checkpoint import checkpoint_workspace
+from archmarshal.audit import audit_workspace
 from archmarshal.catalog import catalog_projects
+from archmarshal.checkpoint import checkpoint_workspace
 from archmarshal.cli import end_main, main, start_main
 from archmarshal.closeout import closeout_workspace
 from archmarshal.inventory import collect_inventory
@@ -20,7 +20,6 @@ from archmarshal.planner import plan_workspace
 from archmarshal.resolver import resolve_workspace
 from archmarshal.safety import sha256_file
 from archmarshal.session import record_closeout
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 

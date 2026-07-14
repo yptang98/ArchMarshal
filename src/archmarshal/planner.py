@@ -3,8 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .diagnostics import Diagnostic
+from .errors import require_workspace_root
 from .lint import lint_workspace
-
 
 ACTION_BY_RULE = {
     "project.missing_workspace_yaml": "Create .agent/workspace.yaml from templates/project-basic and adjust path mappings.",
@@ -34,6 +35,7 @@ ACTION_BY_RULE = {
     "project.artifact_path_missing": "Fix the registry path or create the missing artifact.",
     "project.duplicate_artifact_id": "Rename duplicate artifact ids so the registry is unambiguous.",
     "project.generated_skill_not_registered": "Register generated skills as generated_skill artifacts.",
+    "project.artifact_path_outside_root": "Keep registry paths inside the project or use an explicit external integration.",
     "skill.missing_manifest": "Add manifest.yaml to the skill directory.",
     "skill.invalid_manifest_yaml": "Fix the skill manifest.yaml syntax.",
     "skill.manifest_schema_invalid": "Update the skill manifest so it conforms to schemas/skill-manifest.schema.yaml.",
@@ -48,6 +50,10 @@ ACTION_BY_RULE = {
     "skill.memory_side_effect_undeclared": "Declare memory_effects for skills that read, write, or propose durable memory.",
     "skill.overlay_source_outside_root": "Point the overlay at a skill inside the governed project root.",
     "skill.overlay_source_missing": "Fix the overlay pointer or restore the original skill; do not rewrite the source skill automatically.",
+    "skill.overlay_source_changed": "Review the source skill change and generate a replacement overlay candidate.",
+    "skill.overlay_source_untracked": "Add a reviewed source SHA-256 fingerprint to the managed overlay.",
+    "skill.overlay_package_untracked": "Create a reviewed overlay revision that fingerprints the complete skill package.",
+    "skill.overlay_source_unsafe": "Remove or explicitly govern linked/oversized skill content before use.",
     "skill.missing_tags": "Add tags to the skill manifest.",
     "skill.missing_triggers": "Add explicit triggers to the skill manifest.",
     "skill.missing_negative_triggers": "Add negative_triggers to reduce skill conflicts.",
@@ -59,13 +65,17 @@ ACTION_BY_RULE = {
     "skill.functional_contains_project_fact": "Move project-private details into project skills.",
     "memory.store_unregistered": "Register detected memory/rule locations in .agent/memory-stores.yaml.",
     "memory.store_yaml_invalid": "Fix .agent/memory-stores.yaml syntax.",
+    "memory.store_schema_invalid": "Update .agent/memory-stores.yaml so it conforms to schemas/memory-stores.schema.yaml.",
     "memory.store_missing_required_field": "Add required memory store metadata.",
     "memory.store_path_missing": "Create the filesystem memory store path or remove the stale declaration.",
     "memory.no_forget_policy": "Declare forget_policy or supersession_policy for the memory store.",
     "memory.default_blob_too_large": "Split default-loaded memory into smaller records or make retrieval task-based.",
     "memory.record_yaml_invalid": "Fix .agent/memory-records.yaml syntax.",
+    "memory.record_schema_invalid": "Update .agent/memory-records.yaml so it conforms to schemas/memory-records.schema.yaml.",
     "memory.record_missing_required_field": "Add required memory record metadata.",
     "memory.record_unknown_store": "Declare the referenced memory store or fix store_id.",
+    "memory.store_path_outside_root": "Keep filesystem memory inside the project or govern it as an external service.",
+    "memory.record_content_outside_root": "Keep memory content inside the project or use an external store reference.",
     "memory.record_content_missing": "Create the content file or fix content_path.",
     "memory.no_source_evidence": "Attach evidence_refs before activating or promoting the memory record.",
     "memory.generated_unreviewed": "Keep generated memory as candidate until reviewed.",
@@ -73,8 +83,13 @@ ACTION_BY_RULE = {
 }
 
 
-def plan_workspace(root: Path | str) -> dict[str, Any]:
-    diagnostics = lint_workspace(root)
+def plan_workspace(
+    root: Path | str,
+    *,
+    diagnostics: list[Diagnostic] | None = None,
+) -> dict[str, Any]:
+    root_path = require_workspace_root(root)
+    diagnostics = diagnostics if diagnostics is not None else lint_workspace(root_path)
     actions = []
     for index, diagnostic in enumerate(diagnostics, start=1):
         actions.append(
@@ -89,7 +104,7 @@ def plan_workspace(root: Path | str) -> dict[str, Any]:
         )
     return {
         "tool": "archmarshal",
-        "root": str(Path(root).resolve()),
+        "root": str(root_path),
         "destructive": False,
         "apply_supported": False,
         "actions": actions,

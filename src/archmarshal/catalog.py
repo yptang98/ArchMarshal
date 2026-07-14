@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .diagnostics import severity_counts
+from .errors import require_workspace_root
 from .inventory import collect_inventory
 from .lint import lint_workspace
 
@@ -13,14 +14,16 @@ def catalog_projects(
     *,
     tags: list[str] | None = None,
 ) -> dict[str, Any]:
-    requested_tags = {item.strip().lower() for item in tags or [] if item.strip()}
+    requested_tags = {item.strip().casefold() for item in tags or [] if item.strip()}
     projects: list[dict[str, Any]] = []
     for value in roots:
-        root = Path(value).resolve()
+        root = require_workspace_root(value)
         inventory = collect_inventory(root)
         workspace = inventory.workspace
         project_tags = [str(item) for item in workspace.get("tags") or []]
-        if requested_tags and not requested_tags.issubset({item.lower() for item in project_tags}):
+        if requested_tags and not requested_tags.issubset(
+            {item.casefold() for item in project_tags}
+        ):
             continue
         projects.append(
             {

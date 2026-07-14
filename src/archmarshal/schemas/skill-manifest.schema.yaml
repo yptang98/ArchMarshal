@@ -151,6 +151,18 @@ properties:
         type: string
       skill_md:
         type: string
+      skill_sha256:
+        type: string
+        pattern: "^[a-f0-9]{64}$"
+      package_sha256:
+        type: string
+        pattern: "^[a-f0-9]{64}$"
+      package_file_count:
+        type: integer
+        minimum: 1
+      package_content_bytes:
+        type: integer
+        minimum: 0
       original_manifest:
         type:
           - string

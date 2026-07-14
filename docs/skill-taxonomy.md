@@ -108,7 +108,7 @@ Examples:
 
 Required properties:
 
-- Complete reproducibility.
+- Declared local reproduction material, with validation proportional to the claim.
 - Local scripts, templates, references, and optional tests.
 - Declared dependencies.
 - Default output paths and artifact lifecycles.

@@ -5,7 +5,6 @@ from typing import Any
 
 from .inventory import collect_inventory
 
-
 HISTORICAL_KEYS = ["reports", "history", "archive", "cache"]
 
 
@@ -16,6 +15,7 @@ def resolve_workspace(root: Path | str, task: str) -> dict[str, Any]:
         "tool": "archmarshal",
         "root": str(inventory.root),
         "task": task,
+        "required_policy_skills": _required_policy_skills(inventory.skills),
         "suggested_skills": _match_skills(inventory.skills, task_text),
         "suggested_context_modules": _match_context_modules(inventory.context_modules, task_text),
         "suggested_memory_records": _match_memory_records(inventory.memory_records, task_text),
@@ -27,6 +27,7 @@ def resolve_workspace(root: Path | str, task: str) -> dict[str, Any]:
         "explicit_only_paths": _historical_paths(inventory.paths),
         "notes": [
             "Resolution is advisory and read-only.",
+            "Active highest-priority global skills are returned separately as required policy.",
             "Historical artifact paths remain explicit-only unless a selected context module references them.",
         ],
     }
@@ -43,7 +44,11 @@ def _contains(text: str, needle: str) -> bool:
 def _match_skills(skills: list[dict[str, Any]], task_text: str) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
     for skill in skills:
-        if skill.get("status") not in {"active", "experimental"}:
+        if (
+            skill.get("status") not in {"active", "experimental"}
+            or skill.get("_has_skill_md") is False
+            or skill.get("_source_drift") == "unsafe"
+        ):
             continue
         negative_matches = [
             item for item in skill.get("negative_triggers") or [] if _contains(task_text, str(item))
@@ -54,7 +59,10 @@ def _match_skills(skills: list[dict[str, Any]], task_text: str) -> list[dict[str
             item for item in skill.get("triggers") or [] if _contains(task_text, str(item))
         ]
         tag_matches = [item for item in skill.get("tags") or [] if _contains(task_text, str(item))]
-        score = len(trigger_matches) * 3 + len(tag_matches)
+        priority_bonus = {"highest": 3, "high": 2, "normal": 0, "low": -1}.get(
+            str(skill.get("priority") or "normal"), 0
+        )
+        score = len(trigger_matches) * 3 + len(tag_matches) + priority_bonus
         if score <= 0:
             continue
         matches.append(
@@ -63,6 +71,7 @@ def _match_skills(skills: list[dict[str, Any]], task_text: str) -> list[dict[str
                 "name": skill.get("name"),
                 "kind": skill.get("kind"),
                 "scope": skill.get("scope"),
+                "priority": skill.get("priority") or "normal",
                 "score": score,
                 "path": skill.get("_skill_dir"),
                 "metadata_path": skill.get("_overlay_manifest_path") or skill.get("_manifest_path"),
@@ -72,6 +81,31 @@ def _match_skills(skills: list[dict[str, Any]], task_text: str) -> list[dict[str
             }
         )
     return sorted(matches, key=lambda item: (-item["score"], str(item["id"])))
+
+
+def _required_policy_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    required = []
+    for skill in skills:
+        if (
+            skill.get("kind") != "global_skill"
+            or skill.get("priority") != "highest"
+            or skill.get("status") != "active"
+            or skill.get("_has_skill_md") is False
+            or skill.get("_source_drift") == "unsafe"
+        ):
+            continue
+        required.append(
+            {
+                "id": skill.get("id"),
+                "name": skill.get("name"),
+                "path": skill.get("_skill_dir"),
+                "metadata_path": skill.get("_overlay_manifest_path")
+                or skill.get("_manifest_path"),
+                "priority": "highest",
+                "source_managed": _source_managed(skill),
+            }
+        )
+    return sorted(required, key=lambda item: str(item["id"]))
 
 
 def _source_managed(skill: dict[str, Any]) -> bool:

@@ -1,0 +1,84 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://archmarshal.local/schemas/memory-stores.schema.yaml
+title: ArchMarshal Memory Stores
+type: object
+required:
+  - memory_stores
+additionalProperties: false
+properties:
+  memory_stores:
+    type: array
+    items:
+      type: object
+      required:
+        - id
+        - name
+        - scope
+        - store_type
+        - path
+        - read_policy
+        - write_policy
+        - owner
+        - privacy
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+          pattern: "^memory\\.[a-z0-9_.-]+$"
+        name:
+          type: string
+        scope:
+          enum:
+            - user
+            - org
+            - workspace
+            - project
+            - task
+            - agent
+        store_type:
+          enum:
+            - filesystem
+            - markdown
+            - sqlite
+            - vector
+            - graph
+            - mcp
+            - managed_service
+        path:
+          type: string
+        namespace:
+          type: array
+          items:
+            type: string
+        read_policy:
+          enum:
+            - default
+            - task_based
+            - when_task_matches
+            - explicit_only
+            - never_default
+        write_policy:
+          enum:
+            - human_only
+            - generated
+            - agent_propose_diff
+            - agent_can_update
+            - append_only
+        owner:
+          type: string
+        privacy:
+          enum:
+            - private
+            - team
+            - public
+        exportable:
+          type: boolean
+        versioning:
+          type: string
+        forget_policy:
+          type: string
+        supersession_policy:
+          type: string
+        default_token_budget:
+          type: integer
+          minimum: 0

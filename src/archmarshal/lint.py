@@ -6,10 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from .diagnostics import Diagnostic
-from .inventory import collect_inventory
+from .inventory import WorkspaceInventory, collect_inventory
 from .io import list_files, load_yaml_safe, read_text
 from .schema_validation import validate_schema
-
 
 GLOBAL_SKILL_MAX_LINES = 120
 AGENTS_MD_MAX_BYTES = 6000
@@ -23,8 +22,12 @@ REQUIRED_PROJECT_FILE_SAVE_PATHS = ("checkpoints", "reports", "plans", "history"
 REQUIRED_PROJECT_FILE_NAMING_FIELDS = ("strategy", "timezone", "timestamp_format", "max_slug_words")
 
 
-def lint_workspace(root: Path | str) -> list[Diagnostic]:
-    inventory = collect_inventory(root)
+def lint_workspace(
+    root: Path | str,
+    *,
+    inventory: WorkspaceInventory | None = None,
+) -> list[Diagnostic]:
+    inventory = inventory or collect_inventory(root)
     diagnostics: list[Diagnostic] = []
     diagnostics.extend(_lint_project_files(inventory.root, inventory.to_dict()))
     diagnostics.extend(_lint_workspace_manifest(inventory.root, inventory.to_dict()))
@@ -38,6 +41,16 @@ def lint_workspace(root: Path | str) -> list[Diagnostic]:
 
 def _lint_project_files(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
+    for unsafe in data.get("unsafe_paths", []):
+        diagnostics.append(
+            Diagnostic(
+                "project.workspace_path_outside_root",
+                "error",
+                "A configured workspace path resolves outside the project root.",
+                f".agent/workspace.yaml#$.{unsafe['field']}",
+                "Use a project-relative path; ArchMarshal will not scan external locations implicitly.",
+            )
+        )
     files = data["files"]
     if not files["workspace_yaml"]["exists"]:
         diagnostics.append(
@@ -401,6 +414,17 @@ def _lint_registry(data: dict[str, Any]) -> list[Diagnostic]:
                 )
             )
         artifact_ids.add(artifact_id)
+        if path and _path_escapes_root(root, path):
+            diagnostics.append(
+                Diagnostic(
+                    "project.artifact_path_outside_root",
+                    "error",
+                    "Registered artifact path resolves outside the project root.",
+                    path,
+                    "Use a project-relative artifact path or an explicit external integration.",
+                )
+            )
+            continue
         if path and not (root / path).exists():
             diagnostics.append(
                 Diagnostic(
@@ -495,6 +519,18 @@ def _lint_context_modules(data: dict[str, Any]) -> list[Diagnostic]:
 
 def _lint_memory_stores(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
+    memory_file = root / ".agent" / "memory-stores.yaml"
+    if memory_file.exists():
+        result = load_yaml_safe(memory_file)
+        if not result.error:
+            diagnostics.extend(
+                _schema_diagnostics(
+                    "memory.store_schema_invalid",
+                    ".agent/memory-stores.yaml",
+                    "memory-stores",
+                    result.data,
+                )
+            )
     registered_paths = {
         str(store.get("path", "")).replace("\\", "/")
         for store in data["memory_stores"]
@@ -538,6 +574,17 @@ def _lint_memory_stores(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
                 )
         store_path = str(store.get("path", ""))
         if store.get("store_type") == "filesystem" and store_path and not _is_external_path(store_path):
+            if _path_escapes_root(root, store_path):
+                diagnostics.append(
+                    Diagnostic(
+                        "memory.store_path_outside_root",
+                        "error",
+                        "Filesystem memory store resolves outside the project root.",
+                        store_path,
+                        "Use a project-relative path or declare a separately governed external service.",
+                    )
+                )
+                continue
             target = (root / store_path).resolve()
             if not target.exists():
                 diagnostics.append(
@@ -562,7 +609,8 @@ def _lint_memory_stores(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
         read_policy = store.get("read_policy")
         if read_policy == "default":
             target = root / store_path
-            budget = int(store.get("default_token_budget") or 4000)
+            budget_value = store.get("default_token_budget")
+            budget = budget_value if type(budget_value) is int else 4000
             for file_path in list_files(target) if target.exists() else []:
                 estimated_tokens = max(1, file_path.stat().st_size // 4)
                 if estimated_tokens > budget:
@@ -580,6 +628,18 @@ def _lint_memory_stores(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
 
 def _lint_memory_records(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
+    memory_file = root / ".agent" / "memory-records.yaml"
+    if memory_file.exists():
+        result = load_yaml_safe(memory_file)
+        if not result.error:
+            diagnostics.extend(
+                _schema_diagnostics(
+                    "memory.record_schema_invalid",
+                    ".agent/memory-records.yaml",
+                    "memory-records",
+                    result.data,
+                )
+            )
     store_ids = {str(store.get("id")) for store in data["memory_stores"] if store.get("id")}
     active_keys: dict[str, list[str]] = defaultdict(list)
     for record in data["memory_records"]:
@@ -618,6 +678,17 @@ def _lint_memory_records(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
                 )
             )
         content_path = str(record.get("content_path", ""))
+        if content_path and _path_escapes_root(root, content_path):
+            diagnostics.append(
+                Diagnostic(
+                    "memory.record_content_outside_root",
+                    "error",
+                    "Memory record content_path resolves outside the project root.",
+                    content_path,
+                    "Keep content inside the project or use an explicit external store reference.",
+                )
+            )
+            continue
         if content_path and not (root / content_path).exists():
             diagnostics.append(
                 Diagnostic(
@@ -707,6 +778,47 @@ def _lint_skills(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
                     "Skill overlay source does not contain the declared SKILL.md.",
                     manifest_path,
                     "Fix the overlay source pointer without moving or modifying the original skill.",
+                )
+            )
+        if skill.get("_source_drift") == "changed":
+            diagnostics.append(
+                Diagnostic(
+                    "skill.overlay_source_changed",
+                    "warning",
+                    "The source skill package changed after this overlay was generated.",
+                    manifest_path,
+                    "Review the source diff and generate a new overlay candidate; never rewrite the source skill automatically.",
+                )
+            )
+        if skill.get("_source_drift") == "untracked":
+            diagnostics.append(
+                Diagnostic(
+                    "skill.overlay_source_untracked",
+                    "info",
+                    "The overlay predates source fingerprint tracking.",
+                    manifest_path,
+                    "Record a reviewed source fingerprint during a safe overlay upgrade.",
+                )
+            )
+        if skill.get("_source_drift") == "package_untracked":
+            diagnostics.append(
+                Diagnostic(
+                    "skill.overlay_package_untracked",
+                    "info",
+                    "The overlay fingerprints SKILL.md but not the rest of the skill package.",
+                    manifest_path,
+                    "Create a reviewed overlay revision before trusting scripts, references, or assets as unchanged.",
+                )
+            )
+        if skill.get("_fingerprint_error"):
+            error = skill["_fingerprint_error"]
+            diagnostics.append(
+                Diagnostic(
+                    "skill.overlay_source_unsafe",
+                    "error",
+                    str(error.get("message") or "The source skill package could not be safely fingerprinted."),
+                    manifest_path,
+                    "Remove or explicitly govern linked/oversized content before using this skill.",
                 )
             )
         if skill.get("_load_error"):

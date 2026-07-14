@@ -10,7 +10,7 @@ from .lint import lint_workspace
 
 def audit_workspace(root: Path | str) -> dict[str, Any]:
     inventory = collect_inventory(root)
-    diagnostics = lint_workspace(root)
+    diagnostics = lint_workspace(root, inventory=inventory)
     counts = severity_counts(diagnostics)
     return {
         "tool": "archmarshal",

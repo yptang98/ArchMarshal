@@ -15,7 +15,7 @@ rearrange the project itself.
 7. A reserved control-file conflict blocks adoption instead of triggering a
    merge or guessed rewrite.
 8. Closeout writes to a unique new directory and never edits prior sessions.
-9. Reproduction records exclude environment variables and secrets.
+9. Reproduction records exclude environment variables and block known inline-secret patterns; selected text and scripts still require review.
 10. Skill and preference promotion is review-only.
 
 These constraints intentionally make ArchMarshal less aggressive than a general
@@ -46,13 +46,17 @@ The managed backup scope contains:
 - Every discovered `SKILL.md`.
 - Every existing source skill `manifest.yaml`.
 
-Use `--backup-scope full` when the user requires a full project snapshot. VCS
+Use `--backup-scope full` when the user requires a broad project-content snapshot. VCS
 internals, dependency directories, virtual environments, and previous backups
 are excluded. The resulting zip contains a JSON manifest with the original
 relative path, byte size, and SHA-256 hash for each file; the zip is tested and
 hashed before adoption continues. `.agent/backups/.gitignore` prevents backup
-archives from being committed accidentally; full backups may still contain
+archives from being committed accidentally; these backups may still contain
 sensitive project files and must not be shared casually.
+
+Use `archmarshal backup-verify` to re-check every archived byte. Restore is
+deliberately one-way into a new, non-existing directory; ArchMarshal never
+restores over the original project.
 
 ## Skill Overlay Model
 
@@ -75,12 +79,17 @@ original source path. Its source policy is:
 source:
   skill_dir: .codex/skills/release-helper
   skill_md: .codex/skills/release-helper/SKILL.md
+  skill_sha256: <entrypoint-sha256>
+  package_sha256: <complete-package-sha256>
   managed: false
   mutation_policy: never
 ```
 
 Inventory and resolution use overlay metadata while local paths, scripts, and
-behavior still resolve against the original skill directory. This is analogous
+behavior still resolve against the original skill directory. Scripts,
+references, assets, and other regular files participate in the package
+fingerprint. Linked or unexpectedly huge packages are rejected rather than
+followed implicitly. This is analogous
 to a module registry or package-lock overlay: identity and routing are managed
 without rewriting the module implementation.
 
@@ -124,11 +133,12 @@ needing a complete execution capsule.
 
 ### Reproducible
 
-Also creates `reproduction.yaml`, a reference `run.ps1` or `run.sh`, and verified
+Also creates `reproduction.yaml`, a reference `run.ps1` or `run.sh`, and hashed
 copies of key scripts. It captures Git commit/branch/dirty paths, safe platform
 and Python fingerprints, and dependency-file hashes. It is marked ready only
 when summary, ordered steps, key scripts, and exact rerun commands are all
-present.
+present. This is evidence completeness, not proof that the recorded commands
+were executed successfully or that an external environment can be reconstructed.
 
 Generated run scripts are never executed by ArchMarshal. They are references
 that must be reviewed by a human.

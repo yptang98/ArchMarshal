@@ -5,8 +5,9 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .errors import ArchMarshalError, require_workspace_root
 from .io import list_files, load_yaml_safe, rel
-
+from .safety import fingerprint_directory, sha256_file
 
 DEFAULT_PATHS = {
     "project_root": ".",
@@ -69,6 +70,7 @@ class WorkspaceInventory:
     memory_records: list[dict[str, Any]]
     detected_memory_locations: list[dict[str, Any]]
     unregistered_agent_files: list[str]
+    unsafe_paths: list[dict[str, str]]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -88,6 +90,7 @@ class WorkspaceInventory:
             "memory_records": self.memory_records,
             "detected_memory_locations": self.detected_memory_locations,
             "unregistered_agent_files": self.unregistered_agent_files,
+            "unsafe_paths": self.unsafe_paths,
             "notes": [
                 "Read-only scan; no files were modified.",
                 "Historical artifact directories should not be loaded by default.",
@@ -151,14 +154,27 @@ def _default_naming() -> dict[str, Any]:
     }
 
 
-def _path_entries(root: Path, paths: dict[str, Any]) -> dict[str, list[Path]]:
+def _path_entries(
+    root: Path, paths: dict[str, Any]
+) -> tuple[dict[str, list[Path]], list[dict[str, str]]]:
     entries: dict[str, list[Path]] = {}
+    unsafe: list[dict[str, str]] = []
     for key, value in paths.items():
-        if key == "project_root":
-            entries[key] = [root / str(value)]
-        else:
-            entries[key] = [root / item for item in _as_list(value)]
-    return entries
+        values = [str(value)] if key == "project_root" else _as_list(value)
+        entries[key] = []
+        for item in values:
+            candidate = Path(item)
+            candidate = candidate if candidate.is_absolute() else root / candidate
+            resolved = candidate.resolve(strict=False)
+            try:
+                resolved.relative_to(root)
+            except ValueError:
+                unsafe.append(
+                    {"field": f"paths.{key}", "value": item, "resolved_path": str(resolved)}
+                )
+                continue
+            entries[key].append(candidate)
+    return entries, unsafe
 
 
 def _file_status(root: Path) -> dict[str, dict[str, Any]]:
@@ -274,6 +290,35 @@ def _load_skill_manifest(manifest_path: Path, root: Path) -> dict[str, Any]:
     manifest["_manifest_path"] = rel(manifest_path, root)
     manifest["_skill_dir"] = rel(skill_dir, root)
     manifest["_has_skill_md"] = (skill_dir / "SKILL.md").exists()
+    if manifest["_has_skill_md"]:
+        current_hash = sha256_file(skill_dir / "SKILL.md")
+        manifest["_current_skill_sha256"] = current_hash
+        try:
+            package = fingerprint_directory(
+                skill_dir,
+                purpose="Skill package",
+                entrypoint_only=skill_dir.resolve() == root,
+            )
+        except ArchMarshalError as exc:
+            manifest["_fingerprint_error"] = exc.to_dict()
+            manifest["_source_drift"] = "unsafe"
+        else:
+            manifest["_current_package_sha256"] = package["sha256"]
+            manifest["_package_file_count"] = package["file_count"]
+            manifest["_package_content_bytes"] = package["content_bytes"]
+            if isinstance(source, dict):
+                recorded_package_hash = source.get("package_sha256")
+                if recorded_package_hash:
+                    manifest["_source_drift"] = (
+                        "unchanged" if recorded_package_hash == package["sha256"] else "changed"
+                    )
+                else:
+                    recorded_hash = source.get("skill_sha256")
+                    manifest["_source_drift"] = (
+                        "untracked"
+                        if not recorded_hash
+                        else "package_untracked" if recorded_hash == current_hash else "changed"
+                    )
     return manifest
 
 
@@ -364,6 +409,18 @@ def _detect_memory_locations(root: Path) -> list[dict[str, Any]]:
     for kind, relative_path in candidates:
         path = root / relative_path
         if path.exists():
+            try:
+                path.resolve().relative_to(root)
+            except ValueError:
+                detected.append(
+                    {
+                        "kind": kind,
+                        "path": relative_path,
+                        "blocked_external_link": True,
+                        "file_count": 0,
+                    }
+                )
+                continue
             detected.append(
                 {
                     "kind": kind,
@@ -376,9 +433,25 @@ def _detect_memory_locations(root: Path) -> list[dict[str, Any]]:
 
 
 def collect_inventory(root: Path | str) -> WorkspaceInventory:
-    resolved_root = Path(root).resolve()
+    resolved_root = require_workspace_root(root)
+    agent_root = resolved_root / ".agent"
+    if agent_root.exists():
+        if agent_root.is_symlink():
+            raise ArchMarshalError(
+                "unsafe_control_directory",
+                "The .agent control directory must not be a symbolic link or junction.",
+                details={"path": str(agent_root), "resolved_path": str(agent_root.resolve())},
+            )
+        try:
+            agent_root.resolve().relative_to(resolved_root)
+        except ValueError as exc:
+            raise ArchMarshalError(
+                "unsafe_control_directory",
+                "The .agent control directory resolves outside the workspace root.",
+                details={"path": str(agent_root), "resolved_path": str(agent_root.resolve())},
+            ) from exc
     workspace, paths, save_paths, naming = _load_workspace(resolved_root)
-    entries = _path_entries(resolved_root, paths)
+    entries, unsafe_paths = _path_entries(resolved_root, paths)
     artifacts = _load_registry(resolved_root)
     memory_stores = _load_memory_stores(resolved_root)
     memory_records = _load_memory_records(resolved_root)
@@ -397,4 +470,5 @@ def collect_inventory(root: Path | str) -> WorkspaceInventory:
         memory_records=memory_records,
         detected_memory_locations=_detect_memory_locations(resolved_root),
         unregistered_agent_files=_unregistered_agent_files(resolved_root, artifacts),
+        unsafe_paths=unsafe_paths,
     )

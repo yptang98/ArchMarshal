@@ -13,7 +13,7 @@ from .planner import plan_workspace
 def closeout_workspace(root: Path | str, used_skills: list[str] | None = None) -> dict[str, Any]:
     used_skills = used_skills or []
     inventory = collect_inventory(root)
-    diagnostics = lint_workspace(root)
+    diagnostics = lint_workspace(root, inventory=inventory)
     skill_index = {
         str(skill.get("id") or skill.get("name")): skill
         for skill in inventory.skills
@@ -21,7 +21,7 @@ def closeout_workspace(root: Path | str, used_skills: list[str] | None = None) -
     }
     matched = [skill_index[item] for item in used_skills if item in skill_index]
     missing = [item for item in used_skills if item not in skill_index]
-    plan = plan_workspace(root)
+    plan = plan_workspace(root, diagnostics=diagnostics)
     inventory_dict = inventory.to_dict()
     candidate_memory_updates = _candidate_memory_updates(inventory_dict)
     promotion_candidates = _promotion_candidates(inventory_dict, matched)

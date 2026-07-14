@@ -13,7 +13,7 @@
   <a href="https://github.com/yptang98/ArchMarshal/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/yptang98/ArchMarshal/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-teal">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
-  <img alt="Status" src="https://img.shields.io/badge/status-safe%20lifecycle%20alpha-orange">
+  <img alt="Status" src="https://img.shields.io/badge/status-safety--hardened%20alpha-orange">
 </p>
 
 ## Why This Exists
@@ -36,6 +36,7 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 - Promotes only distilled reusable knowledge into **context modules**.
 - Detects skill conflicts, missing manifests, unsafe read policies, unregistered generated skills, unregistered memory locations, and workspace mappings that could bloat context.
 - Adopts existing projects through **metadata overlays**: existing `SKILL.md` and project files stay untouched.
+- Fingerprints the **complete skill package**, so script/reference/asset drift is visible without rewriting the source.
 - Records **quick**, **standard**, or **reproducible** closeouts in append-only, date-organized directories.
 - Catalogs multiple projects by recorded creation date and AND-filtered tags.
 - Extracts review-only common-skill and user-preference candidates from compact session manifests.
@@ -53,17 +54,17 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 
 ## Quick Start
 
-ArchMarshal is meant to be installed into a Codex session. Install once, then
-use the built-in lifecycle words while giving normal project instructions.
+ArchMarshal is a Python CLI that Codex or a human can invoke inside a project.
 
 ### 1. Install
 
-```text
-Codex, install ArchMarshal for this project:
-https://github.com/yptang98/ArchMarshal
-
-After installing, confirm it is available and show me the shortest way to start.
+```bash
+python -m pip install "git+https://github.com/yptang98/ArchMarshal.git"
+archmarshal --help
 ```
+
+This repository is not currently a one-click Codex Skill package; the command
+above installs the actual CLI from GitHub.
 
 ### 2. Start
 
@@ -79,19 +80,20 @@ Then explicitly create the management overlay:
 archmarshal-start . --apply --tag research --tag python --pretty
 ```
 
-ArchMarshal creates a verified backup before the first managed file, keeps every
+ArchMarshal creates a content-verified backup before the first managed file, keeps every
 existing skill in place, and stores generated routing metadata under
 `.agent/skill-overlays/`. If a reserved control file already belongs to another
 tool, adoption blocks instead of overwriting it.
 
-For an already managed project, the short read-only start remains:
+For an already managed project, start also previews newly added skills and
+complete-package drift:
 
 ```text
 archmarshal-start
 ```
 
-ArchMarshal checks save paths, naming, memory/history rules, and then Codex can
-keep using it quietly while you give normal project instructions.
+Use `--apply` only to create missing overlay metadata. Changed existing overlays
+are reported for review and are never replaced implicitly.
 
 Then continue with normal work:
 
@@ -117,7 +119,7 @@ archmarshal-end . --level quick --summary "Finished the release review" --apply
 archmarshal-end . --level standard --summary "Validated the release" \
   --step "Run tests" --step "Review artifacts" --script scripts/validate.py --apply
 
-# 3. Reproducible trajectory, hashed script snapshots, environment fingerprint, and run script
+# 3. Reproduction-evidence capsule with hashed scripts and a reference run script
 archmarshal-end . --level reproducible --summary "Reproduced benchmark A" \
   --step "Prepare data" --step "Run evaluation" --script scripts/eval.py \
   --command "python scripts/eval.py --config configs/a.yaml" --shell bash --apply
@@ -125,8 +127,9 @@ archmarshal-end . --level reproducible --summary "Reproduced benchmark A" \
 
 All three modes preview by default and write only to a new
 `.agent/history/YYYY/MM/DD/...` directory with `--apply`. Reproducible mode
-reports `reproducibility_ready: false` until summary, ordered steps, key scripts,
-and exact commands are present.
+reports `reproduction_evidence_ready: false` until summary, ordered steps, key
+scripts, and exact commands are present. Readiness means required evidence is
+present; ArchMarshal does not execute the commands or prove the result.
 
 After multiple sessions, extract lightweight, review-only candidates:
 
@@ -147,9 +150,9 @@ See [Getting Started](docs/getting-started.md) for the minimal prompts.
 Summaries are indexes, not replacements. Raw reports, plans, checkpoints, and
 history should remain preserved with explicit-only read policies.
 
-ArchMarshal does not force heavyweight summaries. Recording depth is automatic:
-routine skill reuse should stay light, while novel work can produce deeper
-recording and promotion suggestions.
+ArchMarshal does not force heavyweight summaries. The read-only closeout view
+recommends a recording depth; the user explicitly chooses quick, standard, or
+reproducible evidence when writing a session.
 
 ## Current Boundaries
 
@@ -243,6 +246,8 @@ archmarshal adopt path/to/existing-project --tag research --pretty
 archmarshal adopt path/to/existing-project --tag research --apply --pretty
 archmarshal end path/to/project --level quick --summary "Phase complete" --apply --pretty
 archmarshal learn path/to/project --apply --pretty
+archmarshal backup-verify path/to/backup.zip --pretty
+archmarshal backup-restore path/to/backup.zip path/to/new-directory --apply --pretty
 ```
 
 The compatibility wrapper still works:
@@ -260,13 +265,13 @@ path.
 
 - Inventory, lint, audit, and plan are read-only by default.
 - Adoption, closeout recording, and learning are preview-only unless `--apply` is explicit.
-- Adoption backs up managed metadata and skill source documents before writing; `--backup-scope full` snapshots the full project except VCS and dependency caches.
+- Adoption backs up managed metadata and skill entry documents before writing; `--backup-scope full` creates a bounded project-content snapshot excluding VCS, dependencies, virtual environments, and prior backups.
 - Existing skill sources are immutable to ArchMarshal; overlay manifests live under `.agent/skill-overlays/`.
 - Reserved control-file conflicts block the whole adoption before managed files are written.
 - Closeout uses unique append-only directories and verifies copied script hashes.
-- Environment variables and secrets are never captured in reproduction manifests.
+- Environment variables are not captured. Known inline-secret patterns are blocked, but user-selected text and script snapshots may still contain sensitive material and require review.
 - YAML inputs fail softly: bad workspace, registry, skill, or context module YAML becomes a structured diagnostic.
-- Workspace, registry, and skill manifest schemas are enforced during lint.
+- Workspace, registry, skill, memory-store, and memory-record schemas are enforced during lint.
 - Workspace save paths distinguish default skill roots from user-approved project file destinations.
 - Resolve is advisory and loads only matched skill/context metadata.
 - Closeout summarizes used skills and cleanup actions after project work.
@@ -319,6 +324,8 @@ path.
 - [x] Tests for clean examples, missing entry files, skill conflicts, and historical read policy
 - [x] Preview-first, backup-before-write adoption for existing projects
 - [x] Non-mutating skill metadata overlays
+- [x] Complete skill-package fingerprints and drift reporting
+- [x] Content-verified backup inspection and restore-to-new-directory flow
 - [x] Conflict blocking and exclusive file creation (no overwrite mode)
 - [x] Quick, standard, and reproducible append-only closeout records
 - [x] Hashed key-script snapshots and explicit reproducibility readiness gaps
@@ -329,6 +336,7 @@ path.
 ## Research Notes
 
 - [Agent Memory and Skill Organization Landscape](docs/agent-memory-landscape-2026.md): design direction for memory stores, memory records, retrieval budgets, and closeout-driven promotion.
+- [Product Readiness](docs/product-readiness.md): honest capability matrix, safety gates, and remaining work before a stable release.
 
 ## Development
 

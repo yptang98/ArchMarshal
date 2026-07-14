@@ -9,9 +9,18 @@ from typing import Any
 
 import yaml
 
+from .errors import require_workspace_root
 from .io import load_yaml_safe
-from .safety import create_backup, create_text_exclusive, files_for_full_backup
-
+from .safety import (
+    create_backup,
+    create_text_exclusive,
+    ensure_managed_path,
+    ensure_path_within,
+    files_below_no_links,
+    files_for_full_backup,
+    fingerprint_directory,
+    sha256_file,
+)
 
 SKILL_ROOT_CANDIDATES = (
     ".agents",
@@ -51,7 +60,7 @@ def plan_adoption(
     tags: list[str] | None = None,
     backup_scope: str = "managed",
 ) -> dict[str, Any]:
-    root_path = Path(root).resolve()
+    root_path = require_workspace_root(root)
     built = _build_adoption(root_path, tags or [], backup_scope)
     return _public_plan(built, applied=False)
 
@@ -63,7 +72,7 @@ def adopt_workspace(
     tags: list[str] | None = None,
     backup_scope: str = "managed",
 ) -> dict[str, Any]:
-    root_path = Path(root).resolve()
+    root_path = require_workspace_root(root)
     built = _build_adoption(root_path, tags or [], backup_scope)
     if not apply:
         return _public_plan(built, applied=False)
@@ -73,7 +82,7 @@ def adopt_workspace(
         return payload
     if not built["writes"]:
         payload = _public_plan(built, applied=True)
-        payload["mode"] = "already_managed"
+        payload["mode"] = "review_required" if built["review_required"] else "already_managed"
         payload["backup"] = None
         return payload
 
@@ -97,19 +106,28 @@ def adopt_workspace(
     )
 
     created: list[Path] = []
+    created_directories: list[Path] = []
     try:
         for relative in MANAGED_DIRECTORIES:
-            (root_path / relative).mkdir(parents=True, exist_ok=True)
+            directory = root_path / relative
+            if not directory.exists():
+                directory.mkdir(parents=True, exist_ok=False)
+                created_directories.append(directory)
         for target, content in built["writes"].items():
             create_text_exclusive(target, content)
             created.append(target)
     except BaseException:
         for target in reversed(created):
             target.unlink(missing_ok=True)
+        for directory in reversed(created_directories):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
         raise
 
     payload = _public_plan(built, applied=True)
-    payload["mode"] = "overlay_applied"
+    payload["mode"] = "overlay_synced" if built["configured"] else "overlay_applied"
     payload["backup"] = backup
     payload["created"] = [path.relative_to(root_path).as_posix() for path in created]
     payload["safety_guarantees"] = [
@@ -122,21 +140,24 @@ def adopt_workspace(
 
 
 def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str, Any]:
-    if not root.exists() or not root.is_dir():
-        raise ValueError(f"Workspace root is not a directory: {root}")
     if backup_scope not in {"managed", "full"}:
         raise ValueError("backup_scope must be 'managed' or 'full'")
 
     now = datetime.now(timezone.utc)
     timestamp = now.strftime("%Y%m%d-%H%M%S")
     workspace_file = root / ".agent" / "workspace.yaml"
+    ensure_managed_path(root, root / ".agent", purpose="ArchMarshal control directory")
     configured = _is_archmarshal_workspace(workspace_file)
+    overlay_enabled = _workspace_uses_overlays(workspace_file) if configured else True
     reserved_conflicts = [
         relative
         for relative in RESERVED_FILES[1:]
         if (root / relative).exists() and not configured
     ]
     skills = _discover_skills(root)
+    review_required = any(
+        skill["source_drift"] not in {"new", "unchanged"} for skill in skills
+    )
     normalized_tags = _normalize_tags(tags) or ["archmarshal"]
     writes: dict[Path, str] = {}
 
@@ -164,6 +185,7 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
         agents = root / "AGENTS.md"
         if not agents.exists():
             writes[agents] = _agents_markdown()
+    if overlay_enabled:
         for skill in skills:
             overlay = root / skill["overlay_manifest"]
             if not overlay.exists():
@@ -172,9 +194,7 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
                 )
 
     blocked = bool(reserved_conflicts)
-    if configured:
-        writes = {}
-    elif blocked:
+    if blocked:
         writes = {}
 
     if backup_scope == "full":
@@ -182,13 +202,18 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
     else:
         backup_files = _managed_backup_files(root, skills)
 
+    for target in writes:
+        ensure_managed_path(root, target, purpose="Adoption target")
+
     return {
         "root": root,
         "timestamp": timestamp,
         "configured": configured,
+        "overlay_enabled": overlay_enabled,
         "backup_scope": backup_scope,
         "tags": normalized_tags,
         "skills": skills,
+        "review_required": review_required,
         "writes": writes,
         "backup_files": backup_files,
         "conflicts": reserved_conflicts,
@@ -206,13 +231,25 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
         }
         for path in built["writes"]
     ]
+    operations.extend(
+        {
+            "action": "review_source_change",
+            "path": skill["overlay_manifest"],
+            "source": skill["source"],
+            "overwrite": False,
+        }
+        for skill in built["skills"]
+        if skill["source_drift"] not in {"new", "unchanged"}
+    )
     return {
         "tool": "archmarshal",
-        "stage": "adopt",
+        "stage": "sync" if built["configured"] else "adopt",
         "root": str(root),
         "mode": "applied" if applied else "propose_only",
         "configured": built["configured"],
+        "overlay_enabled": built["overlay_enabled"],
         "blocked": built["blocked"],
+        "review_required": built["review_required"],
         "backup_scope": built["backup_scope"],
         "project_tags": built["tags"],
         "discovered_skills": [
@@ -222,6 +259,7 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
                 "kind": skill["manifest"]["kind"],
                 "overlay_manifest": skill["overlay_manifest"],
                 "source_will_change": False,
+                "source_drift": skill["source_drift"],
             }
             for skill in built["skills"]
         ],
@@ -232,6 +270,11 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
             "Existing files are never overwritten, even with --apply.",
             "Existing skills stay in place; overlays provide routing metadata without changing SKILL.md.",
             "A verified backup is created before the first managed file is added.",
+            (
+                "Configured overlay projects are incrementally scanned for newly added source skills."
+                if built["configured"] and built["overlay_enabled"]
+                else "Native workspaces keep their declared skill layout and are not converted implicitly."
+            ),
         ],
     }
 
@@ -251,20 +294,44 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
 
     skills: list[dict[str, Any]] = []
     for skill_md in sorted(skill_docs):
+        ensure_path_within(root, skill_md, purpose="Discovered skill source")
         source_dir = skill_md.parent
         source = source_dir.relative_to(root).as_posix()
         frontmatter = _skill_frontmatter(skill_md)
-        name = _slug(str(frontmatter.get("name") or source_dir.name))
-        description = str(frontmatter.get("description") or _first_summary(skill_md) or name)
+        display_name = str(frontmatter.get("name") or source_dir.name).strip() or source_dir.name
+        name_slug = _slug(display_name)
+        description = str(
+            frontmatter.get("description") or _first_summary(skill_md) or display_name
+        )
         kind, scope, overlay_group = _classify_skill(source)
         identity_suffix = hashlib.sha256(source.encode("utf-8")).hexdigest()[:8]
-        skill_id = f"skill.{scope}.{name}-{identity_suffix}"
-        overlay_manifest = f".agent/skill-overlays/{overlay_group}/{name}-{identity_suffix}/manifest.yaml"
+        skill_id = f"skill.{scope}.{name_slug}-{identity_suffix}"
+        overlay_manifest = (
+            f".agent/skill-overlays/{overlay_group}/{name_slug}-{identity_suffix}/manifest.yaml"
+        )
         source_manifest = source_dir / "manifest.yaml"
-        tags = sorted(set([scope.replace("_", "-"), *[item for item in name.split("-") if item]]))
+        tags = sorted(
+            set(
+                [
+                    scope.replace("_", "-"),
+                    *[item for item in name_slug.split("-") if item],
+                ]
+            )
+        )
+        source_hash = sha256_file(skill_md)
+        package = fingerprint_directory(
+            source_dir,
+            purpose="Skill package",
+            entrypoint_only=source_dir.resolve() == root,
+        )
+        source_drift = _overlay_drift(
+            root / overlay_manifest,
+            entrypoint_hash=source_hash,
+            package_hash=package["sha256"],
+        )
         manifest: dict[str, Any] = {
             "id": skill_id,
-            "name": name,
+            "name": display_name,
             "kind": kind,
             "version": "0.1.0",
             "status": "active",
@@ -272,11 +339,17 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
             "scope": scope,
             "summary": description[:500],
             "tags": tags or ["project"],
-            "triggers": [name.replace("-", " ")],
-            "negative_triggers": [f"tasks unrelated to {name.replace('-', ' ')}"],
+            "triggers": [display_name.replace("-", " ")],
+            "negative_triggers": [
+                f"tasks unrelated to {display_name.replace('-', ' ')}"
+            ],
             "source": {
                 "skill_dir": source,
                 "skill_md": skill_md.relative_to(root).as_posix(),
+                "skill_sha256": source_hash,
+                "package_sha256": package["sha256"],
+                "package_file_count": package["file_count"],
+                "package_content_bytes": package["content_bytes"],
                 "original_manifest": (
                     source_manifest.relative_to(root).as_posix() if source_manifest.exists() else None
                 ),
@@ -306,6 +379,7 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
                 ),
                 "overlay_manifest": overlay_manifest,
                 "manifest": manifest,
+                "source_drift": source_drift,
             }
         )
     return skills
@@ -367,7 +441,7 @@ def _workspace_yaml(
     code_roots = [name for name in ("src", "app", "packages", "lib") if (root / name).exists()]
     data = {
         "workspace": {
-            "name": _slug(root.name),
+            "name": root.name,
             "version": "0.1.0",
             "description": "Project adopted through a non-destructive ArchMarshal overlay.",
             "created_on": created_on,
@@ -536,7 +610,11 @@ def _managed_backup_files(root: Path, skills: list[dict[str, Any]]) -> list[Path
             files.add(candidate)
     agent_root = root / ".agent"
     if agent_root.exists():
-        files.update(path for path in agent_root.rglob("*") if path.is_file())
+        files.update(
+            path
+            for path in files_below_no_links(agent_root, purpose="Managed metadata backup")
+            if path.is_file()
+        )
     for skill in skills:
         source_dir = root / skill["source"]
         for name in ("SKILL.md", "manifest.yaml"):
@@ -557,10 +635,65 @@ def _is_archmarshal_workspace(path: Path) -> bool:
     return isinstance(workspace, dict) and isinstance(paths, dict) and paths.get("agent_root") == ".agent"
 
 
+def _workspace_uses_overlays(path: Path) -> bool:
+    result = load_yaml_safe(path)
+    if result.error or not isinstance(result.data, dict):
+        return False
+    paths = result.data.get("paths")
+    if not isinstance(paths, dict):
+        return False
+    skill_paths = [
+        value
+        for key in (
+            "global_skills",
+            "functional_skills",
+            "common_project_skills",
+            "project_skills",
+            "generated_skills",
+        )
+        for value in (paths.get(key) or [])
+    ]
+    return any(
+        str(value).replace("\\", "/").startswith(".agent/skill-overlays/")
+        for value in skill_paths
+    )
+
+
+def _overlay_drift(path: Path, *, entrypoint_hash: str, package_hash: str) -> str:
+    if not path.exists():
+        return "new"
+    result = load_yaml_safe(path)
+    if result.error or not isinstance(result.data, dict):
+        return "metadata_invalid"
+    source = result.data.get("source")
+    if not isinstance(source, dict):
+        return "untracked"
+    recorded_package = source.get("package_sha256")
+    if recorded_package:
+        return "unchanged" if recorded_package == package_hash else "changed"
+    recorded_entrypoint = source.get("skill_sha256")
+    if not recorded_entrypoint:
+        return "untracked"
+    return "package_untracked" if recorded_entrypoint == entrypoint_hash else "changed"
+
+
 def _git_creation_date(root: Path) -> str | None:
     try:
+        roots = subprocess.run(
+            ["git", "-C", str(root), "rev-list", "--max-parents=0", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    root_commit = roots.stdout.splitlines()[0].strip() if roots.returncode == 0 and roots.stdout else ""
+    if not root_commit:
+        return None
+    try:
         result = subprocess.run(
-            ["git", "-C", str(root), "log", "--reverse", "--format=%aI", "-1"],
+            ["git", "-C", str(root), "show", "-s", "--format=%aI", root_commit],
             check=False,
             capture_output=True,
             text=True,
@@ -573,7 +706,15 @@ def _git_creation_date(root: Path) -> str | None:
 
 
 def _normalize_tags(tags: list[str]) -> list[str]:
-    return sorted({item for tag in tags if (item := _slug(tag))})
+    return sorted({item for tag in tags if (item := _human_label(tag))}, key=str.casefold)
+
+
+def _human_label(value: str) -> str:
+    cleaned = "-".join(value.strip().split())
+    cleaned = "".join(
+        char for char in cleaned if char.isalnum() or char in {"-", "_", "."}
+    )
+    return cleaned[:80]
 
 
 def _slug(value: str) -> str:

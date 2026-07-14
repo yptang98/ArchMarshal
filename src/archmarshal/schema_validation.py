@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
@@ -9,11 +10,12 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator
 
-
 SCHEMA_FILES = {
     "workspace": "workspace.schema.yaml",
     "artifact-registry": "artifact-registry.schema.yaml",
     "skill-manifest": "skill-manifest.schema.yaml",
+    "memory-stores": "memory-stores.schema.yaml",
+    "memory-records": "memory-records.schema.yaml",
 }
 
 
@@ -33,8 +35,28 @@ def validate_schema(data: object, schema_name: str) -> list[SchemaIssue]:
             message=error.message,
             suggestion=_suggestion_for_error(schema_name, error.validator),
         )
-        for error in sorted(validator.iter_errors(data), key=lambda item: list(item.absolute_path))
+        for error in sorted(
+            validator.iter_errors(_json_compatible(data)),
+            key=lambda item: list(item.absolute_path),
+        )
     ]
+
+
+def _json_compatible(value: object) -> object:
+    """Normalize YAML-native scalar types before JSON Schema validation.
+
+    PyYAML materializes ISO dates as ``datetime.date`` values even though the
+    corresponding JSON representation is a string.  Schema validation should
+    describe the serialized document contract, not an implementation detail of
+    the YAML parser.
+    """
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _json_compatible(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_compatible(item) for item in value]
+    return value
 
 
 @lru_cache(maxsize=None)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import platform
 import re
 import shutil
@@ -12,8 +13,8 @@ from typing import Any
 import yaml
 
 from .closeout import closeout_workspace
-from .safety import create_text_exclusive, sha256_file, unique_path
-
+from .errors import require_workspace_root
+from .safety import create_text_exclusive, ensure_managed_path, sha256_file, unique_path
 
 CLOSEOUT_LEVELS = ("quick", "standard", "reproducible")
 MAX_SNAPSHOT_BYTES = 20 * 1024 * 1024
@@ -30,25 +31,36 @@ def record_closeout(
     commands: list[str] | None = None,
     tags: list[str] | None = None,
     used_skills: list[str] | None = None,
-    shell: str = "powershell",
+    shell: str | None = None,
 ) -> dict[str, Any]:
-    root_path = Path(root).resolve()
+    root_path = require_workspace_root(root)
     if level not in CLOSEOUT_LEVELS:
         raise ValueError(f"level must be one of: {', '.join(CLOSEOUT_LEVELS)}")
+    shell = shell or ("powershell" if os.name == "nt" else "bash")
     if shell not in {"powershell", "bash"}:
         raise ValueError("shell must be 'powershell' or 'bash'")
     steps = [item.strip() for item in steps or [] if item.strip()]
     commands = [item.rstrip() for item in commands or [] if item.strip()]
     used_skills = [item.strip() for item in used_skills or [] if item.strip()]
-    normalized_tags = sorted({_slug(item) for item in tags or [] if item.strip()})
+    normalized_tags = sorted(
+        {_human_slug(item, fallback="") for item in tags or [] if item.strip()},
+        key=str.casefold,
+    )
     script_records, script_errors = _script_records(root_path, scripts or [])
-    command_errors = _command_errors(commands)
-    script_errors.extend(command_errors)
+    sensitive_errors = _sensitive_text_errors(
+        summary=summary,
+        steps=steps,
+        commands=commands,
+        tags=normalized_tags,
+        used_skills=used_skills,
+    )
+    script_errors.extend(sensitive_errors)
     now = datetime.now(timezone.utc)
     timestamp = now.strftime("%Y%m%d-%H%M%S")
-    topic = _slug(summary)[:48].strip("-") or "project-closeout"
+    topic = _human_slug(summary, fallback="project-closeout")[:48]
     base_dir = root_path / ".agent" / "history" / now.strftime("%Y/%m/%d")
     session_dir = unique_path(base_dir / f"{timestamp}-{topic}-{level}")
+    ensure_managed_path(root_path, session_dir, purpose="Closeout session directory")
     git = _git_snapshot(root_path)
     environment = _environment_snapshot(root_path)
     readiness_gaps = _readiness_gaps(level, summary, steps, script_records, commands)
@@ -68,7 +80,10 @@ def record_closeout(
         "reproducibility": {
             "ready": not readiness_gaps,
             "gaps": readiness_gaps,
-            "secrets_captured": False,
+            "execution_validated": False,
+            "environment_variables_captured": False,
+            "known_inline_secret_patterns_blocked": True,
+            "selected_script_content_may_be_sensitive": bool(script_records),
             "existing_files_modified": False,
         },
         "governance": {
@@ -106,24 +121,42 @@ def record_closeout(
         "mode": "propose_only",
         "level": level,
         "session_dir": session_dir.relative_to(root_path).as_posix(),
+        "recording_ready": not readiness_gaps,
         "reproducibility_ready": not readiness_gaps,
+        "reproduction_evidence_ready": not readiness_gaps,
         "reproducibility_gaps": readiness_gaps,
         "script_errors": script_errors,
         "operations": operations,
         "notes": [
             "Closeout writes only to a new date-organized session directory.",
             "No existing project or skill file is overwritten, moved, renamed, or deleted.",
-            "Environment variables and secrets are never captured.",
+            "Environment variables are not captured; known inline-secret patterns are blocked.",
+            "User-selected summaries, steps, and script snapshots may still contain sensitive content and must be reviewed.",
             "Generated run scripts are references and must be reviewed before execution.",
+            "Readiness means required evidence is present; commands were not executed or validated.",
         ],
     }
     if script_errors:
         payload["mode"] = "blocked"
         return payload
+    if apply and readiness_gaps:
+        payload["mode"] = "blocked"
+        payload["notes"].append(
+            "--apply was blocked because the requested recording level is missing required evidence."
+        )
+        return payload
     if not apply:
         return payload
 
     created: list[Path] = []
+    try:
+        session_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        payload["mode"] = "blocked"
+        payload["notes"].append(
+            "The session directory was claimed concurrently; rerun to receive a new path."
+        )
+        return payload
     try:
         for relative, content in files.items():
             target = session_dir / relative
@@ -142,6 +175,7 @@ def record_closeout(
     except BaseException:
         for target in reversed(created):
             target.unlink(missing_ok=True)
+        shutil.rmtree(session_dir, ignore_errors=True)
         raise
 
     payload["mode"] = "append_only_applied"
@@ -203,7 +237,8 @@ def _summary_markdown(session: dict[str, Any]) -> str:
             "## Safety",
             "",
             "This session is append-only. It did not overwrite or reorganize existing project",
-            "files or skills, and it intentionally captured no environment variables or secrets.",
+            "files or skills. It did not capture environment variables, blocked known inline-secret",
+            "patterns, and still requires review of user-selected text and script snapshots.",
             "",
         ]
     )
@@ -274,35 +309,55 @@ def _readiness_gaps(
     scripts: list[dict[str, Any]],
     commands: list[str],
 ) -> list[str]:
-    if level != "reproducible":
-        return []
     gaps: list[str] = []
     if not summary.strip():
-        gaps.append("A complete summary is required for reproducible closeout.")
-    if not steps:
+        gaps.append(f"A summary is required for {level} closeout.")
+    if level in {"standard", "reproducible"} and not steps:
         gaps.append("Record the ordered trajectory with at least one --step.")
-    if not scripts:
+    if level == "reproducible" and not scripts:
         gaps.append("Record and snapshot at least one key --script.")
-    if not commands:
+    if level == "reproducible" and not commands:
         gaps.append("Record at least one exact rerun --command.")
     return gaps
 
 
-def _command_errors(commands: list[str]) -> list[str]:
-    patterns = (
-        r"(?i)(?:--?(?:password|passwd|token|secret|api[-_]?key))\s*(?:=|\s)\s*\S+",
-        r"(?i)(?:password|passwd|token|secret|api[-_]?key)\s*=\s*[^\s$%]+",
+def _sensitive_text_errors(**fields: object) -> list[str]:
+    token_patterns = (
         r"https?://[^\s/:]+:[^\s/@]+@",
         r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b",
+        r"\bglpat-[A-Za-z0-9_-]{20,}\b",
+        r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b",
         r"\bsk-[A-Za-z0-9_-]{20,}\b",
+        r"\bAKIA[0-9A-Z]{16}\b",
+        r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b",
+    )
+    assignments = re.compile(
+        r"(?i)(?:(?:--?)(?:password|passwd|token|secret|api[-_]?key)\s*(?:=|\s)|"
+        r"(?:password|passwd|token|secret|api[-_]?key)\s*=)\s*([^\s]+)"
     )
     errors: list[str] = []
-    for index, command in enumerate(commands, start=1):
-        if any(re.search(pattern, command) for pattern in patterns):
-            errors.append(
-                f"Command {index} appears to contain an inline secret; use an environment-variable reference instead."
+    for field, raw_values in fields.items():
+        values = raw_values if isinstance(raw_values, list) else [raw_values]
+        for index, raw in enumerate(values, start=1):
+            value = str(raw or "")
+            has_token = any(re.search(pattern, value) for pattern in token_patterns)
+            has_assignment = any(
+                not _is_environment_reference(match.group(1))
+                for match in assignments.finditer(value)
             )
+            if has_token or has_assignment:
+                errors.append(
+                    f"{field} item {index} appears to contain an inline secret; use an environment-variable reference instead."
+                )
     return errors
+
+
+def _is_environment_reference(value: str) -> bool:
+    normalized = value.strip("\"'")
+    return (
+        normalized.startswith(("$", "%", "${", "$env:"))
+        or normalized.endswith("%") and normalized.startswith("%")
+    )
 
 
 def _git_snapshot(root: Path) -> dict[str, Any]:
@@ -345,8 +400,9 @@ def _environment_snapshot(root: Path) -> dict[str, Any]:
     }
 
 
-def _slug(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-") or "project"
+def _human_slug(value: str, *, fallback: str) -> str:
+    slug = re.sub(r"[^\w]+", "-", value.strip().casefold(), flags=re.UNICODE).strip("-_")
+    return slug or fallback
 
 
 __all__ = ["CLOSEOUT_LEVELS", "record_closeout"]

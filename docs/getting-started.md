@@ -1,17 +1,12 @@
 # Getting Started
 
-Use ArchMarshal by installing it into a Codex session. After that, type a
-built-in lifecycle word and continue with normal project instructions.
+Use ArchMarshal as a Python CLI that Codex or a human invokes in the project.
 
 ## 1. Install
 
-Paste this into Codex once:
-
-```text
-Codex, install ArchMarshal for this project:
-https://github.com/yptang98/ArchMarshal
-
-After installing, confirm it is available and show me the shortest way to start.
+```bash
+python -m pip install "git+https://github.com/yptang98/ArchMarshal.git"
+archmarshal --help
 ```
 
 ## 2. Start
@@ -83,8 +78,8 @@ archmarshal learn . --include-root ../another-project --apply --pretty
 Summaries are only indexes. Keep the original reports, plans, checkpoints, and
 notes preserved.
 
-Recording depth is automatic. Routine projects should stay light; novel projects
-can produce deeper memory, context, or skill candidates.
+The read-only closeout recommends a depth. Writing still requires the user to
+choose quick, standard, or reproducible evidence explicitly.
 
 See [Safe Adoption And Lifecycle Recording](safe-lifecycle.md) for backup,
 conflict, overlay, and no-overwrite guarantees.

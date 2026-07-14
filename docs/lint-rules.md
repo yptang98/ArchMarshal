@@ -26,6 +26,10 @@ skill.command_dependency_missing
 skill.memory_side_effect_undeclared
 skill.overlay_source_outside_root
 skill.overlay_source_missing
+skill.overlay_source_changed
+skill.overlay_source_untracked
+skill.overlay_package_untracked
+skill.overlay_source_unsafe
 skill.duplicate_name
 skill.overlapping_trigger
 ```
@@ -50,6 +54,8 @@ project.missing_agent_index
 project.agents_md_too_large
 project.agents_md_contains_history
 project.unregistered_agent_file
+project.workspace_path_outside_root
+project.artifact_path_outside_root
 project.report_read_policy_not_explicit
 project.registry_yaml_invalid
 project.registry_schema_invalid
@@ -68,11 +74,15 @@ project.artifact_path_missing
 ```text
 memory.store_unregistered
 memory.store_yaml_invalid
+memory.store_schema_invalid
 memory.store_missing_required_field
 memory.store_path_missing
 memory.no_forget_policy
 memory.default_blob_too_large
 memory.record_yaml_invalid
+memory.record_schema_invalid
+memory.store_path_outside_root
+memory.record_content_outside_root
 memory.record_missing_required_field
 memory.record_unknown_store
 memory.record_content_missing
@@ -88,8 +98,9 @@ memory.conflicting_records
 file could not be parsed as YAML. ArchMarshal reports these as structured
 diagnostics instead of throwing a traceback, then continues scanning what it can.
 
-`project.workspace_schema_invalid`, `project.registry_schema_invalid`, and
-`skill.manifest_schema_invalid` mean the YAML parsed successfully but failed the
+`project.workspace_schema_invalid`, `project.registry_schema_invalid`,
+`skill.manifest_schema_invalid`, `memory.store_schema_invalid`, and
+`memory.record_schema_invalid` mean the YAML parsed successfully but failed the
 corresponding JSON Schema in `schemas/`. These diagnostics include a JSON path
 such as `.agent/workspace.yaml#$.workspace.version`, the schema error message,
 and a targeted suggestion.

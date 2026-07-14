@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -11,17 +12,23 @@ from .audit import audit_workspace
 from .catalog import catalog_projects
 from .checkpoint import checkpoint_workspace
 from .closeout import closeout_workspace
-from .diagnostics import Diagnostic, severity_counts
+from .diagnostics import severity_counts
+from .errors import ArchMarshalError, require_workspace_root
 from .inventory import collect_inventory
 from .learning import learn_from_projects
-from .lint import lint_workspace
 from .lifecycle import end_workspace, start_workspace
+from .lint import lint_workspace
 from .planner import plan_workspace
 from .resolver import resolve_workspace
+from .safety import restore_backup, verify_backup
 from .session import CLOSEOUT_LEVELS, record_closeout
 
 
 def main(argv: list[str] | None = None) -> int:
+    return _guard_cli(_main_impl, argv)
+
+
+def _main_impl(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="archmarshal")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -60,6 +67,18 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="Additional ArchMarshal project to aggregate. Repeat as needed.",
     )
+    verify_backup_parser = subparsers.add_parser(
+        "backup-verify", help="Verify every archived file against an ArchMarshal backup manifest."
+    )
+    verify_backup_parser.add_argument("archive", help="Backup zip to verify.")
+    verify_backup_parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+    restore_backup_parser = subparsers.add_parser(
+        "backup-restore", help="Restore a verified backup into a new, non-existing directory."
+    )
+    restore_backup_parser.add_argument("archive", help="Backup zip to restore.")
+    restore_backup_parser.add_argument("destination", help="New directory to create.")
+    restore_backup_parser.add_argument("--apply", action="store_true", help="Create the destination.")
+    restore_backup_parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
     end_parser = _add_root_command(subparsers, "end", "Close out ArchMarshal project governance.")
     end_parser.add_argument(
         "--used-skill",
@@ -134,7 +153,17 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
-    root = Path(args.root)
+    if args.command == "backup-verify":
+        verification = verify_backup(args.archive)
+        verification.update({"tool": "archmarshal", "stage": "backup_verify", "mode": "verified"})
+        verification.pop("manifest", None)
+        _print_json(verification, args.pretty)
+        return 0
+    if args.command == "backup-restore":
+        payload = restore_backup(args.archive, args.destination, apply=args.apply)
+        _print_json(payload, args.pretty)
+        return _payload_exit_code(payload)
+    root = require_workspace_root(args.root)
 
     if args.command == "inventory":
         _print_json(collect_inventory(root).to_dict(), args.pretty)
@@ -160,16 +189,14 @@ def main(argv: list[str] | None = None) -> int:
         _print_json(plan_workspace(root), args.pretty)
         return 0
     if args.command == "adopt":
-        _print_json(
-            adopt_workspace(
-                root,
-                apply=args.apply,
-                tags=args.tag,
-                backup_scope=args.backup_scope,
-            ),
-            args.pretty,
+        payload = adopt_workspace(
+            root,
+            apply=args.apply,
+            tags=args.tag,
+            backup_scope=args.backup_scope,
         )
-        return 0
+        _print_json(payload, args.pretty)
+        return _payload_exit_code(payload)
     if args.command == "start":
         if args.apply:
             adoption = adopt_workspace(
@@ -180,8 +207,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             payload = start_workspace(root)
             payload["adoption"] = adoption
-            payload["mode"] = "overlay_applied" if adoption["mode"] == "overlay_applied" else payload["mode"]
+            if adoption["mode"] in {"overlay_applied", "overlay_synced", "review_required"}:
+                payload["mode"] = adoption["mode"]
             _print_json(payload, args.pretty)
+            return _payload_exit_code(adoption)
         else:
             _print_json(start_workspace(root), args.pretty)
         return 0
@@ -199,21 +228,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "end":
         if args.level:
-            _print_json(
-                record_closeout(
-                    root,
-                    level=args.level,
-                    apply=args.apply,
-                    summary=args.summary,
-                    steps=args.step,
-                    scripts=args.script,
-                    commands=args.command_line,
-                    tags=args.tag,
-                    used_skills=args.used_skill,
-                    shell=args.shell,
-                ),
-                args.pretty,
+            payload = record_closeout(
+                root,
+                level=args.level,
+                apply=args.apply,
+                summary=args.summary,
+                steps=args.step,
+                scripts=args.script,
+                commands=args.command_line,
+                tags=args.tag,
+                used_skills=args.used_skill,
+                shell=args.shell,
             )
+            _print_json(payload, args.pretty)
+            return _payload_exit_code(payload)
         else:
             if args.apply:
                 parser.error("--apply for end requires --level quick, standard, or reproducible")
@@ -246,12 +274,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def start_main(argv: list[str] | None = None) -> int:
+    return _guard_cli(_start_main_impl, argv)
+
+
+def _start_main_impl(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="archmarshal-start")
     parser.add_argument("root", nargs="?", default=".", help="Workspace root to inspect.")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
     _add_adoption_arguments(parser)
     args = parser.parse_args(argv)
-    root = Path(args.root)
+    root = require_workspace_root(args.root)
     payload = start_workspace(root)
     if args.apply:
         payload["adoption"] = adopt_workspace(
@@ -261,11 +293,21 @@ def start_main(argv: list[str] | None = None) -> int:
             backup_scope=args.backup_scope,
         )
         payload = start_workspace(root) | {"adoption": payload["adoption"]}
+        if payload["adoption"]["mode"] in {
+            "overlay_applied",
+            "overlay_synced",
+            "review_required",
+        }:
+            payload["mode"] = payload["adoption"]["mode"]
     _print_json(payload, args.pretty)
-    return 0
+    return _payload_exit_code(payload.get("adoption") or payload)
 
 
 def end_main(argv: list[str] | None = None) -> int:
+    return _guard_cli(_end_main_impl, argv)
+
+
+def _end_main_impl(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="archmarshal-end")
     parser.add_argument("root", nargs="?", default=".", help="Workspace root to inspect.")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
@@ -279,7 +321,7 @@ def end_main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.level:
         payload = record_closeout(
-            Path(args.root),
+            require_workspace_root(args.root),
             level=args.level,
             apply=args.apply,
             summary=args.summary,
@@ -293,9 +335,9 @@ def end_main(argv: list[str] | None = None) -> int:
     else:
         if args.apply:
             parser.error("--apply requires --level quick, standard, or reproducible")
-        payload = end_workspace(Path(args.root), args.used_skill)
+        payload = end_workspace(require_workspace_root(args.root), args.used_skill)
     _print_json(payload, args.pretty)
-    return 0
+    return _payload_exit_code(payload)
 
 
 def _add_root_command(subparsers: Any, name: str, help_text: str) -> argparse.ArgumentParser:
@@ -337,13 +379,45 @@ def _add_recording_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--shell",
         choices=["powershell", "bash"],
-        default="powershell",
-        help="Reference run-script shell for reproducible closeout.",
+        default=None,
+        help="Reference run-script shell; defaults to PowerShell on Windows and Bash elsewhere.",
     )
 
 
-def _print_json(payload: Any, pretty: bool) -> None:
-    print(json.dumps(payload, default=_json_default, indent=2 if pretty else None, sort_keys=True))
+def _payload_exit_code(payload: dict[str, Any]) -> int:
+    return 2 if payload.get("mode") == "blocked" or payload.get("blocked") is True else 0
+
+
+def _guard_cli(function: Any, argv: list[str] | None) -> int:
+    tokens = argv if argv is not None else sys.argv[1:]
+    pretty = "--pretty" in tokens
+    try:
+        return int(function(argv))
+    except ArchMarshalError as exc:
+        _print_json(
+            {"tool": "archmarshal", "mode": "error", "error": exc.to_dict()},
+            pretty,
+            stream=sys.stderr,
+        )
+        return 2
+    except (OSError, ValueError) as exc:
+        _print_json(
+            {
+                "tool": "archmarshal",
+                "mode": "error",
+                "error": {"code": "operation_failed", "message": str(exc)},
+            },
+            pretty,
+            stream=sys.stderr,
+        )
+        return 2
+
+
+def _print_json(payload: Any, pretty: bool, *, stream: Any = None) -> None:
+    print(
+        json.dumps(payload, default=_json_default, indent=2 if pretty else None, sort_keys=True),
+        file=stream,
+    )
 
 
 def _json_default(value: Any) -> str:
