@@ -689,6 +689,26 @@ def _lint_skills(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
                 )
             )
             continue
+        if skill.get("_source_error"):
+            diagnostics.append(
+                Diagnostic(
+                    "skill.overlay_source_outside_root",
+                    "error",
+                    str(skill["_source_error"]),
+                    manifest_path,
+                    "Keep overlay sources inside the project root; external sources require a separately governed project.",
+                )
+            )
+        if isinstance(skill.get("source"), dict) and not skill.get("_has_skill_md"):
+            diagnostics.append(
+                Diagnostic(
+                    "skill.overlay_source_missing",
+                    "error",
+                    "Skill overlay source does not contain the declared SKILL.md.",
+                    manifest_path,
+                    "Fix the overlay source pointer without moving or modifying the original skill.",
+                )
+            )
         if skill.get("_load_error"):
             diagnostics.append(
                 Diagnostic(

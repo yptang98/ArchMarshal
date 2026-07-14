@@ -46,6 +46,8 @@ ACTION_BY_RULE = {
     "skill.declared_dependency_file_missing": "Add the missing dependency file under the skill directory.",
     "skill.command_dependency_missing": "Install the declared command dependency or run the skill in a prepared environment.",
     "skill.memory_side_effect_undeclared": "Declare memory_effects for skills that read, write, or propose durable memory.",
+    "skill.overlay_source_outside_root": "Point the overlay at a skill inside the governed project root.",
+    "skill.overlay_source_missing": "Fix the overlay pointer or restore the original skill; do not rewrite the source skill automatically.",
     "skill.missing_tags": "Add tags to the skill manifest.",
     "skill.missing_triggers": "Add explicit triggers to the skill manifest.",
     "skill.missing_negative_triggers": "Add negative_triggers to reduce skill conflicts.",

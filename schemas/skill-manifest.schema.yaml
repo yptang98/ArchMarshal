@@ -138,3 +138,26 @@ properties:
         type: array
         items:
           type: string
+  source:
+    type: object
+    additionalProperties: false
+    required:
+      - skill_dir
+      - skill_md
+      - managed
+      - mutation_policy
+    properties:
+      skill_dir:
+        type: string
+      skill_md:
+        type: string
+      original_manifest:
+        type:
+          - string
+          - "null"
+      managed:
+        type: boolean
+      mutation_policy:
+        enum:
+          - never
+          - propose_only

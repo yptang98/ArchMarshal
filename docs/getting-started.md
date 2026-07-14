@@ -16,7 +16,23 @@ After installing, confirm it is available and show me the shortest way to start.
 
 ## 2. Start
 
-When the project starts, type:
+For an existing project, preview the management overlay:
+
+```text
+archmarshal adopt . --tag research --pretty
+```
+
+After reviewing the file list and conflicts, apply it:
+
+```text
+archmarshal-start . --apply --tag research --pretty
+```
+
+This creates a verified backup and then adds only missing control-plane files.
+Existing project files, `SKILL.md`, and source skill manifests are not changed.
+Skill routing metadata lives in `.agent/skill-overlays/`.
+
+For a project that is already managed, type:
 
 ```text
 archmarshal-start
@@ -39,12 +55,28 @@ checkpoints, notes, and history stay preserved.
 
 ## 3. End
 
+Choose one of three explicit depths:
+
 ```text
-archmarshal-end
+archmarshal-end . --level quick --summary "Routine phase complete" --apply
+
+archmarshal-end . --level standard --summary "Release checked" \
+  --step "Run tests" --script scripts/check.py --apply
+
+archmarshal-end . --level reproducible --summary "Benchmark reproduced" \
+  --step "Prepare inputs" --step "Run benchmark" \
+  --script scripts/benchmark.py --command "python scripts/benchmark.py" --apply
 ```
 
-ArchMarshal closes the project or phase with a preservation and reproducibility
-summary.
+The commands preview unless `--apply` is present. Applied records go into a new
+date-organized history directory. Reproducible mode snapshots key scripts and
+does not claim readiness while required evidence is missing.
+
+After repeated sessions, create a review-only learning pack:
+
+```text
+archmarshal learn . --include-root ../another-project --apply --pretty
+```
 
 ## Rule
 
@@ -53,3 +85,6 @@ notes preserved.
 
 Recording depth is automatic. Routine projects should stay light; novel projects
 can produce deeper memory, context, or skill candidates.
+
+See [Safe Adoption And Lifecycle Recording](safe-lifecycle.md) for backup,
+conflict, overlay, and no-overwrite guarantees.

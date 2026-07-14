@@ -28,16 +28,27 @@ This document maps the core product needs to concrete ArchMarshal behavior.
 | Context compression should preserve key project state. | `archmarshal checkpoint` creates a read-only candidate checkpoint with summary, decisions, key files, next steps, and memory-record suggestions. | `src/archmarshal/checkpoint.py`, `tests/test_archmarshal.py` |
 | Project completion should produce skill/memory cleanup. | `archmarshal closeout --used-skill` summarizes used skills, preservation needs, reproduction checks, missing skill references, diagnostics, and propose-only cleanup actions. | `src/archmarshal/closeout.py`, `tests/test_archmarshal.py` |
 | Recording depth should be automatic and novelty-aware. | Checkpoint and closeout emit `recording_policy.mode: auto`; routine skill reuse only records important changes, while novel work can suggest memory/context/skill promotion. | `recording_policy.mode`, `recording_policy.level`, `src/archmarshal/checkpoint.py`, `src/archmarshal/closeout.py` |
+| Existing projects and skills must not be damaged during adoption. | Adoption is preview-first, blocks on reserved-file conflicts, exclusively creates new paths, verifies a backup first, and represents source skills through non-mutating overlays. | `src/archmarshal/adoption.py`, `src/archmarshal/safety.py`, `test_adoption_preview_is_read_only_and_apply_uses_skill_overlays` |
+| Existing skills need dynamic metadata without in-place rewrites. | Overlay manifests under `.agent/skill-overlays/` point to human-owned source directories with `managed: false` and `mutation_policy: never`; inventory resolves source-local material through the overlay. | `source` in `schemas/skill-manifest.schema.yaml`, `src/archmarshal/inventory.py` |
+| Projects should be human-findable by date and tag. | Workspace metadata records creation/adoption dates and tags; closeout records use `.agent/history/YYYY/MM/DD/<time>-<topic>-<level>/`. | `src/archmarshal/adoption.py`, `src/archmarshal/session.py` |
+| Users need a lightweight view across projects. | `catalog` sorts project control planes by recorded creation date and supports AND-filtered tags without loading raw history. | `src/archmarshal/catalog.py`, `test_catalog_sorts_and_filters_projects_by_date_and_tags` |
+| Project closeout needs three evidence levels. | `quick` records outcome, `standard` adds ordered steps and key-script hashes, and `reproducible` adds environment/dependency fingerprints, script snapshots, exact commands, and a reference run script. | `archmarshal end --level`, `src/archmarshal/session.py` |
+| Reproducible claims must be honest. | Reproducible closeout reports explicit gaps until summary, steps, scripts, and commands are present; copied script hashes are verified. | `reproducibility_ready`, `test_reproducible_closeout_reports_missing_evidence` |
+| Cross-project learning must not bloat or silently mutate the global layer. | `learn` aggregates only compact session manifests, caps usage/preference lists, and writes review-only candidates without raw history or global configuration changes. | `src/archmarshal/learning.py`, `test_learning_creates_review_only_candidates_from_repeated_sessions` |
 
 ## Current Product Boundary
 
 ArchMarshal is not yet a runtime dynamic loader. It is a governance control plane that makes workspace state inspectable and safe to improve.
 
-The intended adoption path is:
+The safe adoption path is:
 
-1. Add workspace mapping and registry.
-2. Run inventory to see actual skill and artifact state.
-3. Run lint to find structural risks.
-4. Run audit to summarize why the risks matter.
-5. Run plan to produce non-destructive cleanup proposals.
-6. Add apply only after review, diff preview, and archive-first behavior are stable.
+1. Preview `adopt` and inspect every proposed path and conflict.
+2. Choose managed or full backup scope.
+3. Apply only missing control-plane files; source skills remain unchanged.
+4. Run inventory/lint/audit/plan against the overlay.
+5. Use append-only checkpoints and one of the three closeout levels.
+6. Aggregate compact session evidence into review-only skill/preference candidates.
+
+ArchMarshal still has no general mutation engine. Apply-capable commands are
+limited to exclusive creation of backups, overlays, session records, and
+candidate packs.

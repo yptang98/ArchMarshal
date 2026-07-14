@@ -4,15 +4,22 @@ import json
 import shutil
 from pathlib import Path
 
+import yaml
+
 from archmarshal.audit import audit_workspace
+from archmarshal.adoption import adopt_workspace, plan_adoption
 from archmarshal.checkpoint import checkpoint_workspace
+from archmarshal.catalog import catalog_projects
 from archmarshal.cli import end_main, main, start_main
 from archmarshal.closeout import closeout_workspace
 from archmarshal.inventory import collect_inventory
+from archmarshal.learning import learn_from_projects
 from archmarshal.lifecycle import end_workspace, start_workspace
 from archmarshal.lint import lint_workspace
 from archmarshal.planner import plan_workspace
 from archmarshal.resolver import resolve_workspace
+from archmarshal.safety import sha256_file
+from archmarshal.session import record_closeout
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -558,6 +565,17 @@ def test_start_workspace_returns_codex_contract(tmp_path: Path) -> None:
     assert any("checkpoint" in item for item in result["codex_contract"])
 
 
+def test_start_workspace_previews_safe_adoption_for_unmanaged_project(tmp_path: Path) -> None:
+    root = tmp_path / "unmanaged"
+    root.mkdir()
+
+    result = start_workspace(root)
+
+    assert result["project_ready"] is False
+    assert result["adoption_preview"]["mode"] == "propose_only"
+    assert not (root / ".agent").exists()
+
+
 def test_end_workspace_wraps_closeout(tmp_path: Path) -> None:
     root = copy_example(tmp_path, "monorepo-project")
 
@@ -644,3 +662,191 @@ def test_cli_lint_exit_codes(tmp_path: Path, capsys) -> None:
     output = capsys.readouterr().out.strip().splitlines()[-1]
     payload = json.loads(output)
     assert payload["summary"]["error"] >= 1
+
+
+def test_adoption_preview_is_read_only_and_apply_uses_skill_overlays(tmp_path: Path) -> None:
+    root = tmp_path / "legacy-project"
+    skill_dir = root / ".codex" / "skills" / "release-helper"
+    skill_dir.mkdir(parents=True)
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(
+        "---\nname: release-helper\ndescription: Prepare a safe release.\n---\n\n# Release helper\n",
+        encoding="utf-8",
+    )
+    source_hash = sha256_file(skill_md)
+    before = sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
+
+    preview = plan_adoption(root, tags=["release", "python"])
+
+    after_preview = sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
+    assert before == after_preview
+    assert preview["mode"] == "propose_only"
+    assert preview["discovered_skills"][0]["source_will_change"] is False
+
+    applied = adopt_workspace(root, apply=True, tags=["release", "python"])
+
+    assert applied["mode"] == "overlay_applied"
+    assert applied["backup"]["verified"] is True
+    assert sha256_file(skill_md) == source_hash
+    assert not (skill_dir / "manifest.yaml").exists()
+    overlay = root / applied["discovered_skills"][0]["overlay_manifest"]
+    assert overlay.exists()
+    inventory = collect_inventory(root)
+    assert inventory.skills[0]["_skill_dir"] == ".codex/skills/release-helper"
+    assert inventory.workspace["management_mode"] == "overlay"
+    resolved = resolve_workspace(root, "release helper")
+    assert resolved["suggested_skills"][0]["path"] == ".codex/skills/release-helper"
+    assert resolved["suggested_skills"][0]["source_managed"] is False
+    assert lint_workspace(root) == []
+
+
+def test_adoption_never_overwrites_conflicting_control_files(tmp_path: Path) -> None:
+    root = tmp_path / "conflicted-project"
+    workspace = root / ".agent" / "workspace.yaml"
+    workspace.parent.mkdir(parents=True)
+    workspace.write_text("owned_by: another-tool\n", encoding="utf-8")
+    original = workspace.read_text(encoding="utf-8")
+
+    result = adopt_workspace(root, apply=True)
+
+    assert result["mode"] == "blocked"
+    assert ".agent/workspace.yaml" in result["conflicts"]
+    assert workspace.read_text(encoding="utf-8") == original
+    assert not (root / ".agent" / "INDEX.md").exists()
+
+
+def test_skill_overlay_cannot_escape_project_root(tmp_path: Path) -> None:
+    root = tmp_path / "overlay-project"
+    skill_dir = root / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Demo\n", encoding="utf-8")
+    result = adopt_workspace(root, apply=True)
+    overlay = root / result["discovered_skills"][0]["overlay_manifest"]
+    payload = yaml.safe_load(overlay.read_text(encoding="utf-8"))
+    payload["source"]["skill_dir"] = "../../outside"
+    overlay.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    assert "skill.overlay_source_outside_root" in rules(root)
+
+
+def test_reproducible_closeout_is_append_only_and_snapshots_scripts(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    script = root / "run_demo.py"
+    script.write_text("print('demo')\n", encoding="utf-8")
+    source_hash = sha256_file(script)
+
+    preview = record_closeout(
+        root,
+        level="reproducible",
+        summary="Validated the release flow.",
+        steps=["Run the validation script.", "Review the output."],
+        scripts=["run_demo.py"],
+        commands=["python run_demo.py"],
+        tags=["release"],
+        used_skills=["skill.functional.doc-summary"],
+    )
+
+    assert preview["mode"] == "propose_only"
+    assert preview["reproducibility_ready"] is True
+    assert not (root / preview["session_dir"]).exists()
+
+    applied = record_closeout(
+        root,
+        level="reproducible",
+        apply=True,
+        summary="Validated the release flow.",
+        steps=["Run the validation script.", "Review the output."],
+        scripts=["run_demo.py"],
+        commands=["python run_demo.py"],
+        tags=["release"],
+        used_skills=["skill.functional.doc-summary"],
+    )
+
+    session_dir = root / applied["session_dir"]
+    assert applied["mode"] == "append_only_applied"
+    assert (session_dir / "SUMMARY.md").exists()
+    assert (session_dir / "STEPS.md").exists()
+    assert (session_dir / "reproduction.yaml").exists()
+    assert (session_dir / "run.ps1").exists()
+    snapshots = list((session_dir / "scripts").iterdir())
+    assert len(snapshots) == 1
+    assert sha256_file(snapshots[0]) == source_hash
+    assert sha256_file(script) == source_hash
+
+
+def test_reproducible_closeout_reports_missing_evidence(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+
+    result = record_closeout(root, level="reproducible")
+
+    assert result["reproducibility_ready"] is False
+    assert len(result["reproducibility_gaps"]) == 4
+
+
+def test_reproducible_closeout_blocks_inline_secrets(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    script = root / "run_demo.py"
+    script.write_text("print('demo')\n", encoding="utf-8")
+
+    result = record_closeout(
+        root,
+        level="reproducible",
+        apply=True,
+        summary="Sensitive command test.",
+        steps=["Run demo."],
+        scripts=["run_demo.py"],
+        commands=["python run_demo.py --api-key sk-this-should-never-be-recorded"],
+    )
+
+    assert result["mode"] == "blocked"
+    assert "inline secret" in result["script_errors"][0]
+    assert not (root / result["session_dir"]).exists()
+
+
+def test_learning_creates_review_only_candidates_from_repeated_sessions(tmp_path: Path) -> None:
+    root = copy_example(tmp_path, "simple-project")
+    for index in range(2):
+        record_closeout(
+            root,
+            level="standard",
+            apply=True,
+            summary=f"Documentation pass {index}",
+            steps=["Summarize documentation."],
+            scripts=["src/README.md"],
+            tags=["documentation"],
+            used_skills=["skill.functional.doc-summary"],
+        )
+
+    result = learn_from_projects([root], apply=True)
+
+    assert result["mode"] == "candidate_pack_created"
+    assert result["common_skill_candidates"][0]["id"] == "skill.functional.doc-summary"
+    assert result["common_skill_candidates"][0]["promotion_policy"] == "human_review_required"
+    assert result["preference_candidates"][0]["value"] == "documentation"
+    candidate_pack = root / result["created"]
+    payload = yaml.safe_load(candidate_pack.read_text(encoding="utf-8"))
+    assert payload["limits"]["automatic_global_skill_mutation"] is False
+    assert payload["limits"]["raw_history_included"] is False
+
+
+def test_catalog_sorts_and_filters_projects_by_date_and_tags(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    adopt_workspace(first, apply=True, tags=["vision", "python"])
+    adopt_workspace(second, apply=True, tags=["nlp", "python"])
+    first_workspace = first / ".agent" / "workspace.yaml"
+    second_workspace = second / ".agent" / "workspace.yaml"
+    first_payload = yaml.safe_load(first_workspace.read_text(encoding="utf-8"))
+    second_payload = yaml.safe_load(second_workspace.read_text(encoding="utf-8"))
+    first_payload["workspace"]["created_on"] = "2026-01-01"
+    second_payload["workspace"]["created_on"] = "2026-02-01"
+    first_workspace.write_text(yaml.safe_dump(first_payload, sort_keys=False), encoding="utf-8")
+    second_workspace.write_text(yaml.safe_dump(second_payload, sort_keys=False), encoding="utf-8")
+
+    result = catalog_projects([first, second], tags=["python"])
+    filtered = catalog_projects([first, second], tags=["vision"])
+
+    assert [item["name"] for item in result["projects"]] == ["second", "first"]
+    assert [item["name"] for item in filtered["projects"]] == ["first"]

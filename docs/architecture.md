@@ -68,6 +68,27 @@ A project workspace contains source code, configuration, documentation, project 
 
 The path mapping allows projects to keep their own structure while still being inspectable by tooling.
 
+### Adoption Overlay
+
+Existing projects use an overlay rather than a rewrite. ArchMarshal discovers
+skill sources in common project-local roots and writes generated metadata under
+`.agent/skill-overlays/<kind>/`. Each overlay points at the original skill
+directory with `managed: false` and `mutation_policy: never`. Inventory resolves
+local scripts and references against the source directory while routing uses the
+overlay's tags and triggers.
+
+This splits the system into two ownership domains:
+
+```text
+Human-owned source              ArchMarshal-owned control plane
+project files                   workspace/index/registry
+SKILL.md                        skill overlay metadata
+source skill manifest           session and learning records
+```
+
+There is no automatic merge between the domains. A reserved-file collision is a
+hard stop.
+
 Workspace, registry, and skill manifest YAML files are parsed fail-soft. Invalid
 YAML becomes a structured lint diagnostic, and valid YAML is checked against the
 packaged JSON Schemas before downstream rules run.
@@ -143,6 +164,11 @@ ArchMarshal operations should mature in this order:
 5. `resolve`: advise which skills and context modules fit a task.
 6. `checkpoint`: preserve compact state after context compression as a read-only candidate record.
 7. `closeout`: summarize used skills, preservation needs, and reproduction evidence after project work.
-8. `apply`: execute confirmed, non-destructive changes.
+8. `adopt --apply`: after preview and verified backup, create only missing management-overlay files.
+9. `end --level ... --apply`: append a new quick, standard, or reproducible session record.
+10. `learn --apply`: append a bounded, review-only learning candidate pack.
 
-The current CLI implements read-only inventory, lint, audit, plan, resolve, checkpoint, and closeout. `apply` remains intentionally unsupported.
+Mutation is capability-specific rather than a general `apply` engine. No command
+can overwrite, move, rename, delete, or force-update existing project and skill
+files. Promotion to shared skills or user preferences remains a human-reviewed
+operation.

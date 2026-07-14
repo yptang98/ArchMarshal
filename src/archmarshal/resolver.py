@@ -65,11 +65,18 @@ def _match_skills(skills: list[dict[str, Any]], task_text: str) -> list[dict[str
                 "scope": skill.get("scope"),
                 "score": score,
                 "path": skill.get("_skill_dir"),
+                "metadata_path": skill.get("_overlay_manifest_path") or skill.get("_manifest_path"),
+                "source_managed": _source_managed(skill),
                 "trigger_matches": trigger_matches,
                 "tag_matches": tag_matches,
             }
         )
     return sorted(matches, key=lambda item: (-item["score"], str(item["id"])))
+
+
+def _source_managed(skill: dict[str, Any]) -> bool:
+    source = skill.get("source")
+    return bool(source.get("managed", True)) if isinstance(source, dict) else True
 
 
 def _match_context_modules(modules: list[dict[str, Any]], task_text: str) -> list[dict[str, Any]]:

@@ -24,6 +24,8 @@ skill.dependency_file_outside_skill_root
 skill.declared_dependency_file_missing
 skill.command_dependency_missing
 skill.memory_side_effect_undeclared
+skill.overlay_source_outside_root
+skill.overlay_source_missing
 skill.duplicate_name
 skill.overlapping_trigger
 ```

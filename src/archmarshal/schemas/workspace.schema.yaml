@@ -22,6 +22,19 @@ properties:
         pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
       description:
         type: string
+      created_on:
+        type: string
+      adopted_on:
+        type: string
+      tags:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+      management_mode:
+        enum:
+          - overlay
+          - native
   save_paths:
     type: object
     additionalProperties: false

@@ -13,7 +13,7 @@
   <a href="https://github.com/yptang98/ArchMarshal/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/yptang98/ArchMarshal/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-teal">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
-  <img alt="Status" src="https://img.shields.io/badge/status-governance%20prototype-orange">
+  <img alt="Status" src="https://img.shields.io/badge/status-safe%20lifecycle%20alpha-orange">
 </p>
 
 ## Why This Exists
@@ -35,7 +35,11 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 - Governs **memory stores and memory records** with ownership, privacy, evidence, review status, retrieval keys, and forget/supersession policy.
 - Promotes only distilled reusable knowledge into **context modules**.
 - Detects skill conflicts, missing manifests, unsafe read policies, unregistered generated skills, unregistered memory locations, and workspace mappings that could bloat context.
-- Provides Codex-facing `archmarshal-start` and `archmarshal-end` entrypoints, plus read-only lower-level commands before any apply-style automation exists.
+- Adopts existing projects through **metadata overlays**: existing `SKILL.md` and project files stay untouched.
+- Records **quick**, **standard**, or **reproducible** closeouts in append-only, date-organized directories.
+- Catalogs multiple projects by recorded creation date and AND-filtered tags.
+- Extracts review-only common-skill and user-preference candidates from compact session manifests.
+- Provides Codex-facing `archmarshal-start` and `archmarshal-end` entrypoints; mutation-capable flows remain preview-first and create-only.
 
 ## Design Goals
 
@@ -63,6 +67,25 @@ After installing, confirm it is available and show me the shortest way to start.
 
 ### 2. Start
 
+Preview adoption first:
+
+```bash
+archmarshal adopt . --tag research --tag python --pretty
+```
+
+Then explicitly create the management overlay:
+
+```bash
+archmarshal-start . --apply --tag research --tag python --pretty
+```
+
+ArchMarshal creates a verified backup before the first managed file, keeps every
+existing skill in place, and stores generated routing metadata under
+`.agent/skill-overlays/`. If a reserved control file already belongs to another
+tool, adoption blocks instead of overwriting it.
+
+For an already managed project, the short read-only start remains:
+
 ```text
 archmarshal-start
 ```
@@ -84,14 +107,38 @@ checkpoints, notes, and history stay preserved.
 
 ### 3. End
 
-```text
-archmarshal-end
+Choose the amount of evidence the project warrants:
+
+```bash
+# 1. Rough summary
+archmarshal-end . --level quick --summary "Finished the release review" --apply
+
+# 2. Careful record of steps and key scripts
+archmarshal-end . --level standard --summary "Validated the release" \
+  --step "Run tests" --step "Review artifacts" --script scripts/validate.py --apply
+
+# 3. Reproducible trajectory, hashed script snapshots, environment fingerprint, and run script
+archmarshal-end . --level reproducible --summary "Reproduced benchmark A" \
+  --step "Prepare data" --step "Run evaluation" --script scripts/eval.py \
+  --command "python scripts/eval.py --config configs/a.yaml" --shell bash --apply
 ```
 
-ArchMarshal closes the project or phase with a preservation and reproducibility
-summary. It uses automatic recording depth: routine skill reuse stays light,
-while genuinely novel work can produce deeper memory, context, or skill
-promotion suggestions.
+All three modes preview by default and write only to a new
+`.agent/history/YYYY/MM/DD/...` directory with `--apply`. Reproducible mode
+reports `reproducibility_ready: false` until summary, ordered steps, key scripts,
+and exact commands are present.
+
+After multiple sessions, extract lightweight, review-only candidates:
+
+```bash
+archmarshal learn . --include-root ../another-project --apply --pretty
+```
+
+Browse projects without loading their raw history:
+
+```bash
+archmarshal catalog . --include-root ../another-project --tag research --pretty
+```
 
 That is the main workflow: install, `archmarshal-start`, normal project
 instructions, `archmarshal-end`.
@@ -111,6 +158,8 @@ recording and promotion suggestions.
 - No automatic third-party skill installation.
 - No automatic project directory rewrite.
 - No deletion.
+- No in-place edits to adopted skills; source skills are referenced through overlays.
+- No overwrite or force mode for adoption and closeout.
 - No summarization that deletes or replaces original project history.
 - No automatic global configuration mutation.
 - No dynamic context loading runtime.
@@ -187,17 +236,35 @@ archmarshal closeout examples/monorepo-project --used-skill skill.common-project
 archmarshal-end examples/monorepo-project --used-skill skill.common-project.release-checklist --pretty
 ```
 
+Preview and explicitly apply safe lifecycle writes:
+
+```bash
+archmarshal adopt path/to/existing-project --tag research --pretty
+archmarshal adopt path/to/existing-project --tag research --apply --pretty
+archmarshal end path/to/project --level quick --summary "Phase complete" --apply --pretty
+archmarshal learn path/to/project --apply --pretty
+```
+
 The compatibility wrapper still works:
 
 ```bash
 python scripts/inventory.py examples/simple-project --pretty
 ```
 
-`apply` is intentionally not implemented. It should never be introduced before plan output, diff preview, and non-destructive defaults are stable.
+`--apply` is deliberately narrow: adoption creates only missing control-plane
+files after a verified backup; closeout and learning create only new append-only
+artifacts. There is no overwrite, move, delete, force, or automatic promotion
+path.
 
 ## Safety Rules
 
 - Inventory, lint, audit, and plan are read-only by default.
+- Adoption, closeout recording, and learning are preview-only unless `--apply` is explicit.
+- Adoption backs up managed metadata and skill source documents before writing; `--backup-scope full` snapshots the full project except VCS and dependency caches.
+- Existing skill sources are immutable to ArchMarshal; overlay manifests live under `.agent/skill-overlays/`.
+- Reserved control-file conflicts block the whole adoption before managed files are written.
+- Closeout uses unique append-only directories and verifies copied script hashes.
+- Environment variables and secrets are never captured in reproduction manifests.
 - YAML inputs fail softly: bad workspace, registry, skill, or context module YAML becomes a structured diagnostic.
 - Workspace, registry, and skill manifest schemas are enforced during lint.
 - Workspace save paths distinguish default skill roots from user-approved project file destinations.
@@ -250,6 +317,14 @@ python scripts/inventory.py examples/simple-project --pretty
 - [x] Memory store and memory record governance
 - [x] Memory-aware resolve and closeout candidate output
 - [x] Tests for clean examples, missing entry files, skill conflicts, and historical read policy
+- [x] Preview-first, backup-before-write adoption for existing projects
+- [x] Non-mutating skill metadata overlays
+- [x] Conflict blocking and exclusive file creation (no overwrite mode)
+- [x] Quick, standard, and reproducible append-only closeout records
+- [x] Hashed key-script snapshots and explicit reproducibility readiness gaps
+- [x] Date- and tag-aware workspace/session organization
+- [x] Read-only cross-project catalog sorted by date and filtered by tags
+- [x] Review-only common-skill and user-preference learning candidates
 
 ## Research Notes
 

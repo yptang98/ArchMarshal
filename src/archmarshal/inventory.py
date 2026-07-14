@@ -260,6 +260,17 @@ def _load_skill_manifest(manifest_path: Path, root: Path) -> dict[str, Any]:
             "_schema_error": "Skill manifest must be a YAML mapping.",
         }
     skill_dir = manifest_path.parent
+    source = manifest.get("source") if isinstance(manifest, dict) else None
+    source_dir = source.get("skill_dir") if isinstance(source, dict) else None
+    if isinstance(source_dir, str) and source_dir.strip():
+        candidate = (root / source_dir).resolve()
+        try:
+            candidate.relative_to(root.resolve())
+        except ValueError:
+            manifest["_source_error"] = "Overlay source escapes the workspace root."
+        else:
+            skill_dir = candidate
+            manifest["_overlay_manifest_path"] = rel(manifest_path, root)
     manifest["_manifest_path"] = rel(manifest_path, root)
     manifest["_skill_dir"] = rel(skill_dir, root)
     manifest["_has_skill_md"] = (skill_dir / "SKILL.md").exists()
@@ -331,7 +342,10 @@ def _unregistered_agent_files(root: Path, artifacts: list[dict[str, Any]]) -> li
         relative = rel(path, root)
         if relative in RESERVED_AGENT_FILES:
             continue
-        if relative not in registered_paths:
+        if not any(
+            relative == registered or relative.startswith(registered.rstrip("/") + "/")
+            for registered in registered_paths
+        ):
             unregistered.append(relative)
     return sorted(unregistered)
 
