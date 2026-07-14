@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -766,7 +767,8 @@ def test_reproducible_closeout_is_append_only_and_snapshots_scripts(tmp_path: Pa
     assert (session_dir / "SUMMARY.md").exists()
     assert (session_dir / "STEPS.md").exists()
     assert (session_dir / "reproduction.yaml").exists()
-    assert (session_dir / "run.ps1").exists()
+    run_script = "run.ps1" if os.name == "nt" else "run.sh"
+    assert (session_dir / run_script).exists()
     snapshots = list((session_dir / "scripts").iterdir())
     assert len(snapshots) == 1
     assert sha256_file(snapshots[0]) == source_hash
