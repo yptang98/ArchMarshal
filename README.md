@@ -38,6 +38,7 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 - Adopts existing projects through **metadata overlays**: existing `SKILL.md` and project files stay untouched.
 - Fingerprints the **complete skill package**, so script/reference/asset drift is visible without rewriting the source.
 - Records skill additions, modifications, removals, and restores as immutable, content-addressed generations with a locked compare-and-swap `HEAD`.
+- Blocks drifted skill packages from resolution until reviewed, and supports verified history plus audited metadata rollback without touching source files.
 - Records **quick**, **standard**, or **reproducible** closeouts in append-only, date-organized directories.
 - Catalogs multiple projects by recorded creation date and AND-filtered tags.
 - Extracts review-only common-skill and user-preference candidates from compact session manifests.
@@ -98,6 +99,21 @@ Use `--apply` only after reviewing the proposed generation and expected `HEAD`.
 Modified, removed, and restored skills are explicit plan entries. ArchMarshal
 updates only its internal `HEAD` pointer under an exclusive lock and stale-plan
 check; human-owned files remain untouched.
+
+Inspect verified index history or preview an audited metadata rollback:
+
+```bash
+archmarshal skill-index-status . --pretty
+archmarshal skill-index-rollback . --to <ancestor-sha256> --pretty
+archmarshal skill-index-rollback . --to <ancestor-sha256> \
+  --expect-head <preview-head> --reason "reviewed rollback" --apply --pretty
+```
+
+Rollback creates a new generation; it never points `HEAD` backward and never
+restores source code. Any active skill in the target snapshot must still match
+its complete-package hash, otherwise the operation blocks.
+Rollback is not a permanent ignore rule: a later start will preview any current
+source add/modify/restore difference again.
 
 Then continue with normal work:
 
@@ -238,6 +254,7 @@ archmarshal inventory examples/simple-project --pretty
 archmarshal lint examples/simple-project --pretty
 archmarshal audit examples/simple-project --pretty
 archmarshal plan examples/simple-project --pretty
+archmarshal skill-index-status examples/simple-project --pretty
 archmarshal resolve examples/monorepo-project --task "prepare release checklist" --pretty
 archmarshal closeout examples/monorepo-project --used-skill skill.common-project.release-checklist --pretty
 archmarshal-end examples/monorepo-project --used-skill skill.common-project.release-checklist --pretty
@@ -252,6 +269,9 @@ archmarshal end path/to/project --level quick --summary "Phase complete" --apply
 archmarshal learn path/to/project --apply --pretty
 archmarshal backup-verify path/to/backup.zip --pretty
 archmarshal backup-restore path/to/backup.zip path/to/new-directory --apply --pretty
+archmarshal skill-index-rollback path/to/project --to <ancestor-sha256> --pretty
+archmarshal skill-index-rollback path/to/project --to <ancestor-sha256> \
+  --expect-head <preview-head> --apply --pretty
 ```
 
 The compatibility wrapper still works:
@@ -273,6 +293,8 @@ path for human-owned project or skill files.
 - Adoption backs up managed metadata and complete non-root skill packages before writing; root skills remain entrypoint-only. `--backup-scope full` creates a bounded project-content snapshot excluding VCS, dependencies, virtual environments, and prior backups.
 - Existing skill sources are immutable to ArchMarshal; overlay manifests live under `.agent/skill-overlays/`.
 - Skill sync uses immutable content-addressed objects, an exclusive `HEAD.lock`, and an expected-`HEAD` compare-and-swap; stale or concurrent plans fail without changing the active generation.
+- `HEAD.lock` uses an OS-lifetime lock. Released v2 transaction metadata is recovered only after expected/proposed/current HEAD validation and is recorded under the internal recovery audit directory; legacy or malformed locks remain blocked.
+- Resolver output quarantines source-missing, unsafe, untracked, or drifted skills instead of suggesting them for activation.
 - Directory scans do not follow symlinks, junctions, or Windows reparse points and enforce file/package bounds.
 - Reserved control-file conflicts block the whole adoption before managed files are written.
 - Closeout uses unique append-only directories and verifies copied script hashes.
@@ -333,6 +355,8 @@ path for human-owned project or skill files.
 - [x] Non-mutating skill metadata overlays
 - [x] Complete skill-package fingerprints and drift reporting
 - [x] Immutable skill generations with add/modify/remove/restore history and lock/CAS publication
+- [x] Verified generation history and audited, source-preserving metadata rollback
+- [x] OS-lifetime process locks with relationship-checked crash recovery records
 - [x] Content-verified backup inspection and restore-to-new-directory flow
 - [x] Conflict blocking and exclusive file creation (no overwrite mode)
 - [x] Quick, standard, and reproducible append-only closeout records

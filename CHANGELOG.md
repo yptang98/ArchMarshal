@@ -1,6 +1,21 @@
 # Changelog
 
-## 0.6.0 - Unreleased
+## 0.7.0 - 2026-07-15
+
+- Recheck complete skill-package hashes while holding the commit lock so source
+  changes between preview and publication cannot activate stale metadata.
+- Quarantine missing, unsafe, untracked, or drifted skills from resolver output
+  until their source state is reviewed and synchronized.
+- Add verified `skill-index-status` history and preview-first,
+  expected-HEAD-gated, audited `skill-index-rollback` commands.
+- Rollback creates a new immutable generation and never restores or rewrites
+  source skill files; active target packages must still match their hashes.
+- Replace existence-only locking with Windows/POSIX OS-lifetime locks and safely
+  recover released v2 transactions only when HEAD relationships verify.
+- Persist append-only lock-recovery audit records, validate parent transitions,
+  reject incomplete directory scans, and fsync object directory entries on POSIX.
+
+## 0.6.0 - 2026-07-15
 
 - Add immutable, content-addressed skill-index generations for additions,
   modifications, removals, and restores.

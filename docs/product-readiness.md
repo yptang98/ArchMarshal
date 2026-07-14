@@ -1,6 +1,6 @@
 # Product Readiness
 
-ArchMarshal 0.6 is a safety-hardened alpha, not yet a stable product. This page
+ArchMarshal 0.7 is a safety-hardened alpha, not yet a stable product. This page
 separates implemented behavior from design intent so users can decide what to
 trust.
 
@@ -9,7 +9,7 @@ trust.
 | Area | Current state | Safety boundary | Remaining stable-release work |
 |---|---|---|---|
 | Existing project adoption | Implemented | Preview-first, reserved-file conflicts block, user-owned paths never replaced | Atomic multi-file transaction journal and crash recovery |
-| Existing skill management | Implemented, review-first | Complete-package fingerprint; immutable generations; lock/CAS `HEAD`; source never rewritten | Explicit accept/reject/rollback CLI and safe orphan cleanup |
+| Existing skill management | Implemented, review-first | Lock-held package recheck; immutable generations; OS lock/CAS `HEAD`; verified history; audited metadata rollback; source never rewritten | Review UI/accept-reject workflow and safe orphan inspection/cleanup |
 | Backup | Implemented | Bounded archive, byte hashes, CRC, manifest validation, no partial publish | Large-workspace benchmarks and documented retention policy |
 | Restore | Implemented | Restores only into a new directory and removes partial output on failure | Guided diff/merge tooling; never add in-place restore |
 | Project start | Implemented | Read-only lint plus adoption/sync preview | Share one immutable inventory snapshot for performance |
@@ -26,9 +26,9 @@ trust.
 A stable release requires all of the following:
 
 1. No overwrite, move, rename, or delete path for human-owned project or skill files in adoption, sync, learning, or closeout.
-2. Symlink/junction/reparse escape tests on both Windows and Linux. Basic cross-platform link tests exist; native junction coverage remains.
-3. Fault injection for interrupted writes, permissions, disk exhaustion, source mutation, corrupt archives, and concurrent sync. Atomic-swap, collision, lock, tamper, archive, and source-drift cases exist; permission/disk-exhaustion coverage remains.
-4. Immutable overlay generations with a stale-plan compare-and-swap check. Implemented; a reviewed rollback command and stale-lock recovery command remain.
+2. Symlink/junction/reparse escape tests on both Windows and Linux. Basic cross-platform link tests and Windows reparse detection exist; native junction creation coverage remains.
+3. Fault injection for interrupted writes, permissions, disk exhaustion, source mutation, corrupt archives, and concurrent sync. Atomic-swap, post-publish rollback, object collision, OS lock, recoverable transaction, directory-scan failure, archive, and source-race cases exist; disk-exhaustion and native permission integration coverage remain.
+4. Immutable overlay generations with a stale-plan compare-and-swap check. Implemented with OS-lifetime locking, verified parent transitions, audited forward rollback, and relationship-checked released-transaction recovery; legacy lock migration tooling remains.
 5. Statement coverage at least 85% and branch coverage at least 75%, with higher coverage for write paths.
 6. Performance baselines for 10,000 files, 100 skills, and multi-project catalogs.
 7. Wheel and sdist clean-install tests for every supported Python/OS boundary.

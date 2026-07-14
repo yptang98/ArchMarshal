@@ -120,19 +120,47 @@ generation without editing the source.
 Commit order is deliberately narrow:
 
 1. Create and verify the pre-sync backup.
-2. Acquire `HEAD.lock` exclusively; an existing lock blocks the commit.
+2. Acquire the cross-platform OS-lifetime lock on persistent `HEAD.lock` and
+   write expected/proposed transaction metadata.
 3. Confirm `HEAD` still equals the preview's expected digest.
-4. Exclusively create or verify the content-addressed object.
-5. Recheck `HEAD`, then atomically replace the internal pointer.
-6. Reload and verify the published generation before reporting success.
+4. Re-fingerprint active source packages while holding the lock; incomplete or
+   permission-denied scans block instead of implying removal.
+5. Exclusively create or verify the content-addressed object and fsync its
+   directory entries on POSIX.
+6. Recheck `HEAD`, then atomically replace the internal pointer.
+7. Reload and verify the published generation before reporting success.
 
-If publication fails before step 5, the old `HEAD` remains authoritative. A
+If publication fails before step 6, the old `HEAD` remains authoritative. A
 fully written orphan object is harmless and retained for audit; ArchMarshal has
-no automatic garbage collector yet. If a process is killed hard, a stale lock
-may remain. ArchMarshal intentionally does not guess that it is safe to break:
-confirm no ArchMarshal process is running, preserve/copy `HEAD.lock` for audit,
-and only then remove it manually before replanning. Never delete `HEAD` or edit
-an object in place.
+no automatic garbage collector yet. The lock file itself persists but is empty
+while idle; liveness comes from the OS-held byte/file lock, not file existence or
+age. If a process exits hard, v2 transaction metadata is recovered only after
+the OS lock is available and current `HEAD` equals either the recorded expected
+HEAD or a fully verified proposed generation. The decision is preserved under
+`.agent/skill-overlays/.archmarshal/recovery/`. Legacy, malformed, or
+relationship-conflicting lock metadata remains blocked for manual review; never
+delete `HEAD` or edit an object in place.
+
+### Verified History And Metadata Rollback
+
+`archmarshal skill-index-status` walks only the parent chain reachable from the
+captured `HEAD`. It verifies every object's type, size, content hash, canonical
+JSON, parent relationship, and declared snapshot changes under generation and
+cumulative-byte limits. It does not enumerate or trust orphan objects.
+Long output is paged with `--history-limit` and the returned continuation digest
+can be supplied as `--history-from`.
+
+`archmarshal skill-index-rollback` is preview-first. Apply requires the exact
+`--expect-head` shown by the reviewed preview. The target must be a reachable
+ancestor, and the command creates a new generation whose parent is the current
+HEAD; it never moves HEAD backward. Source skill files are never restored,
+deleted, or rewritten. Every active target skill must already match its recorded
+complete-package hash, so old routing metadata cannot silently activate newer
+implementation bytes.
+
+Rollback is not a permanent ignore/pin rule. If the workspace source still
+differs from the rolled-back metadata view, the next start/sync will surface a
+new reviewed add/modify/restore proposal; it will not silently apply it.
 
 ## Project Layout
 

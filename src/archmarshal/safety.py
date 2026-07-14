@@ -651,7 +651,20 @@ def _walk_files_no_links(
     max_files: int,
 ) -> list[Path]:
     files: list[Path] = []
-    for current, directories, filenames in os.walk(directory, topdown=True, followlinks=False):
+
+    def fail_scan(error: OSError) -> None:
+        raise ArchMarshalError(
+            "directory_scan_failed",
+            f"{purpose} could not be scanned completely; no absence inference is safe.",
+            details={"path": str(getattr(error, "filename", None) or directory)},
+        ) from error
+
+    for current, directories, filenames in os.walk(
+        directory,
+        topdown=True,
+        onerror=fail_scan,
+        followlinks=False,
+    ):
         current_path = Path(current)
         kept: list[str] = []
         for name in sorted(directories, key=str.casefold):

@@ -22,6 +22,7 @@ from .planner import plan_workspace
 from .resolver import resolve_workspace
 from .safety import restore_backup, verify_backup
 from .session import CLOSEOUT_LEVELS, record_closeout
+from .skill_index import rollback_skill_index, skill_index_status
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -79,6 +80,45 @@ def _main_impl(argv: list[str] | None = None) -> int:
     restore_backup_parser.add_argument("destination", help="New directory to create.")
     restore_backup_parser.add_argument("--apply", action="store_true", help="Create the destination.")
     restore_backup_parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+    skill_status_parser = _add_root_command(
+        subparsers,
+        "skill-index-status",
+        "Verify the immutable skill-index chain and inspect lock metadata without writing.",
+    )
+    skill_status_parser.add_argument(
+        "--history-limit",
+        type=int,
+        default=20,
+        help="Number of newest verified generations to return (1-100).",
+    )
+    skill_status_parser.add_argument(
+        "--history-from",
+        help="Reachable generation digest at which to start the verified history page.",
+    )
+    skill_rollback_parser = _add_root_command(
+        subparsers,
+        "skill-index-rollback",
+        "Create a new audited generation using an ancestor metadata snapshot.",
+    )
+    skill_rollback_parser.add_argument(
+        "--to",
+        required=True,
+        help="Full SHA-256 digest of an ancestor generation.",
+    )
+    skill_rollback_parser.add_argument(
+        "--expect-head",
+        help="Exact HEAD from the reviewed preview; required with --apply.",
+    )
+    skill_rollback_parser.add_argument(
+        "--reason",
+        default="",
+        help="Optional short audit reason; do not include secrets.",
+    )
+    skill_rollback_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Back up the current index and publish the reviewed rollback generation.",
+    )
     end_parser = _add_root_command(subparsers, "end", "Close out ArchMarshal project governance.")
     end_parser.add_argument(
         "--used-skill",
@@ -188,6 +228,26 @@ def _main_impl(argv: list[str] | None = None) -> int:
     if args.command == "plan":
         _print_json(plan_workspace(root), args.pretty)
         return 0
+    if args.command == "skill-index-status":
+        _print_json(
+            skill_index_status(
+                root,
+                history_limit=args.history_limit,
+                history_from=args.history_from,
+            ),
+            args.pretty,
+        )
+        return 0
+    if args.command == "skill-index-rollback":
+        payload = rollback_skill_index(
+            root,
+            args.to,
+            expected_head=args.expect_head,
+            reason=args.reason,
+            apply=args.apply,
+        )
+        _print_json(payload, args.pretty)
+        return _payload_exit_code(payload)
     if args.command == "adopt":
         payload = adopt_workspace(
             root,

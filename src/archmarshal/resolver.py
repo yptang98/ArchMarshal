@@ -17,6 +17,7 @@ def resolve_workspace(root: Path | str, task: str) -> dict[str, Any]:
         "task": task,
         "required_policy_skills": _required_policy_skills(inventory.skills),
         "suggested_skills": _match_skills(inventory.skills, task_text),
+        "blocked_skills": _blocked_skills(inventory.skills),
         "suggested_context_modules": _match_context_modules(inventory.context_modules, task_text),
         "suggested_memory_records": _match_memory_records(inventory.memory_records, task_text),
         "memory_budget": {
@@ -28,6 +29,7 @@ def resolve_workspace(root: Path | str, task: str) -> dict[str, Any]:
         "notes": [
             "Resolution is advisory and read-only.",
             "Active highest-priority global skills are returned separately as required policy.",
+            "Missing, unsafe, or drifted skill sources are blocked until reviewed and synchronized.",
             "Historical artifact paths remain explicit-only unless a selected context module references them.",
         ],
     }
@@ -46,8 +48,7 @@ def _match_skills(skills: list[dict[str, Any]], task_text: str) -> list[dict[str
     for skill in skills:
         if (
             skill.get("status") not in {"active", "experimental"}
-            or skill.get("_has_skill_md") is False
-            or skill.get("_source_drift") == "unsafe"
+            or _skill_activation_block_reason(skill) is not None
         ):
             continue
         negative_matches = [
@@ -90,8 +91,7 @@ def _required_policy_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]
             skill.get("kind") != "global_skill"
             or skill.get("priority") != "highest"
             or skill.get("status") != "active"
-            or skill.get("_has_skill_md") is False
-            or skill.get("_source_drift") == "unsafe"
+            or _skill_activation_block_reason(skill) is not None
         ):
             continue
         required.append(
@@ -106,6 +106,35 @@ def _required_policy_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]
             }
         )
     return sorted(required, key=lambda item: str(item["id"]))
+
+
+def _blocked_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    blocked: list[dict[str, Any]] = []
+    for skill in skills:
+        reason = _skill_activation_block_reason(skill)
+        if reason is None:
+            continue
+        blocked.append(
+            {
+                "id": skill.get("id"),
+                "name": skill.get("name"),
+                "path": skill.get("_skill_dir"),
+                "metadata_path": skill.get("_overlay_manifest_path")
+                or skill.get("_manifest_path"),
+                "reason": reason,
+                "source_drift": skill.get("_source_drift"),
+            }
+        )
+    return sorted(blocked, key=lambda item: str(item["id"]))
+
+
+def _skill_activation_block_reason(skill: dict[str, Any]) -> str | None:
+    if skill.get("_has_skill_md") is False:
+        return "source_missing"
+    drift = skill.get("_source_drift")
+    if drift and drift != "unchanged":
+        return f"source_{drift}"
+    return None
 
 
 def _source_managed(skill: dict[str, Any]) -> bool:

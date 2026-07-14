@@ -82,7 +82,8 @@ After adoption, incremental sync is a small versioned module registry:
 ```text
 .agent/skill-overlays/.archmarshal/
 ├─ HEAD
-├─ HEAD.lock                     # exists only during publication
+├─ HEAD.lock                     # persistent file; OS lock held only during publication
+├─ recovery/*.json               # append-only verified crash-recovery decisions
 └─ objects/sha256/<digest>.json  # immutable complete generations
 ```
 
@@ -92,6 +93,18 @@ the object, rechecks the expected `HEAD`, and atomically replaces only the
 ArchMarshal-owned pointer. A stale plan, lock conflict, digest mismatch, unsafe
 path, linked scan root, or size/count limit is a hard failure. Older and orphaned
 objects are never selected unless `HEAD` names them.
+
+Publication also re-fingerprints active sources while holding the OS process
+lock. A directory permission failure is an unknown/error state, never evidence
+that a skill was removed. If a writer exits unexpectedly, released v2 lock
+metadata is recoverable only when current `HEAD` still equals its expected value,
+or equals a fully verified proposed object. The decision is recorded before the
+next transaction. Legacy or malformed lock files are never auto-cleared.
+
+Rollback is forward-only: a new generation has the current `HEAD` as parent and
+reproduces an ancestor routing snapshot while preserving tombstones. This keeps
+history linear. Active target packages must match the source bytes already in
+the workspace; ArchMarshal never restores implementation files.
 
 This splits the system into two ownership domains:
 

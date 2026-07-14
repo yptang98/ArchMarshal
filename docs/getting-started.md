@@ -41,6 +41,14 @@ keep using it quietly while you give normal project instructions.
 If start reports a modified, removed, or restored skill, inspect the preview
 before adding `--apply`. A concurrent or stale preview is rejected. ArchMarshal
 does not edit, move, or delete the source skill during either preview or apply.
+Drifted skills are also excluded from resolver activation until this review is
+completed.
+
+Use `archmarshal skill-index-status . --pretty` to verify the full reachable
+generation chain and inspect the process-lock state. Metadata rollback is also
+preview-first: preview `skill-index-rollback --to <ancestor>`, then apply only
+with the exact `--expect-head` from that preview. It creates a new audited
+generation and does not restore source skill files.
 
 Then give normal instructions, for example:
 

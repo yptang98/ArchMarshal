@@ -14,7 +14,13 @@ from archmarshal.cli import main, start_main
 from archmarshal.errors import ArchMarshalError
 from archmarshal.learning import learn_from_projects
 from archmarshal.lint import lint_workspace
-from archmarshal.safety import create_backup, restore_backup, verify_backup
+from archmarshal.resolver import resolve_workspace
+from archmarshal.safety import (
+    create_backup,
+    files_below_no_links,
+    restore_backup,
+    verify_backup,
+)
 from archmarshal.session import record_closeout
 from archmarshal.skill_index import load_skill_index
 
@@ -226,6 +232,23 @@ def test_failed_backup_publish_leaves_no_partial_archive(monkeypatch, tmp_path: 
     assert not list(root.glob(".*.tmp"))
 
 
+def test_directory_scan_permission_error_is_never_treated_as_absence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+
+    def denied_walk(path, *, topdown, onerror, followlinks):  # type: ignore[no-untyped-def]
+        onerror(PermissionError(13, "permission denied", str(path)))
+        return iter(())
+
+    monkeypatch.setattr("archmarshal.safety.os.walk", denied_walk)
+    with pytest.raises(ArchMarshalError) as raised:
+        files_below_no_links(root, purpose="Permission test")
+
+    assert raised.value.code == "directory_scan_failed"
+
+
 def test_complete_skill_package_drift_is_detected_without_source_mutation(tmp_path: Path) -> None:
     root = tmp_path / "project"
     root.mkdir()
@@ -249,6 +272,9 @@ def test_complete_skill_package_drift_is_detected_without_source_mutation(tmp_pa
     assert preview["discovered_skills"][0]["source_drift"] == "changed"
     assert any(item["action"] == "review_source_change" for item in preview["operations"])
     assert "skill.overlay_source_changed" in {item.rule for item in lint_workspace(root)}
+    resolution = resolve_workspace(root, "demo")
+    assert resolution["suggested_skills"] == []
+    assert resolution["blocked_skills"][0]["reason"] == "source_changed"
     assert script.read_text(encoding="utf-8") == "print('v2')\n"
 
 
@@ -325,6 +351,43 @@ def test_cli_start_sync_and_dedicated_entrypoint_apply(capsys, tmp_path: Path) -
     assert start_main([str(second), "--apply"]) == 0
     dedicated = json.loads(capsys.readouterr().out)
     assert dedicated["mode"] == "overlay_applied"
+
+
+def test_cli_skill_index_status_and_reviewed_rollback(capsys, tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    initial = adopt_workspace(root, apply=True)
+    target = initial["skill_index_commit"]["head"]
+    _skill(root)
+    synced = adopt_workspace(root, apply=True)
+    expected_head = synced["skill_index_commit"]["head"]
+
+    assert main(["skill-index-status", str(root)]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["chain_status"] == "healthy"
+
+    assert main(["skill-index-rollback", str(root), "--to", target]) == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["mode"] == "propose_only"
+    assert preview["expected_head"] == expected_head
+
+    assert (
+        main(
+            [
+                "skill-index-rollback",
+                str(root),
+                "--to",
+                target,
+                "--expect-head",
+                expected_head,
+                "--apply",
+            ]
+        )
+        == 0
+    )
+    applied = json.loads(capsys.readouterr().out)
+    assert applied["mode"] == "rolled_back"
+    assert (root / "skills/demo/SKILL.md").exists()
 
 
 def test_closeout_blocks_missing_evidence_and_high_confidence_secrets(tmp_path: Path) -> None:
