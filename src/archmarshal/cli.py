@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .adoption import adopt_workspace
+from .adoption_tx import adoption_transaction_status, recover_adoption_transaction
 from .audit import audit_workspace
 from .catalog import catalog_projects
 from .checkpoint import checkpoint_workspace
@@ -44,6 +45,29 @@ def _main_impl(argv: list[str] | None = None) -> int:
     _add_adoption_arguments(adopt_parser)
     start_parser = _add_root_command(subparsers, "start", "Start ArchMarshal project governance.")
     _add_adoption_arguments(start_parser)
+    _add_root_command(
+        subparsers,
+        "adoption-status",
+        "Inspect an incomplete adoption transaction without writing.",
+    )
+    adoption_recover_parser = _add_root_command(
+        subparsers,
+        "adoption-recover",
+        "Preview or safely complete a durable create-only adoption transaction.",
+    )
+    adoption_recover_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Complete verified missing targets; changed targets remain untouched and block recovery.",
+    )
+    adoption_recover_parser.add_argument(
+        "--expect-transaction",
+        help="Exact transaction id from the reviewed recovery preview.",
+    )
+    adoption_recover_parser.add_argument(
+        "--expect-plan",
+        help="Exact adoption plan digest from the reviewed recovery preview.",
+    )
     catalog_parser = _add_root_command(
         subparsers,
         "catalog",
@@ -108,6 +132,10 @@ def _main_impl(argv: list[str] | None = None) -> int:
     skill_rollback_parser.add_argument(
         "--expect-head",
         help="Exact HEAD from the reviewed preview; required with --apply.",
+    )
+    skill_rollback_parser.add_argument(
+        "--expect-plan",
+        help="Exact rollback plan digest from the reviewed preview; required with --apply.",
     )
     skill_rollback_parser.add_argument(
         "--reason",
@@ -238,11 +266,25 @@ def _main_impl(argv: list[str] | None = None) -> int:
             args.pretty,
         )
         return 0
+    if args.command == "adoption-status":
+        payload = adoption_transaction_status(root)
+        _print_json(payload, args.pretty)
+        return 0 if payload.get("state") == "none" else 2
+    if args.command == "adoption-recover":
+        payload = recover_adoption_transaction(
+            root,
+            apply=args.apply,
+            expected_transaction=args.expect_transaction,
+            expected_plan=args.expect_plan,
+        )
+        _print_json(payload, args.pretty)
+        return _payload_exit_code(payload)
     if args.command == "skill-index-rollback":
         payload = rollback_skill_index(
             root,
             args.to,
             expected_head=args.expect_head,
+            expected_plan=args.expect_plan,
             reason=args.reason,
             apply=args.apply,
         )
@@ -254,6 +296,7 @@ def _main_impl(argv: list[str] | None = None) -> int:
             apply=args.apply,
             tags=args.tag,
             backup_scope=args.backup_scope,
+            expected_plan=args.expect_plan,
         )
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
@@ -264,6 +307,7 @@ def _main_impl(argv: list[str] | None = None) -> int:
                 apply=True,
                 tags=args.tag,
                 backup_scope=args.backup_scope,
+                expected_plan=args.expect_plan,
             )
             payload = start_workspace(root)
             payload["adoption"] = adoption
@@ -299,6 +343,7 @@ def _main_impl(argv: list[str] | None = None) -> int:
                 tags=args.tag,
                 used_skills=args.used_skill,
                 shell=args.shell,
+                expected_plan=args.expect_plan,
             )
             _print_json(payload, args.pretty)
             return _payload_exit_code(payload)
@@ -351,6 +396,7 @@ def _start_main_impl(argv: list[str] | None = None) -> int:
             apply=True,
             tags=args.tag,
             backup_scope=args.backup_scope,
+            expected_plan=args.expect_plan,
         )
         payload = start_workspace(root) | {"adoption": payload["adoption"]}
         if payload["adoption"]["mode"] in {
@@ -391,6 +437,7 @@ def _end_main_impl(argv: list[str] | None = None) -> int:
             tags=args.tag,
             used_skills=args.used_skill,
             shell=args.shell,
+            expected_plan=args.expect_plan,
         )
     else:
         if args.apply:
@@ -415,6 +462,10 @@ def _add_adoption_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--tag", action="append", default=[], help="Project tag. Repeat as needed.")
     parser.add_argument(
+        "--expect-plan",
+        help="Exact plan digest from a reviewed preview; required before any adoption write.",
+    )
+    parser.add_argument(
         "--backup-scope",
         choices=["managed", "full"],
         default="managed",
@@ -425,6 +476,10 @@ def _add_adoption_arguments(parser: argparse.ArgumentParser) -> None:
 def _add_recording_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--level", choices=CLOSEOUT_LEVELS, help="Closeout recording depth.")
     parser.add_argument("--apply", action="store_true", help="Write a new append-only closeout directory.")
+    parser.add_argument(
+        "--expect-plan",
+        help="Exact closeout plan digest from a reviewed preview; required before writing.",
+    )
     parser.add_argument("--summary", default="", help="Project or phase outcome summary.")
     parser.add_argument("--step", action="append", default=[], help="Ordered work step. Repeat as needed.")
     parser.add_argument("--script", action="append", default=[], help="Key script path. Repeat as needed.")
@@ -445,7 +500,12 @@ def _add_recording_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _payload_exit_code(payload: dict[str, Any]) -> int:
-    return 2 if payload.get("mode") == "blocked" or payload.get("blocked") is True else 0
+    return (
+        2
+        if payload.get("mode") in {"blocked", "review_required", "recovery_required"}
+        or payload.get("blocked") is True
+        else 0
+    )
 
 
 def _guard_cli(function: Any, argv: list[str] | None) -> int:

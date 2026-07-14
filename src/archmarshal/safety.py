@@ -51,8 +51,14 @@ def is_link_or_reparse(path: Path) -> bool:
     """Detect POSIX links and Windows reparse points without following them."""
     try:
         metadata = path.lstat()
-    except OSError:
+    except FileNotFoundError:
         return False
+    except OSError as exc:
+        raise ArchMarshalError(
+            "path_metadata_unreadable",
+            "Path metadata could not be inspected safely.",
+            details={"path": str(path)},
+        ) from exc
     attributes = getattr(metadata, "st_file_attributes", 0)
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     return path.is_symlink() or bool(reparse_flag and attributes & reparse_flag)
@@ -188,18 +194,75 @@ def ensure_managed_path(root: Path, path: Path, *, purpose: str) -> Path:
 
 
 def create_text_exclusive(path: Path, content: str) -> None:
-    """Create a UTF-8 file without ever replacing an existing path."""
+    """Durably publish a complete UTF-8 file without replacing a path.
+
+    Bytes are first flushed through a private file in the target directory and
+    then exposed with a hard-link create.  A write failure therefore cannot
+    leave a partial file at the user-visible destination.  Hard-link support is
+    deliberately required: falling back to a streaming copy would reintroduce
+    a process-crash window with a partial destination.
+    """
+    create_bytes_exclusive(path, content.encode("utf-8"))
+
+
+def create_bytes_exclusive(path: Path, content: bytes, *, mode: int = 0o644) -> None:
+    """Durably publish complete bytes with create-only, same-filesystem semantics."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    if is_link_or_reparse(path.parent):
+        raise ArchMarshalError(
+            "unsafe_managed_link",
+            "Create-only destination parent must not be a symbolic link or junction.",
+            details={"path": str(path.parent)},
+        )
+    temporary = path.parent / f".am-{uuid.uuid4().hex}.tmp"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    descriptor = os.open(path, flags)
+    descriptor = os.open(temporary, flags, mode)
+    identity = _descriptor_identity(descriptor)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+        with os.fdopen(descriptor, "wb") as handle:
             handle.write(content)
-    except BaseException:
-        try:
-            path.unlink(missing_ok=True)
-        finally:
-            raise
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(temporary, path)
+        fsync_directory(path.parent)
+    finally:
+        _unlink_created_path(temporary, identity)
+
+
+def fsync_directory(path: Path) -> None:
+    """Persist a directory entry where the platform exposes directory fsync."""
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _descriptor_identity(descriptor: int) -> tuple[int, int]:
+    metadata = os.fstat(descriptor)
+    return metadata.st_dev, metadata.st_ino
+
+
+def _unlink_created_path(path: Path, identity: tuple[int, int]) -> bool:
+    """Remove only the exact directory entry created by this process.
+
+    If another actor replaced the path, leave it untouched.  A platform that
+    cannot provide a useful file identity also fails closed and leaves the
+    private orphan for later inspection.
+    """
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    if identity[1] == 0 or (metadata.st_dev, metadata.st_ino) != identity:
+        return False
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def unique_path(path: Path) -> Path:
@@ -276,72 +339,67 @@ def create_backup(
             details={"required_bytes": required_free, "free_bytes": free_bytes},
         )
 
-    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+    temporary = destination.parent / f".am-backup-{uuid.uuid4().hex}.tmp"
+    temporary_identity: tuple[int, int] | None = None
     records: list[dict[str, Any]] = []
-    published = False
     try:
-        with zipfile.ZipFile(temporary, "x", compression=zipfile.ZIP_DEFLATED) as archive:
-            for relative, path in sorted(selected.items()):
-                digest = hashlib.sha256()
-                byte_count = 0
-                with path.open("rb") as source:
-                    before = os.fstat(source.fileno())
-                    with archive.open(f"files/{relative}", "w", force_zip64=True) as target:
-                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                            target.write(chunk)
-                            digest.update(chunk)
-                            byte_count += len(chunk)
-                            if byte_count > MAX_BACKUP_CONTENT_BYTES:
-                                raise ArchMarshalError(
-                                    "backup_limit_exceeded",
-                                    "A backup source exceeded the total content safety limit while reading.",
-                                    details={"path": relative},
-                                )
-                    after = os.fstat(source.fileno())
-                if (
-                    before.st_size != after.st_size
-                    or before.st_mtime_ns != after.st_mtime_ns
-                    or byte_count != after.st_size
-                ):
-                    raise ArchMarshalError(
-                        "backup_source_changed",
-                        "A source file changed while the backup was being created.",
-                        details={"path": relative},
+        descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+        temporary_identity = _descriptor_identity(descriptor)
+        with os.fdopen(descriptor, "w+b") as raw_archive:
+            with zipfile.ZipFile(
+                raw_archive, "w", compression=zipfile.ZIP_DEFLATED
+            ) as archive:
+                for relative, path in sorted(selected.items()):
+                    digest = hashlib.sha256()
+                    byte_count = 0
+                    with path.open("rb") as source:
+                        before = os.fstat(source.fileno())
+                        with archive.open(f"files/{relative}", "w", force_zip64=True) as target:
+                            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                                target.write(chunk)
+                                digest.update(chunk)
+                                byte_count += len(chunk)
+                                if byte_count > MAX_BACKUP_CONTENT_BYTES:
+                                    raise ArchMarshalError(
+                                        "backup_limit_exceeded",
+                                        "A backup source exceeded the total content safety limit while reading.",
+                                        details={"path": relative},
+                                    )
+                        after = os.fstat(source.fileno())
+                    if (
+                        before.st_size != after.st_size
+                        or before.st_mtime_ns != after.st_mtime_ns
+                        or byte_count != after.st_size
+                    ):
+                        raise ArchMarshalError(
+                            "backup_source_changed",
+                            "A source file changed while the backup was being created.",
+                            details={"path": relative},
+                        )
+                    records.append(
+                        {"path": relative, "bytes": byte_count, "sha256": digest.hexdigest()}
                     )
-                records.append(
-                    {"path": relative, "bytes": byte_count, "sha256": digest.hexdigest()}
+                manifest = {
+                    "format": "archmarshal-backup-v1",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "reason": reason,
+                    "project_root": str(root),
+                    "file_count": len(records),
+                    "files": records,
+                }
+                archive.writestr(
+                    "ARCHMARSHAL-BACKUP.json",
+                    json.dumps(manifest, indent=2, sort_keys=True),
                 )
-            manifest = {
-                "format": "archmarshal-backup-v1",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "reason": reason,
-                "project_root": str(root),
-                "file_count": len(records),
-                "files": records,
-            }
-            archive.writestr(
-                "ARCHMARSHAL-BACKUP.json",
-                json.dumps(manifest, indent=2, sort_keys=True),
-            )
-        with temporary.open("r+b") as handle:
-            handle.flush()
-            os.fsync(handle.fileno())
+            raw_archive.flush()
+            os.fsync(raw_archive.fileno())
         verification = verify_backup(temporary)
-        try:
-            os.link(temporary, destination)
-        except OSError:
-            with temporary.open("rb") as source, destination.open("xb") as target:
-                shutil.copyfileobj(source, target)
-                target.flush()
-                os.fsync(target.fileno())
-        published = True
+        os.link(temporary, destination)
+        fsync_directory(destination.parent)
         verify_backup(destination)
-    except BaseException:
-        if published:
-            destination.unlink(missing_ok=True)
-        raise
     finally:
-        temporary.unlink(missing_ok=True)
+        if temporary_identity is not None:
+            _unlink_created_path(temporary, temporary_identity)
 
     return {
         "path": destination.relative_to(root).as_posix(),
@@ -541,16 +599,15 @@ def restore_backup(
         "overwrite": False,
         "notes": [
             "Restore always targets a new directory and never modifies the source project.",
-            "File contents are re-hashed while extracting and the new directory is removed on failure.",
+            "File contents are re-hashed while extracting.",
+            "A failed restore is preserved for inspection; ArchMarshal never recursively deletes a path that another process may have changed.",
         ],
     }
     if not apply:
         return payload
 
-    created_root = False
     try:
         target_root.mkdir(exist_ok=False)
-        created_root = True
         resolved_target = target_root.resolve()
         with zipfile.ZipFile(archive_path, "r") as archive:
             for record in records:
@@ -574,8 +631,10 @@ def restore_backup(
                         details={"path": relative},
                     )
     except BaseException:
-        if created_root:
-            shutil.rmtree(target_root, ignore_errors=True)
+        # Never recursively delete a visible destination after failure.  A
+        # concurrent process may have added or replaced content there, and a
+        # path-based rmtree cannot prove ownership.  The incomplete new
+        # directory is intentionally preserved for explicit review.
         raise
 
     payload["mode"] = "restored"
@@ -701,12 +760,14 @@ def _walk_files_no_links(
 
 __all__ = [
     "create_backup",
+    "create_bytes_exclusive",
     "create_text_exclusive",
     "ensure_path_within",
     "ensure_managed_path",
     "fingerprint_directory",
     "files_below_no_links",
     "files_for_full_backup",
+    "fsync_directory",
     "is_link_or_reparse",
     "sha256_file",
     "restore_backup",

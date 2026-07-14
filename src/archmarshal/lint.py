@@ -5,6 +5,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from .adoption import ownership_skill_index_mode, valid_ownership_marker
+from .adoption_tx import adoption_transaction_status
 from .diagnostics import Diagnostic
 from .inventory import WorkspaceInventory, collect_inventory
 from .io import list_files, load_yaml_safe, read_text
@@ -29,6 +31,17 @@ def lint_workspace(
 ) -> list[Diagnostic]:
     inventory = inventory or collect_inventory(root)
     diagnostics: list[Diagnostic] = []
+    transaction = adoption_transaction_status(inventory.root)
+    if transaction.get("state") != "none":
+        diagnostics.append(
+            Diagnostic(
+                "project.adoption_transaction_incomplete",
+                "error",
+                "Project adoption has an incomplete or invalid durable transaction.",
+                ".agent/transactions/adoption/ACTIVE",
+                "Run archmarshal adoption-status, then review and explicitly recover the transaction.",
+            )
+        )
     diagnostics.extend(_lint_project_files(inventory.root, inventory.to_dict()))
     diagnostics.extend(_lint_workspace_manifest(inventory.root, inventory.to_dict()))
     diagnostics.extend(_lint_registry(inventory.to_dict()))
@@ -52,6 +65,73 @@ def _lint_project_files(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
             )
         )
     files = data["files"]
+    if (
+        data.get("workspace", {}).get("management_mode") == "overlay"
+        and not files["ownership_json"]["exists"]
+    ):
+        diagnostics.append(
+            Diagnostic(
+                "project.missing_ownership_marker",
+                "error",
+                "Overlay-managed project is missing its ArchMarshal ownership marker.",
+                ".agent/ownership.json",
+                "Review a create-only adoption plan before adding the ownership marker.",
+            )
+        )
+    ownership_path = root / ".agent" / "ownership.json"
+    if ownership_path.exists() and not valid_ownership_marker(ownership_path):
+        diagnostics.append(
+            Diagnostic(
+                "project.ownership_marker_invalid",
+                "error",
+                "ArchMarshal ownership marker is invalid or belongs to another root.",
+                ".agent/ownership.json",
+                "Preserve the file and review ownership explicitly; do not overwrite it.",
+            )
+        )
+    ownership_mode = ownership_skill_index_mode(ownership_path)
+    paths = data.get("paths") if isinstance(data.get("paths"), dict) else {}
+    skill_path_values = [
+        str(value).replace("\\", "/")
+        for key in (
+            "global_skills",
+            "functional_skills",
+            "common_project_skills",
+            "project_skills",
+            "generated_skills",
+        )
+        for value in (
+            paths.get(key)
+            if isinstance(paths.get(key), list)
+            else [paths.get(key)] if paths.get(key) else []
+        )
+    ]
+    overlay_enabled = data.get("workspace", {}).get("management_mode") == "overlay" or any(
+        value.startswith(".agent/skill-overlays/") for value in skill_path_values
+    )
+    if ownership_mode is not None and (
+        (overlay_enabled and ownership_mode != "required")
+        or (not overlay_enabled and ownership_mode != "disabled")
+    ):
+        diagnostics.append(
+            Diagnostic(
+                "project.ownership_index_mode_conflict",
+                "error",
+                "Ownership Skill-index mode conflicts with workspace Skill roots.",
+                ".agent/ownership.json#$.skill_index",
+                "Preserve both files and review ownership and routing before any sync.",
+            )
+        )
+    if ownership_mode == "required" and data.get("skill_index", {}).get("head") is None:
+        diagnostics.append(
+            Diagnostic(
+                "project.required_skill_index_missing",
+                "error",
+                "Ownership requires a Skill index, but its verified HEAD is missing.",
+                ".agent/skill-overlays/.archmarshal/HEAD",
+                "Do not rebuild history implicitly; restore or review the missing index state.",
+            )
+        )
     if not files["workspace_yaml"]["exists"]:
         diagnostics.append(
             Diagnostic(

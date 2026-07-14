@@ -38,7 +38,10 @@ It must not contain:
 
 ## Dynamic Skill Node Layer
 
-A skill node is a reusable capability with explicit metadata. Skill nodes can be enabled, disabled, archived, upgraded, tagged, and audited.
+A skill node is a reusable capability with explicit metadata. The model supports
+enabled, disabled, archived, upgraded, tagged, and audited states. The current
+CLI discovers, tracks, resolves, inspects history, and rolls metadata forward;
+a complete human accept/reject and state-editing workflow is still planned.
 
 ArchMarshal recognizes these skill kinds:
 
@@ -75,7 +78,29 @@ skill sources in common project-local roots and writes generated metadata under
 `.agent/skill-overlays/<kind>/`. Each overlay points at the original skill
 directory with `managed: false` and `mutation_policy: never`. Inventory resolves
 local scripts and references against the source directory while routing uses the
-overlay's tags and triggers.
+overlay's tags and triggers. Supported fields from an existing source
+`manifest.yaml` are imported into the overlay without editing the source. An
+invalid recognized value disables the generated metadata and marks it for
+review instead of guessing an active configuration.
+
+Adoption is a durable create-only transaction. Its reviewed plan digest binds
+the exact control-file bytes, source preconditions, backup scope, and proposed
+skill-index generation. After revalidation and backup verification, staged
+payloads plus a journal are published under `.agent/transactions/adoption/`
+before any visible target. An OS-lifetime lock serializes adoption, each target
+is exclusively created or verified as an exact match, the skill generation uses
+its own expected-HEAD protocol, and a transaction receipt is created last.
+Recovery only completes missing targets; a changed/replaced target, journal,
+backup, lock path, or index relationship stops without overwrite or deletion.
+Recovery apply is a second compare-and-swap: the active transaction id and plan
+digest must still equal the reviewed recovery preview while the lock is held.
+
+`ownership.json` is root-bound and declares whether the immutable Skill index is
+required. That declaration must agree with the workspace management mode and
+Skill roots. When required, a missing `HEAD` is an integrity failure: inventory
+quarantines all loose Skill metadata and adoption refuses to create a new root
+history implicitly. Repair transactions verify the complete current index even
+when their Skill plan is otherwise unchanged.
 
 After adoption, incremental sync is a small versioned module registry:
 
@@ -118,6 +143,13 @@ source skill manifest           session and learning records
 There is no automatic merge between the domains. A reserved-file collision is a
 hard stop.
 
+Readers also treat skill-index publication as a critical section. They block
+while the OS lock is held, verify the complete parent chain reachable from the
+captured `HEAD`, and reject a head/lock race. Once `HEAD` exists, loose overlay
+manifests not represented by that generation are quarantined rather than
+activated. Portable case/Unicode path aliases are rejected so the same source
+cannot acquire two identities on different filesystems.
+
 Workspace, registry, and skill manifest YAML files are parsed fail-soft. Invalid
 YAML becomes a structured lint diagnostic, and valid YAML is checked against the
 packaged JSON Schemas before downstream rules run.
@@ -149,6 +181,15 @@ Default explicit-only directories:
 - `.agent/history/`
 - `.agent/archive/`
 - `.agent/cache/`
+
+Date-organized closeout sessions use a commit-last protocol. Session files and
+selected script snapshots are exclusively created first; `COMMITTED.json` then
+binds every relative path, byte count, and SHA-256 hash. Interrupted directories
+are preserved for inspection but are not learning evidence. A later edit that
+breaks a declared hash likewise excludes the session from learning.
+This is an integrity check, not an authenticity signature: an actor able to
+rewrite both files and marker remains outside the alpha threat model. Legacy v1
+sessions are counted as unverified and are not silently accepted as v2 evidence.
 
 Historical artifacts can be promoted only through a lifecycle:
 
@@ -193,8 +234,11 @@ ArchMarshal operations should mature in this order:
 5. `resolve`: advise which skills and context modules fit a task.
 6. `checkpoint`: preserve compact state after context compression as a read-only candidate record.
 7. `closeout`: summarize used skills, preservation needs, and reproduction evidence after project work.
-8. `adopt --apply`: after preview and verified backup, create only missing management-overlay files.
-9. `end --level ... --apply`: append a new quick, standard, or reproducible session record.
+8. `adopt --expect-plan ... --apply`: after an exact reviewed preview and
+   verified backup, create only missing management-overlay files through a
+   recoverable transaction.
+9. `end --level ... --expect-plan ... --apply`: append and commit a new quick,
+   standard, or reproducible session record.
 10. `learn --apply`: append a bounded, review-only learning candidate pack.
 
 Mutation is capability-specific rather than a general `apply` engine. No command

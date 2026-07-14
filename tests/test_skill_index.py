@@ -24,6 +24,11 @@ from archmarshal.skill_index import (
 )
 
 
+def _apply_adoption(root: Path) -> dict[str, object]:
+    preview = plan_adoption(root)
+    return adopt_workspace(root, apply=True, expected_plan=preview["plan_digest"])
+
+
 def _discovered(root: Path, source: str, summary: str) -> dict[str, object]:
     safe_source = bool(source) and not source.startswith(("/", "..")) and "\\" not in source
     skill_hash = "a" * 64
@@ -203,19 +208,23 @@ def test_skill_index_verification_failure_rolls_back_head_while_locked(
     before = load_skill_index(root)["head"]
     pending = plan_skill_index(root, [_discovered(root, "skills/demo", "pending")])
     real_load = load_skill_index
+    real_internal_load = skill_index_module._load_skill_index
 
-    def reject_published_generation(project: Path) -> dict[str, object]:
+    def reject_published_generation(
+        project: Path, *, allow_locked: bool
+    ) -> dict[str, object]:
         raise ArchMarshalError(
             "skill_index_integrity_failed",
             "injected post-publication verification failure",
         )
 
     monkeypatch.setattr(
-        "archmarshal.skill_index.load_skill_index", reject_published_generation
+        "archmarshal.skill_index._load_skill_index", reject_published_generation
     )
     with pytest.raises(ArchMarshalError, match="injected post-publication"):
         commit_skill_index(root, pending)
 
+    monkeypatch.setattr(skill_index_module, "_load_skill_index", real_internal_load)
     assert real_load(root)["head"] == before
     assert (root / pending["object_path"]).exists()
     assert (root / ".agent/skill-overlays/.archmarshal/HEAD.lock").read_bytes() == b""
@@ -331,13 +340,13 @@ def test_adoption_keeps_immutable_history_for_modify_remove_restore(tmp_path: Pa
     root = tmp_path / "project"
     root.mkdir()
     skill = _source_skill(root)
-    adopted = adopt_workspace(root, apply=True)
+    adopted = _apply_adoption(root)
     first_head = adopted["skill_index_commit"]["head"]
     first_object = root / adopted["skill_index_commit"]["object_path"]
 
     (skill / "scripts" / "run.py").write_text("print('v2')\n", encoding="utf-8")
     modified_preview = plan_adoption(root)
-    modified = adopt_workspace(root, apply=True)
+    modified = _apply_adoption(root)
 
     assert {item["kind"] for item in modified_preview["skill_index"]["changes"]} == {"modified"}
     assert modified["skill_index_commit"]["head"] != first_head
@@ -347,7 +356,7 @@ def test_adoption_keeps_immutable_history_for_modify_remove_restore(tmp_path: Pa
 
     shutil.rmtree(skill)
     removed_preview = plan_adoption(root)
-    removed = adopt_workspace(root, apply=True)
+    removed = _apply_adoption(root)
 
     assert {item["kind"] for item in removed_preview["skill_index"]["changes"]} == {"removed"}
     assert removed["skill_index_commit"]["mode"] == "committed"
@@ -356,7 +365,7 @@ def test_adoption_keeps_immutable_history_for_modify_remove_restore(tmp_path: Pa
 
     _source_skill(root, script="v3")
     restored_preview = plan_adoption(root)
-    restored = adopt_workspace(root, apply=True)
+    restored = _apply_adoption(root)
 
     assert {item["kind"] for item in restored_preview["skill_index"]["changes"]} == {"restored"}
     assert restored["skill_index_commit"]["mode"] == "committed"
@@ -381,7 +390,7 @@ def test_skill_index_rollback_creates_audited_generation_without_source_mutation
 ) -> None:
     root = tmp_path / "project"
     root.mkdir()
-    initial = adopt_workspace(root, apply=True)
+    initial = _apply_adoption(root)
     target = initial["skill_index_commit"]["head"]
     skill = _source_skill(root)
     source_before = {
@@ -389,7 +398,7 @@ def test_skill_index_rollback_creates_audited_generation_without_source_mutation
         for path in skill.rglob("*")
         if path.is_file()
     }
-    synced = adopt_workspace(root, apply=True)
+    synced = _apply_adoption(root)
     expected_head = synced["skill_index_commit"]["head"]
 
     preview = rollback_skill_index(root, target, reason="hide newly added skill")
@@ -397,6 +406,7 @@ def test_skill_index_rollback_creates_audited_generation_without_source_mutation
         root,
         target,
         expected_head=expected_head,
+        expected_plan=preview["plan_digest"],
         reason="hide newly added skill",
         apply=True,
     )
@@ -434,10 +444,10 @@ def test_skill_index_rollback_blocks_source_package_mismatch(tmp_path: Path) -> 
     root = tmp_path / "project"
     root.mkdir()
     skill = _source_skill(root, script="v1")
-    initial = adopt_workspace(root, apply=True)
+    initial = _apply_adoption(root)
     target = initial["skill_index_commit"]["head"]
     (skill / "scripts/run.py").write_text("print('v2')\n", encoding="utf-8")
-    updated = adopt_workspace(root, apply=True)
+    updated = _apply_adoption(root)
     before = updated["skill_index_commit"]["head"]
 
     with pytest.raises(ArchMarshalError) as raised:
@@ -450,14 +460,23 @@ def test_skill_index_rollback_blocks_source_package_mismatch(tmp_path: Path) -> 
 def test_skill_index_rollback_requires_reviewed_expected_head(tmp_path: Path) -> None:
     root = tmp_path / "project"
     root.mkdir()
-    initial = adopt_workspace(root, apply=True)
+    initial = _apply_adoption(root)
     target = initial["skill_index_commit"]["head"]
     _source_skill(root)
-    synced = adopt_workspace(root, apply=True)
+    synced = _apply_adoption(root)
 
     with pytest.raises(ArchMarshalError) as missing_expectation:
         rollback_skill_index(root, target, apply=True)
     assert missing_expectation.value.code == "skill_index_expected_head_required"
+
+    with pytest.raises(ArchMarshalError) as missing_plan:
+        rollback_skill_index(
+            root,
+            target,
+            expected_head=synced["skill_index_commit"]["head"],
+            apply=True,
+        )
+    assert missing_plan.value.code == "skill_index_expected_plan_required"
 
     with pytest.raises(ArchMarshalError) as stale:
         rollback_skill_index(root, target, expected_head="a" * 64)
@@ -465,26 +484,52 @@ def test_skill_index_rollback_requires_reviewed_expected_head(tmp_path: Path) ->
     assert load_skill_index(root)["head"] == synced["skill_index_commit"]["head"]
 
 
+def test_skill_index_rollback_plan_binds_target_and_reason(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    oldest = commit_skill_index(root, plan_skill_index(root, []))["head"]
+    alpha = _discovered(root, "skills/alpha", "alpha")
+    middle = commit_skill_index(root, plan_skill_index(root, [alpha]))["head"]
+    beta = _discovered(root, "skills/beta", "beta")
+    current = commit_skill_index(root, plan_skill_index(root, [alpha, beta]))["head"]
+    reviewed = rollback_skill_index(root, oldest, reason="reviewed target")
+
+    with pytest.raises(ArchMarshalError) as raised:
+        rollback_skill_index(
+            root,
+            middle,
+            expected_head=current,
+            expected_plan=reviewed["plan_digest"],
+            reason="different target",
+            apply=True,
+        )
+
+    assert raised.value.code == "skill_index_stale_plan"
+    assert load_skill_index(root)["head"] == current
+
+
 def test_skill_index_rollback_backup_failure_leaves_head_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "project"
     root.mkdir()
-    initial = adopt_workspace(root, apply=True)
+    initial = _apply_adoption(root)
     target = initial["skill_index_commit"]["head"]
     _source_skill(root)
-    synced = adopt_workspace(root, apply=True)
+    synced = _apply_adoption(root)
     expected_head = synced["skill_index_commit"]["head"]
 
     def fail_backup(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise OSError("injected rollback backup failure")
 
     monkeypatch.setattr("archmarshal.skill_index.create_backup", fail_backup)
+    preview = rollback_skill_index(root, target)
     with pytest.raises(OSError, match="injected rollback backup failure"):
         rollback_skill_index(
             root,
             target,
             expected_head=expected_head,
+            expected_plan=preview["plan_digest"],
             apply=True,
         )
 
@@ -511,7 +556,7 @@ def test_skill_index_status_rejects_incorrect_transition_claim(tmp_path: Path) -
 def test_skill_index_status_reports_lock_without_guessing_staleness(tmp_path: Path) -> None:
     root = tmp_path / "project"
     root.mkdir()
-    adopt_workspace(root, apply=True)
+    _apply_adoption(root)
     lock = root / ".agent/skill-overlays/.archmarshal/HEAD.lock"
     lock.write_text(
         json.dumps(
@@ -548,6 +593,9 @@ def test_skill_index_os_lock_blocks_concurrent_writer(tmp_path: Path) -> None:
     )
     try:
         assert skill_index_status(root)["lock"]["state"] == "held"
+        with pytest.raises(ArchMarshalError) as reader_error:
+            load_skill_index(root)
+        assert reader_error.value.code == "skill_index_read_blocked"
         with pytest.raises(ArchMarshalError) as raised:
             commit_skill_index(root, pending)
         assert raised.value.code == "skill_index_locked"
@@ -671,6 +719,25 @@ def test_skill_index_status_rejects_missing_parent_object(tmp_path: Path) -> Non
         skill_index_status(root)
 
     assert raised.value.code == "skill_index_object_missing"
+    with pytest.raises(ArchMarshalError) as resolver_error:
+        resolve_workspace(root, "demo")
+    assert resolver_error.value.code == "skill_index_object_missing"
+
+
+def test_skill_index_rejects_portable_case_collisions(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+
+    with pytest.raises(ArchMarshalError) as raised:
+        plan_skill_index(
+            root,
+            [
+                _discovered(root, "skills/demo", "lowercase"),
+                _discovered(root, "skills/Demo", "uppercase"),
+            ],
+        )
+
+    assert raised.value.code == "skill_index_plan_invalid"
 
 
 def test_skill_index_rollback_rejects_non_ancestor_object(tmp_path: Path) -> None:
@@ -678,9 +745,9 @@ def test_skill_index_rollback_rejects_non_ancestor_object(tmp_path: Path) -> Non
     other = tmp_path / "other"
     root.mkdir()
     other.mkdir()
-    adopt_workspace(root, apply=True)
+    _apply_adoption(root)
     _source_skill(other)
-    other_adoption = adopt_workspace(other, apply=True)
+    other_adoption = _apply_adoption(other)
     target = other_adoption["skill_index_commit"]["head"]
     other_object = other / other_adoption["skill_index_commit"]["object_path"]
     local_object = root / other_adoption["skill_index_commit"]["object_path"]

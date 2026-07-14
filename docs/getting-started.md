@@ -20,14 +20,16 @@ archmarshal adopt . --tag research --pretty
 After reviewing the file list and conflicts, apply it:
 
 ```text
-archmarshal-start . --apply --tag research --pretty
+archmarshal-start . --apply --expect-plan <plan_digest> --tag research --pretty
 ```
 
 This creates a verified backup and then adds only missing control-plane files.
 Existing project files, `SKILL.md`, and source skill manifests are not changed.
 Skill routing metadata lives in `.agent/skill-overlays/`. Later syncs create
 immutable, content-addressed generations and atomically advance only
-ArchMarshal's internal `HEAD` after an exclusive lock and stale-plan check.
+ArchMarshal's internal `HEAD` after an exclusive lock and stale-plan check. The
+digest binds the write to the exact previewed file bytes and skill-index plan;
+missing or stale digests write nothing.
 
 For a project that is already managed, type:
 
@@ -39,16 +41,30 @@ ArchMarshal checks save paths, naming, memory/history rules, and then Codex can
 keep using it quietly while you give normal project instructions.
 
 If start reports a modified, removed, or restored skill, inspect the preview
-before adding `--apply`. A concurrent or stale preview is rejected. ArchMarshal
-does not edit, move, or delete the source skill during either preview or apply.
+before adding `--apply --expect-plan <plan_digest>`. A concurrent or stale
+preview is rejected. ArchMarshal does not edit, move, or delete the source skill
+during either preview or apply.
 Drifted skills are also excluded from resolver activation until this review is
 completed.
+
+An interrupted adoption is not rolled back by deleting visible paths. Inspect
+and safely finish it instead:
+
+```text
+archmarshal adoption-status . --pretty
+archmarshal adoption-recover . --pretty
+archmarshal adoption-recover . --expect-transaction <transaction_id> \
+  --expect-plan <plan_digest> --apply --pretty
+```
+
+Recovery is forward-only and create-only. Any target that no longer matches the
+prepared hash blocks recovery and is preserved exactly as found.
 
 Use `archmarshal skill-index-status . --pretty` to verify the full reachable
 generation chain and inspect the process-lock state. Metadata rollback is also
 preview-first: preview `skill-index-rollback --to <ancestor>`, then apply only
-with the exact `--expect-head` from that preview. It creates a new audited
-generation and does not restore source skill files.
+with the exact `--expect-head` and `--expect-plan` from that preview. It creates
+a new audited generation and does not restore source skill files.
 
 Then give normal instructions, for example:
 
@@ -67,19 +83,30 @@ checkpoints, notes, and history stay preserved.
 Choose one of three explicit depths:
 
 ```text
-archmarshal-end . --level quick --summary "Routine phase complete" --apply
+archmarshal-end . --level quick --summary "Routine phase complete"
+archmarshal-end . --level quick --summary "Routine phase complete" \
+  --expect-plan <plan_digest> --apply
 
 archmarshal-end . --level standard --summary "Release checked" \
-  --step "Run tests" --script scripts/check.py --apply
+  --step "Run tests" --script scripts/check.py
+# Review, then repeat with --expect-plan <plan_digest> --apply.
 
 archmarshal-end . --level reproducible --summary "Benchmark reproduced" \
   --step "Prepare inputs" --step "Run benchmark" \
-  --script scripts/benchmark.py --command "python scripts/benchmark.py" --apply
+  --script scripts/benchmark.py --command "python scripts/benchmark.py"
+# Review, then repeat with --expect-plan <plan_digest> --apply.
 ```
 
-The commands preview unless `--apply` is present. Applied records go into a new
-date-organized history directory. Reproducible mode snapshots key scripts and
-does not claim readiness while required evidence is missing.
+The commands preview unless both `--apply` and the exact `--expect-plan` are
+present. Applied records go into a new date-organized history directory and are
+trusted by learning only after a final `COMMITTED.json` verifies every declared
+file. Reproducible mode snapshots key scripts and does not claim readiness while
+required evidence is missing; even a ready record is reference-only until its
+commands are actually validated by a future execution feature.
+
+Existing v1 closeouts have no commit marker. Learning reports them through
+`legacy_unverified_session_count` but does not trust them automatically; an
+explicit migration workflow is still planned.
 
 After repeated sessions, create a review-only learning pack:
 

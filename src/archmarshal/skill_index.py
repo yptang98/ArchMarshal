@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import socket
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -17,6 +18,7 @@ else:
 from .errors import ArchMarshalError, require_workspace_root
 from .safety import (
     create_backup,
+    create_bytes_exclusive,
     ensure_managed_path,
     fingerprint_directory,
     is_link_or_reparse,
@@ -36,12 +38,21 @@ MAX_HISTORY_GENERATIONS = 10_000
 MAX_HISTORY_BYTES = 256 * 1024 * 1024
 MAX_LOCK_BYTES = 16 * 1024
 MAX_ROLLBACK_REASON_LENGTH = 500
+WINDOWS_RESERVED_SOURCE_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *{f"COM{index}" for index in range(1, 10)},
+    *{f"LPT{index}" for index in range(1, 10)},
+}
 
 
 class _HeldLock(NamedTuple):
     path: Path
     handle: BinaryIO
     token: str
+    identity: tuple[int, int]
 
 
 def plan_skill_index(
@@ -63,6 +74,7 @@ def plan_skill_index(
             details={"limit": MAX_INDEX_SKILLS, "actual": len(discovered_skills)},
         )
     current_records: dict[str, dict[str, Any]] = {}
+    current_source_keys: set[str] = set()
     for skill in discovered_skills:
         source = skill.get("source")
         manifest = skill.get("manifest")
@@ -78,10 +90,11 @@ def plan_skill_index(
                 "Skill index planning requires a manifest mapping for every skill.",
                 details={"source": source},
             )
-        if source in current_records:
+        source_key = _portable_source_key(source)
+        if source_key in current_source_keys:
             raise ArchMarshalError(
                 "skill_index_plan_invalid",
-                "Skill index planning received duplicate source paths.",
+                "Skill index planning received duplicate portable source paths.",
                 details={"source": source},
             )
         current_records[source] = {
@@ -89,6 +102,7 @@ def plan_skill_index(
             "state": "active",
             "manifest": _plain_manifest(manifest),
         }
+        current_source_keys.add(source_key)
 
     records: list[dict[str, Any]] = []
     changes: list[dict[str, str]] = []
@@ -196,6 +210,7 @@ def commit_skill_index(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
     temporary_head = state_root / f".{HEAD_NAME}.{token}.tmp"
     published = False
     try:
+        _verify_held_lock(held_lock)
         actual_head = _read_head(root)
         if actual_head != expected_head:
             raise ArchMarshalError(
@@ -225,6 +240,7 @@ def commit_skill_index(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
         _fsync_directory_chain(object_path.parent, state_root)
 
         _write_exclusive_bytes(temporary_head, f"{digest}\n".encode("ascii"))
+        _verify_held_lock(held_lock)
         actual_head = _read_head(root)
         if actual_head != expected_head:
             raise ArchMarshalError(
@@ -234,13 +250,15 @@ def commit_skill_index(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
             )
         os.replace(temporary_head, state_root / HEAD_NAME)
         published = True
+        _verify_held_lock(held_lock)
         _fsync_directory(state_root)
-        verified = load_skill_index(root)
+        verified = _load_skill_index(root, allow_locked=True)
         if verified["head"] != digest:
             raise ArchMarshalError(
                 "skill_index_commit_failed",
                 "Skill index HEAD did not verify after commit.",
             )
+        _verify_held_lock(held_lock)
     except BaseException:
         if published:
             try:
@@ -264,20 +282,43 @@ def commit_skill_index(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_skill_index(root: Path) -> dict[str, Any]:
+    return _load_skill_index(root, allow_locked=False)
+
+
+def _load_skill_index(root: Path, *, allow_locked: bool) -> dict[str, Any]:
     root = root.resolve()
     state_root = root / STATE_RELATIVE
     ensure_managed_path(root, state_root, purpose="Skill index state directory")
+    if not allow_locked and _skill_index_lock_status(root).get("state") == "held":
+        raise ArchMarshalError(
+            "skill_index_read_blocked",
+            "Skill index publication is in progress; activation is blocked until it completes.",
+        )
     head = _read_head(root)
     if head is None:
         return {"format": FORMAT, "head": None, "generation": None, "object_path": None}
-    generation = _load_generation_object(root, head)
+    # Runtime consumers must fail closed when any reachable generation is
+    # missing or semantically invalid.  Verifying only HEAD would allow the
+    # resolver to activate skills after their audit chain had been truncated.
+    chain = _load_history_chain(root, head)
+    generation = chain[0]["generation"]
     object_relative = _relative_object_path(head)
-    return {
+    loaded = {
         "format": FORMAT,
         "head": head,
         "generation": generation,
         "object_path": object_relative.as_posix(),
     }
+    if not allow_locked:
+        lock_state = _skill_index_lock_status(root).get("state")
+        current_head = _read_head(root)
+        if lock_state == "held" or current_head != head:
+            raise ArchMarshalError(
+                "skill_index_read_race",
+                "Skill index changed while it was being verified; activation was blocked.",
+                details={"observed_head": head, "current_head": current_head},
+            )
+    return loaded
 
 
 def _load_generation_object(root: Path, digest: str) -> dict[str, Any]:
@@ -370,6 +411,23 @@ def skill_index_status(
             "skill_index_history_limit_invalid",
             "Skill index history limit must be between 1 and 100.",
         )
+    lock_status = _skill_index_lock_status(root_path)
+    if lock_status.get("state") == "held":
+        return {
+            "tool": "archmarshal",
+            "stage": "skill_index_status",
+            "mode": "read_only",
+            "root": str(root_path),
+            "head": None,
+            "object_path": None,
+            "chain_status": "publication_in_progress",
+            "history": [],
+            "history_limit": history_limit,
+            "history_from": history_from,
+            "continuation": None,
+            "lock": lock_status,
+            "source_mutation": False,
+        }
     loaded = load_skill_index(root_path)
     history: list[dict[str, Any]] = []
     continuation = None
@@ -513,6 +571,7 @@ def rollback_skill_index(
     target: str,
     *,
     expected_head: str | None = None,
+    expected_plan: str | None = None,
     reason: str = "",
     apply: bool = False,
 ) -> dict[str, Any]:
@@ -523,6 +582,7 @@ def rollback_skill_index(
         expected_head=expected_head,
         reason=reason,
     )
+    plan_digest = _rollback_plan_digest(root_path, plan)
     payload = {
         "tool": "archmarshal",
         "stage": "skill_index_rollback",
@@ -531,6 +591,8 @@ def rollback_skill_index(
         "expected_head": plan["expected_head"],
         "target": target,
         "proposed_head": plan["digest"],
+        "plan_digest": plan_digest,
+        "apply_precondition": "--expect-head <head> --expect-plan <plan_digest>",
         "object_path": plan["object_path"].as_posix(),
         "changes": plan["changes"],
         "reason": reason.strip(),
@@ -547,6 +609,17 @@ def rollback_skill_index(
         raise ArchMarshalError(
             "skill_index_expected_head_required",
             "Applied rollback requires --expect-head from a reviewed preview.",
+        )
+    if expected_plan is None:
+        raise ArchMarshalError(
+            "skill_index_expected_plan_required",
+            "Applied rollback requires --expect-plan from the reviewed preview.",
+        )
+    if expected_plan != plan_digest:
+        raise ArchMarshalError(
+            "skill_index_stale_plan",
+            "Skill rollback target, reason, or source preconditions differ from the reviewed plan.",
+            details={"expected_plan": expected_plan, "actual_plan": plan_digest},
         )
     backup_dir = root_path / ".agent" / "backups"
     ensure_managed_path(root_path, backup_dir, purpose="Skill rollback backup directory")
@@ -580,6 +653,28 @@ def rollback_skill_index(
     payload["backup"] = backup
     payload["commit"] = commit
     return payload
+
+
+def _rollback_plan_digest(root: Path, plan: dict[str, Any]) -> str:
+    generation = plan.get("generation") if isinstance(plan.get("generation"), dict) else {}
+    intent = {
+        "format": "archmarshal-skill-index-rollback-plan-v1",
+        "root": str(root.resolve()),
+        "expected_head": plan.get("expected_head"),
+        "target": plan.get("rollback_target"),
+        "reason": plan.get("rollback_reason"),
+        "skills": generation.get("skills") or [],
+        "changes": plan.get("changes") or [],
+        "source_precondition_policy": plan.get("source_precondition_policy"),
+        "source_preconditions": plan.get("source_preconditions") or [],
+    }
+    canonical = json.dumps(
+        intent,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _load_history_chain(root: Path, head: str) -> list[dict[str, Any]]:
@@ -969,10 +1064,11 @@ def _validate_generation(generation: object, head: str) -> None:
                 "Skill index generation contains an unsafe source path.",
                 details={"source": source},
             )
-        if source in seen:
+        source_key = _portable_source_key(source)
+        if source_key in seen:
             raise ArchMarshalError(
                 "skill_index_integrity_failed",
-                "Skill index generation contains duplicate source paths.",
+                "Skill index generation contains duplicate portable source paths.",
                 details={"source": source},
             )
         source_metadata = record["manifest"].get("source")
@@ -996,7 +1092,7 @@ def _validate_generation(generation: object, head: str) -> None:
                 "Skill index manifest source metadata does not match its record path.",
                 details={"source": source},
             )
-        seen.add(source)
+        seen.add(source_key)
 
 
 def _source_preconditions(
@@ -1058,10 +1154,11 @@ def _validate_source_preconditions(
         source = item.get("source")
         state = item.get("state")
         package_hash = item.get("package_sha256")
+        source_key = _portable_source_key(source) if isinstance(source, str) else ""
         if (
             not isinstance(source, str)
             or not _is_safe_source(source)
-            or source in seen
+            or source_key in seen
             or state not in {"active", "absent"}
             or (state == "active" and (not isinstance(package_hash, str) or not _is_sha256(package_hash)))
             or (state == "absent" and package_hash is not None)
@@ -1075,7 +1172,7 @@ def _validate_source_preconditions(
         if state == "active":
             normalized_item["package_sha256"] = str(package_hash)
         normalized.append(normalized_item)
-        seen.add(source)
+        seen.add(source_key)
     if normalized != expected:
         raise ArchMarshalError(
             "skill_index_plan_invalid",
@@ -1149,7 +1246,15 @@ def _acquire_lock(
             "proposed_head": proposed_head,
         }
         _write_lock_metadata(handle, metadata)
-        return _HeldLock(lock_path, handle, token)
+        handle_metadata = os.fstat(handle.fileno())
+        held = _HeldLock(
+            lock_path,
+            handle,
+            token,
+            (handle_metadata.st_dev, handle_metadata.st_ino),
+        )
+        _verify_held_lock(held)
+        return held
     except BaseException:
         try:
             _unlock_os_lock(handle)
@@ -1176,6 +1281,25 @@ def _release_lock(held: _HeldLock) -> None:
             _unlock_os_lock(handle)
         finally:
             handle.close()
+
+
+def _verify_held_lock(held: _HeldLock) -> None:
+    try:
+        metadata = held.path.lstat()
+    except OSError as exc:
+        raise ArchMarshalError(
+            "skill_index_lock_replaced",
+            "Skill index lock path disappeared while held; publication stopped.",
+        ) from exc
+    if (
+        is_link_or_reparse(held.path)
+        or metadata.st_nlink < 1
+        or (metadata.st_dev, metadata.st_ino) != held.identity
+    ):
+        raise ArchMarshalError(
+            "skill_index_lock_replaced",
+            "Skill index lock path was replaced while held; publication stopped.",
+        )
 
 
 def _try_os_lock(handle: BinaryIO) -> bool:
@@ -1342,15 +1466,7 @@ def _restore_head(
 
 
 def _write_exclusive_bytes(path: Path, content: bytes) -> None:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-    except BaseException:
-        path.unlink(missing_ok=True)
-        raise
+    create_bytes_exclusive(path, content)
 
 
 def _fsync_directory(path: Path) -> None:
@@ -1410,12 +1526,25 @@ def _is_safe_source(value: str) -> bool:
     if value == ".":
         return True
     path = PurePosixPath(value)
+    invalid_component = any(
+        not part
+        or part.endswith((" ", "."))
+        or any(character in part for character in '<>:"|?*')
+        or any(ord(character) < 32 for character in part)
+        or part.split(".", 1)[0].upper() in WINDOWS_RESERVED_SOURCE_NAMES
+        for part in path.parts
+    )
     return (
         not path.is_absolute()
         and ".." not in path.parts
         and "." not in path.parts
+        and not invalid_component
         and path.as_posix() == value
     )
+
+
+def _portable_source_key(value: str) -> str:
+    return unicodedata.normalize("NFC", value).casefold()
 
 
 __all__ = [

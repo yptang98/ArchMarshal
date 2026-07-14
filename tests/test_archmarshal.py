@@ -25,6 +25,32 @@ from archmarshal.session import record_closeout
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _apply_adoption(
+    root: Path,
+    *,
+    tags: list[str] | None = None,
+    backup_scope: str = "managed",
+) -> dict[str, object]:
+    preview = plan_adoption(root, tags=tags, backup_scope=backup_scope)
+    return adopt_workspace(
+        root,
+        apply=True,
+        tags=tags,
+        backup_scope=backup_scope,
+        expected_plan=preview["plan_digest"],
+    )
+
+
+def _apply_closeout(root: Path, **kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+    preview = record_closeout(root, apply=False, **kwargs)
+    return record_closeout(
+        root,
+        apply=True,
+        expected_plan=preview["plan_digest"],
+        **kwargs,
+    )
+
+
 def copy_example(tmp_path: Path, name: str) -> Path:
     target = tmp_path / name
     shutil.copytree(REPO_ROOT / "examples" / name, target)
@@ -683,7 +709,7 @@ def test_adoption_preview_is_read_only_and_apply_uses_skill_overlays(tmp_path: P
     assert preview["mode"] == "propose_only"
     assert preview["discovered_skills"][0]["source_will_change"] is False
 
-    applied = adopt_workspace(root, apply=True, tags=["release", "python"])
+    applied = _apply_adoption(root, tags=["release", "python"])
 
     assert applied["mode"] == "overlay_applied"
     assert applied["backup"]["verified"] is True
@@ -707,7 +733,7 @@ def test_adoption_never_overwrites_conflicting_control_files(tmp_path: Path) -> 
     workspace.write_text("owned_by: another-tool\n", encoding="utf-8")
     original = workspace.read_text(encoding="utf-8")
 
-    result = adopt_workspace(root, apply=True)
+    result = _apply_adoption(root)
 
     assert result["mode"] == "blocked"
     assert ".agent/workspace.yaml" in result["conflicts"]
@@ -720,7 +746,7 @@ def test_skill_overlay_cannot_escape_project_root(tmp_path: Path) -> None:
     skill_dir = root / "skills" / "demo"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("# Demo\n", encoding="utf-8")
-    result = adopt_workspace(root, apply=True)
+    result = _apply_adoption(root)
     overlay = root / result["discovered_skills"][0]["overlay_manifest"]
     payload = yaml.safe_load(overlay.read_text(encoding="utf-8"))
     payload["source"]["skill_dir"] = "../../outside"
@@ -750,10 +776,9 @@ def test_reproducible_closeout_is_append_only_and_snapshots_scripts(tmp_path: Pa
     assert preview["reproducibility_ready"] is True
     assert not (root / preview["session_dir"]).exists()
 
-    applied = record_closeout(
+    applied = _apply_closeout(
         root,
         level="reproducible",
-        apply=True,
         summary="Validated the release flow.",
         steps=["Run the validation script.", "Review the output."],
         scripts=["run_demo.py"],
@@ -807,10 +832,9 @@ def test_reproducible_closeout_blocks_inline_secrets(tmp_path: Path) -> None:
 def test_learning_creates_review_only_candidates_from_repeated_sessions(tmp_path: Path) -> None:
     root = copy_example(tmp_path, "simple-project")
     for index in range(2):
-        record_closeout(
+        _apply_closeout(
             root,
             level="standard",
-            apply=True,
             summary=f"Documentation pass {index}",
             steps=["Summarize documentation."],
             scripts=["src/README.md"],
@@ -835,8 +859,8 @@ def test_catalog_sorts_and_filters_projects_by_date_and_tags(tmp_path: Path) -> 
     second = tmp_path / "second"
     first.mkdir()
     second.mkdir()
-    adopt_workspace(first, apply=True, tags=["vision", "python"])
-    adopt_workspace(second, apply=True, tags=["nlp", "python"])
+    _apply_adoption(first, tags=["vision", "python"])
+    _apply_adoption(second, tags=["nlp", "python"])
     first_workspace = first / ".agent" / "workspace.yaml"
     second_workspace = second / ".agent" / "workspace.yaml"
     first_payload = yaml.safe_load(first_workspace.read_text(encoding="utf-8"))

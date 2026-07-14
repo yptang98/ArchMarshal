@@ -5,9 +5,15 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .adoption import ownership_skill_index_mode
 from .errors import ArchMarshalError, require_workspace_root
 from .io import list_files, load_yaml_safe, rel
-from .safety import files_below_no_links, fingerprint_directory, sha256_file
+from .safety import (
+    ensure_managed_path,
+    files_below_no_links,
+    fingerprint_directory,
+    sha256_file,
+)
 from .skill_index import load_skill_index, skill_index_summary
 
 DEFAULT_PATHS = {
@@ -47,6 +53,7 @@ DEFAULT_NAMING = {
 
 HISTORICAL_PATH_KEYS = {"reports", "history", "archive", "cache"}
 RESERVED_AGENT_FILES = {
+    ".agent/ownership.json",
     ".agent/workspace.yaml",
     ".agent/INDEX.md",
     ".agent/registry.yaml",
@@ -183,6 +190,7 @@ def _path_entries(
 def _file_status(root: Path) -> dict[str, dict[str, Any]]:
     expected = {
         "agents_md": root / "AGENTS.md",
+        "ownership_json": root / ".agent" / "ownership.json",
         "workspace_yaml": root / ".agent" / "workspace.yaml",
         "index_md": root / ".agent" / "INDEX.md",
         "registry_yaml": root / ".agent" / "registry.yaml",
@@ -296,20 +304,31 @@ def _finalize_skill_manifest(
     overlay_label: str | None,
 ) -> dict[str, Any]:
     skill_dir = default_skill_dir
+    source_safe = True
     source = manifest.get("source") if isinstance(manifest, dict) else None
     source_dir = source.get("skill_dir") if isinstance(source, dict) else None
     if isinstance(source_dir, str) and source_dir.strip():
-        candidate = (root / source_dir).resolve()
         try:
-            candidate.relative_to(root.resolve())
-        except ValueError:
-            manifest["_source_error"] = "Overlay source escapes the workspace root."
+            lexical_candidate = root / source_dir
+            candidate = ensure_managed_path(
+                root,
+                lexical_candidate,
+                purpose="Overlay skill source",
+            )
+        except ArchMarshalError as exc:
+            source_safe = False
+            skill_dir = root / source_dir
+            manifest["_source_error"] = exc.message
         else:
             skill_dir = candidate
             manifest["_overlay_manifest_path"] = overlay_label or manifest_label
     manifest["_manifest_path"] = manifest_label
-    manifest["_skill_dir"] = rel(skill_dir, root)
-    manifest["_has_skill_md"] = (skill_dir / "SKILL.md").exists()
+    manifest["_skill_dir"] = (
+        Path(source_dir).as_posix()
+        if not source_safe and isinstance(source_dir, str)
+        else rel(skill_dir, root)
+    )
+    manifest["_has_skill_md"] = source_safe and (skill_dir / "SKILL.md").exists()
     if manifest["_has_skill_md"]:
         current_hash = sha256_file(skill_dir / "SKILL.md")
         manifest["_current_skill_sha256"] = current_hash
@@ -365,6 +384,8 @@ def _find_skills(
     root: Path,
     entries: dict[str, list[Path]],
     loaded_skill_index: dict[str, Any],
+    *,
+    index_required: bool,
 ) -> list[dict[str, Any]]:
     skill_roots = (
         entries.get("global_skills", [])
@@ -391,14 +412,23 @@ def _find_skills(
                 }
     records = (loaded_skill_index.get("generation") or {}).get("skills", [])
     indexed_sources = {str(record["source"]) for record in records}
-    skills = [
-        manifest
-        for manifest in manifests.values()
-        if not (
-            isinstance(manifest.get("source"), dict)
-            and str(manifest["source"].get("skill_dir") or "") in indexed_sources
+    skills: list[dict[str, Any]] = []
+    indexed_mode = index_required or loaded_skill_index.get("head") is not None or any(
+        _is_indexed_overlay_root(root, path) for path in skill_roots
+    )
+    for manifest in manifests.values():
+        source = manifest.get("source")
+        source_path = (
+            str(source.get("skill_dir") or "") if isinstance(source, dict) else ""
         )
-    ]
+        if source_path in indexed_sources:
+            continue
+        candidate = dict(manifest)
+        if indexed_mode:
+            # Once an immutable index exists, a loose manifest is evidence to
+            # review, not an activation path around the verified HEAD.
+            candidate["_index_state"] = "untracked"
+        skills.append(candidate)
     object_path = str(loaded_skill_index.get("object_path") or "")
     skills.extend(
         _load_virtual_skill(record, root=root, object_path=object_path, index=index)
@@ -406,6 +436,14 @@ def _find_skills(
         if record.get("state") == "active"
     )
     return sorted(skills, key=lambda item: item.get("_skill_dir", ""))
+
+
+def _is_indexed_overlay_root(root: Path, path: Path) -> bool:
+    try:
+        relative = path.absolute().relative_to(root)
+    except ValueError:
+        return False
+    return relative.as_posix().startswith(".agent/skill-overlays/")
 
 
 def _load_context_module(module_path: Path, root: Path) -> dict[str, Any]:
@@ -527,7 +565,15 @@ def collect_inventory(root: Path | str) -> WorkspaceInventory:
         files=_file_status(resolved_root),
         directories=_directory_status(resolved_root, entries),
         artifacts=artifacts,
-        skills=_find_skills(resolved_root, entries, loaded_skill_index),
+        skills=_find_skills(
+            resolved_root,
+            entries,
+            loaded_skill_index,
+            index_required=(
+                ownership_skill_index_mode(agent_root / "ownership.json") == "required"
+                or workspace.get("management_mode") == "overlay"
+            ),
+        ),
         context_modules=_find_context_modules(resolved_root, entries),
         memory_stores=memory_stores,
         memory_records=memory_records,

@@ -3,21 +3,41 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .adoption_tx import adoption_transaction_status
 from .inventory import collect_inventory
 
 HISTORICAL_KEYS = ["reports", "history", "archive", "cache"]
 
 
 def resolve_workspace(root: Path | str, task: str) -> dict[str, Any]:
+    transaction_before = adoption_transaction_status(root)
     inventory = collect_inventory(root)
+    transaction_after = adoption_transaction_status(root)
     task_text = task.lower()
+    transaction_incomplete = (
+        transaction_before.get("state") != "none"
+        or transaction_after.get("state") != "none"
+    )
+    transaction = (
+        transaction_after
+        if transaction_after.get("state") != "none"
+        else transaction_before
+    )
     return {
         "tool": "archmarshal",
         "root": str(inventory.root),
         "task": task,
-        "required_policy_skills": _required_policy_skills(inventory.skills),
-        "suggested_skills": _match_skills(inventory.skills, task_text),
-        "blocked_skills": _blocked_skills(inventory.skills),
+        "required_policy_skills": (
+            [] if transaction_incomplete else _required_policy_skills(inventory.skills)
+        ),
+        "suggested_skills": [] if transaction_incomplete else _match_skills(inventory.skills, task_text),
+        "blocked_skills": _blocked_skills(
+            inventory.skills,
+            override_reason="adoption_transaction_incomplete"
+            if transaction_incomplete
+            else None,
+        ),
+        "adoption_transaction": transaction,
         "suggested_context_modules": _match_context_modules(inventory.context_modules, task_text),
         "suggested_memory_records": _match_memory_records(inventory.memory_records, task_text),
         "memory_budget": {
@@ -108,10 +128,14 @@ def _required_policy_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]
     return sorted(required, key=lambda item: str(item["id"]))
 
 
-def _blocked_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _blocked_skills(
+    skills: list[dict[str, Any]],
+    *,
+    override_reason: str | None = None,
+) -> list[dict[str, Any]]:
     blocked: list[dict[str, Any]] = []
     for skill in skills:
-        reason = _skill_activation_block_reason(skill)
+        reason = override_reason or _skill_activation_block_reason(skill)
         if reason is None:
             continue
         blocked.append(
@@ -129,6 +153,15 @@ def _blocked_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _skill_activation_block_reason(skill: dict[str, Any]) -> str | None:
+    if skill.get("_index_state") == "untracked":
+        return "index_untracked"
+    if skill.get("review_state") == "needs_review":
+        return "metadata_needs_review"
+    status = skill.get("status")
+    if status not in {"active", "experimental"}:
+        return f"status_{status or 'unknown'}"
+    if skill.get("_source_error"):
+        return "source_unsafe"
     if skill.get("_has_skill_md") is False:
         return "source_missing"
     drift = skill.get("_source_drift")

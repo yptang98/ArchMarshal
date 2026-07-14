@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import subprocess
 from datetime import datetime, timezone
@@ -9,20 +10,20 @@ from typing import Any
 
 import yaml
 
+from .adoption_tx import adoption_transaction_status, apply_adoption_transaction
 from .errors import ArchMarshalError, require_workspace_root
 from .io import load_yaml_safe
 from .safety import (
     create_backup,
-    create_text_exclusive,
     ensure_managed_path,
     ensure_path_within,
     files_below_no_links,
     files_for_full_backup,
     fingerprint_directory,
+    is_link_or_reparse,
     sha256_file,
 )
 from .skill_index import (
-    commit_skill_index,
     disabled_skill_index_plan,
     plan_skill_index,
     public_skill_index_plan,
@@ -34,29 +35,24 @@ SKILL_ROOT_CANDIDATES = (
     ".claude/skills",
     "skills",
 )
-MANAGED_DIRECTORIES = (
-    ".agent/archive",
-    ".agent/backups",
-    ".agent/cache",
-    ".agent/context-modules",
-    ".agent/history",
-    ".agent/inbox",
-    ".agent/knowledge",
-    ".agent/plans",
-    ".agent/reports",
-    ".agent/skill-overlays/global",
-    ".agent/skill-overlays/functional",
-    ".agent/skill-overlays/common-project",
-    ".agent/skill-overlays/project",
-    ".agent/skill-overlays/generated",
-)
 RESERVED_FILES = (
     "AGENTS.md",
+    ".agent/ownership.json",
     ".agent/workspace.yaml",
     ".agent/INDEX.md",
     ".agent/registry.yaml",
     ".agent/memory-stores.yaml",
     ".agent/memory-records.yaml",
+)
+MANAGED_PLACEHOLDERS = (
+    ".agent/archive/.gitkeep",
+    ".agent/cache/.gitkeep",
+    ".agent/context-modules/.gitkeep",
+    ".agent/history/.gitkeep",
+    ".agent/inbox/.gitkeep",
+    ".agent/knowledge/.gitkeep",
+    ".agent/plans/.gitkeep",
+    ".agent/reports/.gitkeep",
 )
 
 
@@ -77,6 +73,7 @@ def adopt_workspace(
     apply: bool = False,
     tags: list[str] | None = None,
     backup_scope: str = "managed",
+    expected_plan: str | None = None,
 ) -> dict[str, Any]:
     root_path = require_workspace_root(root)
     built = _build_adoption(root_path, tags or [], backup_scope)
@@ -92,6 +89,23 @@ def adopt_workspace(
         payload["backup"] = None
         return payload
 
+    plan_digest = _adoption_plan_digest(built)
+    if expected_plan is None:
+        payload = _public_plan(built, applied=False)
+        payload["mode"] = "review_required"
+        payload["notes"].append(
+            "Apply requires expected_plan from this exact preview; no managed files were written."
+        )
+        return payload
+    if expected_plan != plan_digest:
+        payload = _public_plan(built, applied=False)
+        payload["mode"] = "blocked"
+        payload["conflicts"] = sorted(set(payload["conflicts"] + ["plan_digest_changed"]))
+        payload["expected_plan"] = expected_plan
+        payload["actual_plan"] = plan_digest
+        payload["notes"].append("The reviewed adoption plan no longer matches current state.")
+        return payload
+
     for target in built["writes"]:
         if target.exists():
             payload = _public_plan(built, applied=False)
@@ -103,7 +117,6 @@ def adopt_workspace(
             return payload
 
     backup_dir = root_path / ".agent" / "backups"
-    backup_dir.mkdir(parents=True, exist_ok=True)
     backup = create_backup(
         root_path,
         built["backup_files"],
@@ -111,55 +124,47 @@ def adopt_workspace(
         reason="ArchMarshal adoption before adding a non-destructive management overlay.",
     )
 
-    created: list[Path] = []
-    created_directories: list[Path] = []
-    index_commit: dict[str, Any] | None = None
-    try:
-        for relative in MANAGED_DIRECTORIES:
-            directory = root_path / relative
-            if not directory.exists():
-                directory.mkdir(parents=True, exist_ok=False)
-                created_directories.append(directory)
-        for target, content in built["writes"].items():
-            create_text_exclusive(target, content)
-            created.append(target)
-        if built["skill_index_plan"]["changed"]:
-            revalidated = plan_skill_index(
-                root_path,
-                _discover_skills(root_path),
-                created_at=built["skill_index_plan"]["generation"]["created_at"],
-            )
-            if (
-                revalidated.get("expected_head")
-                != built["skill_index_plan"].get("expected_head")
-                or revalidated.get("digest") != built["skill_index_plan"].get("digest")
-            ):
-                raise ArchMarshalError(
-                    "skill_index_stale_plan",
-                    "Skill sources or HEAD changed after planning; the sync was not committed.",
-                )
-            index_commit = commit_skill_index(root_path, revalidated)
-    except BaseException:
-        for target in reversed(created):
-            target.unlink(missing_ok=True)
-        for directory in reversed(created_directories):
-            try:
-                directory.rmdir()
-            except OSError:
-                pass
-        raise
+    revalidated = (
+        disabled_skill_index_plan()
+        if built["skill_index_plan"].get("disabled")
+        else plan_skill_index(
+            root_path,
+            _discover_skills(root_path),
+            created_at=(built["skill_index_plan"].get("generation") or {}).get(
+                "created_at"
+            ),
+        )
+    )
+    if _logical_skill_plan(revalidated) != _logical_skill_plan(built["skill_index_plan"]):
+        raise ArchMarshalError(
+            "skill_index_stale_plan",
+            "Skill sources or HEAD changed after backup; no adoption targets were published.",
+        )
+    transaction = apply_adoption_transaction(
+        root_path,
+        plan_digest=plan_digest,
+        writes={
+            target.relative_to(root_path).as_posix(): content.encode("utf-8")
+            for target, content in built["writes"].items()
+        },
+        skill_index_plan=revalidated,
+        backup=backup,
+    )
 
     payload = _public_plan(built, applied=True)
     payload["mode"] = "overlay_synced" if built["configured"] else "overlay_applied"
     payload["backup"] = backup
-    payload["skill_index_commit"] = index_commit
-    payload["created"] = [path.relative_to(root_path).as_posix() for path in created]
+    payload["transaction"] = transaction
+    payload["skill_index_commit"] = transaction["skill_index_commit"]
+    payload["created"] = transaction["created"]
     payload["safety_guarantees"] = [
         "No existing user-owned file was overwritten.",
         "No existing skill or project file was moved, renamed, or deleted.",
         "Skill metadata was written only under .agent/skill-overlays.",
         "The pre-adoption snapshot was verified before managed files were created.",
         "Skill generations are immutable; only the internal HEAD pointer is atomically updated.",
+        "Multi-file adoption is recoverable from a durable create-only transaction journal.",
+        "Published transaction files are never automatically deleted during recovery.",
     ]
     return payload
 
@@ -174,6 +179,7 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
     ensure_managed_path(root, root / ".agent", purpose="ArchMarshal control directory")
     configured = _is_archmarshal_workspace(workspace_file)
     overlay_enabled = _workspace_uses_overlays(workspace_file) if configured else True
+    transaction_status = adoption_transaction_status(root)
     reserved_conflicts = [
         relative
         for relative in RESERVED_FILES[1:]
@@ -191,35 +197,52 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
     legacy_review_required = skill_index_plan.get("expected_head") is None and any(
         skill["source_drift"] not in {"new", "unchanged"} for skill in skills
     )
-    review_required = indexed_review_required or legacy_review_required
+    overlay_conflicts = [
+        skill["overlay_manifest"]
+        for skill in skills
+        if not configured
+        and (root / skill["overlay_manifest"]).exists()
+        and skill["source_drift"] != "unchanged"
+    ]
+    reserved_conflicts.extend(overlay_conflicts)
+    transaction_active = transaction_status.get("state") != "none"
+    review_required = indexed_review_required or legacy_review_required or transaction_active
     normalized_tags = _normalize_tags(tags) or ["archmarshal"]
     writes: dict[Path, str] = {}
 
     if not workspace_file.exists():
         writes[workspace_file] = _workspace_yaml(root, normalized_tags, now)
-        index = root / ".agent" / "INDEX.md"
-        registry = root / ".agent" / "registry.yaml"
-        memory_stores = root / ".agent" / "memory-stores.yaml"
-        memory_records = root / ".agent" / "memory-records.yaml"
-        backup_ignore = root / ".agent" / "backups" / ".gitignore"
-        if not index.exists():
-            writes[index] = _index_markdown(root, skills, normalized_tags, now)
-        if not registry.exists():
-            writes[registry] = _registry_yaml(skills)
-        if not memory_stores.exists():
-            writes[memory_stores] = yaml.safe_dump(
-                {"memory_stores": []}, sort_keys=False, allow_unicode=True
-            )
-        if not memory_records.exists():
-            writes[memory_records] = yaml.safe_dump(
-                {"memory_records": []}, sort_keys=False, allow_unicode=True
-            )
-        if not backup_ignore.exists():
-            writes[backup_ignore] = "*\n!.gitignore\n"
-        agents = root / "AGENTS.md"
-        if not agents.exists():
-            writes[agents] = _agents_markdown()
-    if overlay_enabled and not configured:
+    ownership = root / ".agent" / "ownership.json"
+    ownership_index_mode = ownership_skill_index_mode(ownership)
+    index = root / ".agent" / "INDEX.md"
+    registry = root / ".agent" / "registry.yaml"
+    memory_stores = root / ".agent" / "memory-stores.yaml"
+    memory_records = root / ".agent" / "memory-records.yaml"
+    backup_ignore = root / ".agent" / "backups" / ".gitignore"
+    agents = root / "AGENTS.md"
+    if not ownership.exists():
+        writes[ownership] = _ownership_json(root, index_required=overlay_enabled)
+    if not index.exists():
+        writes[index] = _index_markdown(root, skills, normalized_tags, now)
+    if not registry.exists():
+        writes[registry] = _registry_yaml(skills)
+    if not memory_stores.exists():
+        writes[memory_stores] = yaml.safe_dump(
+            {"memory_stores": []}, sort_keys=False, allow_unicode=True
+        )
+    if not memory_records.exists():
+        writes[memory_records] = yaml.safe_dump(
+            {"memory_records": []}, sort_keys=False, allow_unicode=True
+        )
+    if not backup_ignore.exists():
+        writes[backup_ignore] = "*\n!.gitignore\n"
+    if not agents.exists():
+        writes[agents] = _agents_markdown()
+    for relative in MANAGED_PLACEHOLDERS:
+        placeholder = root / relative
+        if not placeholder.exists():
+            writes[placeholder] = ""
+    if overlay_enabled:
         for skill in skills:
             overlay = root / skill["overlay_manifest"]
             if not overlay.exists():
@@ -227,7 +250,21 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
                     skill["manifest"], sort_keys=False, allow_unicode=True
                 )
 
-    blocked = bool(reserved_conflicts)
+    ownership_mode_conflict = configured and ownership_index_mode is not None and (
+        (overlay_enabled and ownership_index_mode != "required")
+        or (not overlay_enabled and ownership_index_mode != "disabled")
+    )
+    if ownership_mode_conflict:
+        reserved_conflicts.append(".agent/ownership.json#skill_index")
+    required_index_missing = (
+        configured
+        and ownership_index_mode == "required"
+        and skill_index_plan.get("expected_head") is None
+    )
+    if required_index_missing:
+        reserved_conflicts.append(".agent/skill-overlays/.archmarshal/HEAD")
+
+    blocked = bool(reserved_conflicts) or transaction_active
     if blocked:
         writes = {}
 
@@ -253,6 +290,7 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
         "backup_files": backup_files,
         "conflicts": reserved_conflicts,
         "blocked": blocked,
+        "transaction_status": transaction_status,
     }
 
 
@@ -262,9 +300,11 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
         {
             "action": "create",
             "path": path.relative_to(root).as_posix(),
+            "bytes": len(content.encode("utf-8")),
+            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
             "overwrite": False,
         }
-        for path in built["writes"]
+        for path, content in built["writes"].items()
     ]
     tracked_changes = {
         str(change.get("source")): str(change.get("kind"))
@@ -310,6 +350,9 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
         "overlay_enabled": built["overlay_enabled"],
         "blocked": built["blocked"],
         "review_required": built["review_required"],
+        "plan_digest": _adoption_plan_digest(built),
+        "apply_precondition": "--expect-plan <plan_digest>",
+        "transaction": built["transaction_status"],
         "skill_index": index_plan,
         "backup_scope": built["backup_scope"],
         "project_tags": built["tags"],
@@ -333,7 +376,7 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
         "operations": operations,
         "conflicts": built["conflicts"],
         "notes": [
-            "Preview is the default; pass --apply to create the listed files.",
+            "Preview is the default; apply requires --expect-plan with this exact plan digest.",
             "Existing user-owned files are never overwritten, even with --apply.",
             "Only ArchMarshal's internal HEAD pointer may be atomically replaced after backup and CAS validation.",
             "Existing skills stay in place; overlays provide routing metadata without changing SKILL.md.",
@@ -344,6 +387,48 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
                 else "Native workspaces keep their declared skill layout and are not converted implicitly."
             ),
         ],
+    }
+
+
+def _adoption_plan_digest(built: dict[str, Any]) -> str:
+    root: Path = built["root"]
+    intent = {
+        "format": "archmarshal-adoption-plan-v1",
+        "backup_scope": built["backup_scope"],
+        "configured": built["configured"],
+        "overlay_enabled": built["overlay_enabled"],
+        "tags": built["tags"],
+        "writes": [
+            {
+                "path": path.relative_to(root).as_posix(),
+                "bytes": len(content.encode("utf-8")),
+                "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            }
+            for path, content in sorted(
+                built["writes"].items(), key=lambda item: item[0].as_posix()
+            )
+        ],
+        "skill_index": _logical_skill_plan(built["skill_index_plan"]),
+    }
+    canonical = json.dumps(
+        intent,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _logical_skill_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    generation = plan.get("generation")
+    return {
+        "changed": bool(plan.get("changed")),
+        "disabled": bool(plan.get("disabled")),
+        "expected_head": plan.get("expected_head"),
+        "skills": generation.get("skills") if isinstance(generation, dict) else [],
+        "changes": plan.get("changes") or [],
+        "source_precondition_policy": plan.get("source_precondition_policy"),
+        "source_preconditions": plan.get("source_preconditions") or [],
     }
 
 
@@ -368,26 +453,36 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
         source_dir = skill_md.parent
         source = source_dir.relative_to(root).as_posix()
         frontmatter = _skill_frontmatter(skill_md)
-        display_name = str(frontmatter.get("name") or source_dir.name).strip() or source_dir.name
+        source_manifest = source_dir / "manifest.yaml"
+        declared, import_errors = _import_source_manifest(source_manifest)
+        display_name = str(
+            declared.get("name") or frontmatter.get("name") or source_dir.name
+        ).strip() or source_dir.name
         name_slug = _slug(display_name)
         description = str(
-            frontmatter.get("description") or _first_summary(skill_md) or display_name
+            declared.get("summary")
+            or frontmatter.get("description")
+            or _first_summary(skill_md)
+            or display_name
         )
-        kind, scope, overlay_group = _classify_skill(source)
+        inferred_kind, inferred_scope, _ = _classify_skill(source)
+        kind = str(declared.get("kind") or inferred_kind)
+        scope = str(declared.get("scope") or inferred_scope)
+        overlay_group = _overlay_group(kind, scope)
         identity_suffix = hashlib.sha256(source.encode("utf-8")).hexdigest()[:8]
-        skill_id = f"skill.{scope}.{name_slug}-{identity_suffix}"
+        skill_id = str(
+            declared.get("id") or f"skill.{scope}.{name_slug}-{identity_suffix}"
+        )
         overlay_manifest = (
             f".agent/skill-overlays/{overlay_group}/{name_slug}-{identity_suffix}/manifest.yaml"
         )
-        source_manifest = source_dir / "manifest.yaml"
-        tags = sorted(
-            set(
-                [
-                    scope.replace("_", "-"),
-                    *[item for item in name_slug.split("-") if item],
-                ]
-            )
+        inferred_tags = sorted(
+            {
+                scope.replace("_", "-"),
+                *[item for item in name_slug.split("-") if item],
+            }
         )
+        tags = declared.get("tags") or inferred_tags
         source_hash = sha256_file(skill_md)
         package = fingerprint_directory(
             source_dir,
@@ -403,16 +498,39 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
             "id": skill_id,
             "name": display_name,
             "kind": kind,
-            "version": "0.1.0",
-            "status": "active",
-            "priority": "highest" if kind == "global_skill" else "normal",
+            "version": declared.get("version") or "0.1.0",
+            "status": "disabled" if import_errors else declared.get("status") or "active",
+            "priority": declared.get("priority")
+            or ("highest" if kind == "global_skill" else "normal"),
             "scope": scope,
             "summary": description[:500],
             "tags": tags or ["project"],
-            "triggers": [display_name.replace("-", " ")],
-            "negative_triggers": [
-                f"tasks unrelated to {display_name.replace('-', ' ')}"
-            ],
+            "triggers": declared.get("triggers") or [display_name.replace("-", " ")],
+            "negative_triggers": declared.get("negative_triggers")
+            or [f"tasks unrelated to {display_name.replace('-', ' ')}"],
+            "review_state": "needs_review"
+            if import_errors
+            else ("imported" if declared else "inferred"),
+            "metadata_provenance": {
+                "source_manifest": source_manifest.relative_to(root).as_posix()
+                if source_manifest.exists()
+                else None,
+                "imported_fields": sorted(declared),
+                "inferred_fields": sorted(
+                    {
+                        "id",
+                        "kind",
+                        "scope",
+                        "tags",
+                        "triggers",
+                        "negative_triggers",
+                        "priority",
+                        "version",
+                    }
+                    - set(declared)
+                ),
+                "errors": import_errors,
+            },
             "source": {
                 "skill_dir": source,
                 "skill_md": skill_md.relative_to(root).as_posix(),
@@ -427,7 +545,10 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
                 "mutation_policy": "never",
             },
         }
-        if kind == "common_project_skill":
+        for field in ("dependencies", "outputs", "permissions", "reproducibility", "paths"):
+            if field in declared:
+                manifest[field] = declared[field]
+        if kind == "common_project_skill" and "reproducibility" not in manifest:
             local = {
                 key: (source_dir / key).is_dir() and any((source_dir / key).iterdir())
                 for key in ("scripts", "templates", "references")
@@ -466,6 +587,77 @@ def _classify_skill(source: str) -> tuple[str, str, str]:
     if "/generated/" in f"/{normalized}/":
         return "generated_project_skill", "generated", "generated"
     return "project_skill", "project", "project"
+
+
+def _overlay_group(kind: str, scope: str) -> str:
+    if kind == "global_skill" or scope == "global":
+        return "global"
+    if kind == "functional_skill" or scope == "functional":
+        return "functional"
+    if kind == "common_project_skill" or scope == "common_project":
+        return "common-project"
+    if kind == "generated_project_skill" or scope == "generated":
+        return "generated"
+    return "project"
+
+
+def _import_source_manifest(path: Path) -> tuple[dict[str, Any], list[str]]:
+    if not path.exists():
+        return {}, []
+    result = load_yaml_safe(path)
+    if result.error or not isinstance(result.data, dict):
+        return {}, ["source_manifest_invalid"]
+    data = result.data
+    imported: dict[str, Any] = {}
+    errors: list[str] = []
+    string_fields = {
+        "id": lambda value: bool(re.fullmatch(r"skill\.[a-z0-9_.-]+", value)),
+        "name": lambda value: bool(value.strip()),
+        "summary": lambda value: bool(value.strip()),
+        "version": lambda value: bool(re.fullmatch(r"\d+\.\d+\.\d+", value)),
+        "kind": lambda value: value
+        in {
+            "global_skill",
+            "functional_skill",
+            "common_project_skill",
+            "project_skill",
+            "generated_project_skill",
+            "governance_skill",
+        },
+        "scope": lambda value: value
+        in {"global", "functional", "common_project", "project", "module", "generated"},
+        "status": lambda value: value
+        in {"active", "disabled", "experimental", "deprecated", "archived"},
+        "priority": lambda value: value in {"highest", "high", "normal", "low"},
+    }
+    for field, validator in string_fields.items():
+        if field not in data:
+            continue
+        value = data[field]
+        if isinstance(value, str) and validator(value):
+            imported[field] = value
+        else:
+            errors.append(f"invalid_{field}")
+    for field in ("tags", "triggers", "negative_triggers"):
+        if field not in data:
+            continue
+        value = data[field]
+        if (
+            isinstance(value, list)
+            and value
+            and all(isinstance(item, str) and item.strip() for item in value)
+        ):
+            imported[field] = list(dict.fromkeys(value))
+        else:
+            errors.append(f"invalid_{field}")
+    for field in ("dependencies", "outputs", "permissions", "reproducibility", "paths"):
+        if field not in data:
+            continue
+        if isinstance(data[field], dict):
+            imported[field] = json.loads(json.dumps(data[field], ensure_ascii=False))
+        else:
+            errors.append(f"invalid_{field}")
+    return imported, errors
 
 
 def _skill_frontmatter(path: Path) -> dict[str, Any]:
@@ -563,6 +755,27 @@ def _workspace_yaml(
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
 
 
+def _workspace_id(root: Path) -> str:
+    return hashlib.sha256(
+        f"archmarshal-workspace-v1\x00{root.resolve()}".encode("utf-8")
+    ).hexdigest()[:32]
+
+
+def _ownership_json(root: Path, *, index_required: bool) -> str:
+    return json.dumps(
+        {
+            "format": "archmarshal-workspace-ownership-v1",
+            "workspace_id": _workspace_id(root),
+            "managed_root": ".",
+            "skill_index": "required" if index_required else "disabled",
+            "source_mutation": False,
+        },
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
+
+
 def _registry_yaml(skills: list[dict[str, Any]]) -> str:
     artifacts: list[dict[str, Any]] = [
         _artifact("project.index", "project_doc", ".agent/INDEX.md", "default", ["index"]),
@@ -571,6 +784,13 @@ def _registry_yaml(skills: list[dict[str, Any]]) -> str:
         _artifact("managed.plans", "plan", ".agent/plans", "explicit_only", ["plans"]),
         _artifact("managed.inbox", "artifact", ".agent/inbox", "explicit_only", ["inbox"]),
         _artifact("managed.backups", "artifact", ".agent/backups", "never_default", ["backup"]),
+        _artifact(
+            "managed.transactions",
+            "artifact",
+            ".agent/transactions",
+            "never_default",
+            ["transaction", "audit"],
+        ),
         _artifact("managed.archive", "artifact", ".agent/archive", "never_default", ["archive"]),
         _artifact("managed.cache", "cache", ".agent/cache", "never_default", ["cache"]),
         _artifact("managed.knowledge", "knowledge", ".agent/knowledge", "task_based", ["knowledge"]),
@@ -708,18 +928,77 @@ def _managed_backup_files(root: Path, skills: list[dict[str, Any]]) -> list[Path
 def _is_archmarshal_workspace(path: Path) -> bool:
     if not path.exists():
         return False
+    root = path.parent.parent
+    ownership = path.parent / "ownership.json"
+    if ownership.exists():
+        return valid_ownership_marker(ownership)
     result = load_yaml_safe(path)
     if result.error or not isinstance(result.data, dict):
         return False
     workspace = result.data.get("workspace")
     paths = result.data.get("paths")
-    return isinstance(workspace, dict) and isinstance(paths, dict) and paths.get("agent_root") == ".agent"
+    if (
+        not isinstance(workspace, dict)
+        or not isinstance(paths, dict)
+        or paths.get("agent_root") != ".agent"
+    ):
+        return False
+
+    # v0.7 and the shipped native examples predate ownership.json.  Migrate
+    # only a complete, recognizable ArchMarshal control plane; a look-alike
+    # workspace.yaml by itself must not grant ownership of reserved paths.
+    required = (
+        path.parent / "INDEX.md",
+        path.parent / "registry.yaml",
+        path.parent / "memory-stores.yaml",
+        path.parent / "memory-records.yaml",
+        root / "AGENTS.md",
+    )
+    if any(not item.is_file() or is_link_or_reparse(item) for item in required):
+        return False
+    registry = load_yaml_safe(path.parent / "registry.yaml")
+    artifacts = registry.data.get("artifacts") if isinstance(registry.data, dict) else None
+    if registry.error or not isinstance(artifacts, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and item.get("id") == "project.index"
+        and item.get("path") == ".agent/INDEX.md"
+        for item in artifacts
+    )
+
+
+def valid_ownership_marker(path: Path) -> bool:
+    if not path.is_file() or is_link_or_reparse(path) or path.stat().st_size > 64 * 1024:
+        return False
+    try:
+        marker = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(marker, dict)
+        and marker.get("format") == "archmarshal-workspace-ownership-v1"
+        and marker.get("managed_root") == "."
+        and marker.get("skill_index") in {"required", "disabled"}
+        and marker.get("source_mutation") is False
+        and marker.get("workspace_id") == _workspace_id(path.parent.parent)
+    )
+
+
+def ownership_skill_index_mode(path: Path) -> str | None:
+    if not valid_ownership_marker(path):
+        return None
+    marker = json.loads(path.read_text(encoding="utf-8"))
+    return str(marker["skill_index"])
 
 
 def _workspace_uses_overlays(path: Path) -> bool:
     result = load_yaml_safe(path)
     if result.error or not isinstance(result.data, dict):
         return False
+    workspace = result.data.get("workspace")
+    if isinstance(workspace, dict) and workspace.get("management_mode") == "overlay":
+        return True
     paths = result.data.get("paths")
     if not isinstance(paths, dict):
         return False
@@ -802,4 +1081,9 @@ def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-") or "project"
 
 
-__all__ = ["adopt_workspace", "plan_adoption"]
+__all__ = [
+    "adopt_workspace",
+    "ownership_skill_index_mode",
+    "plan_adoption",
+    "valid_ownership_marker",
+]

@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import os
 from datetime import datetime, timezone
-from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +11,14 @@ import yaml
 from .errors import ArchMarshalError, require_workspace_root
 from .inventory import collect_inventory
 from .io import load_yaml_safe
-from .safety import create_text_exclusive, ensure_managed_path, ensure_path_within, unique_path
+from .safety import (
+    create_text_exclusive,
+    ensure_managed_path,
+    ensure_path_within,
+    files_below_no_links,
+    unique_path,
+)
+from .session import verify_committed_session
 
 
 def learn_from_projects(
@@ -31,6 +37,7 @@ def learn_from_projects(
     if not project_roots:
         raise ValueError("At least one project root is required.")
     sessions: list[dict[str, Any]] = []
+    legacy_unverified_session_count = 0
     skill_metadata: dict[tuple[str, str], dict[str, Any]] = {}
     for root in project_roots:
         for skill in collect_inventory(root).skills:
@@ -52,7 +59,9 @@ def learn_from_projects(
                     "project": str(root),
                     "implementation_sha256": implementation_hash,
                 }
-        sessions.extend(_load_sessions(root))
+        loaded_sessions, legacy_count = _load_sessions(root)
+        sessions.extend(loaded_sessions)
+        legacy_unverified_session_count += legacy_count
 
     skill_observations: dict[tuple[str, str], set[str]] = {}
     skill_details: dict[tuple[str, str], dict[str, Any]] = {}
@@ -149,6 +158,7 @@ def learn_from_projects(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source_project_count": len(project_roots),
         "source_session_count": len(sessions),
+        "legacy_unverified_session_count": legacy_unverified_session_count,
         "limits": {
             "raw_history_included": False,
             "environment_variables_included": False,
@@ -175,6 +185,7 @@ def learn_from_projects(
         "mode": "propose_only",
         "source_projects": [str(item) for item in project_roots],
         "source_session_count": len(sessions),
+        "legacy_unverified_session_count": legacy_unverified_session_count,
         "target": target.relative_to(primary).as_posix(),
         "common_skill_candidates": common_skill_candidates,
         "preference_candidates": preference_candidates,
@@ -184,6 +195,7 @@ def learn_from_projects(
             "Candidates never mutate existing skills or global policy.",
             "Promotion to a shared skill or user preference requires explicit human review.",
             "Usage lists are capped so the global layer can remain lightweight.",
+            "Legacy v1 sessions are counted but remain untrusted until an explicit migration exists.",
         ],
     }
     if apply:
@@ -193,36 +205,46 @@ def learn_from_projects(
     return payload
 
 
-def _load_sessions(root: Path) -> list[dict[str, Any]]:
+def _load_sessions(root: Path) -> tuple[list[dict[str, Any]], int]:
     history = root / ".agent" / "history"
     if not history.exists():
-        return []
+        return [], 0
     sessions: list[dict[str, Any]] = []
-    for path in islice(history.rglob("session.yaml"), 10_000):
+    legacy_unverified = 0
+    files = files_below_no_links(
+        history,
+        purpose="Learning session discovery",
+        max_files=100_000,
+    )
+    for session_path in (path for path in files if path.name == "session.yaml"):
+        if (session_path.parent / "COMMITTED.json").exists():
+            continue
+        result = load_yaml_safe(session_path)
+        if isinstance(result.data, dict) and result.data.get("format") == "archmarshal-session-v1":
+            legacy_unverified += 1
+    markers = [path for path in files if path.name == "COMMITTED.json"]
+    for marker in markers[:10_000]:
         try:
-            ensure_path_within(root, path, purpose="Learning session manifest")
-            if path.is_symlink() or path.stat().st_size > 1024 * 1024:
-                continue
+            ensure_path_within(root, marker, purpose="Learning session commit marker")
+            verified = verify_committed_session(marker.parent)
         except (ArchMarshalError, OSError, ValueError):
             continue
-        result = load_yaml_safe(path)
-        if result.error or not isinstance(result.data, dict):
-            continue
-        if result.data.get("format") != "archmarshal-session-v1":
-            continue
+        session = verified["session"]
         if not all(
-            isinstance(result.data.get(field, []), list)
+            isinstance(session.get(field, []), list)
             for field in ("used_skills", "tags", "key_scripts")
         ):
             continue
         sessions.append(
             {
-                **result.data,
+                **session,
                 "_project_root": str(root),
-                "_session_path": path.relative_to(root).as_posix(),
+                "_session_path": (marker.parent / "session.yaml")
+                .relative_to(root)
+                .as_posix(),
             }
         )
-    return sessions
+    return sessions, legacy_unverified
 
 
 __all__ = ["learn_from_projects"]

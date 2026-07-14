@@ -79,13 +79,15 @@ archmarshal adopt . --tag research --tag python --pretty
 Then explicitly create the management overlay:
 
 ```bash
-archmarshal-start . --apply --tag research --tag python --pretty
+archmarshal-start . --apply --expect-plan <plan_digest> \
+  --tag research --tag python --pretty
 ```
 
 ArchMarshal creates a content-verified backup before the first managed file, keeps every
 existing skill in place, and stores generated routing metadata under
 `.agent/skill-overlays/`. If a reserved control file already belongs to another
-tool, adoption blocks instead of overwriting it.
+tool, adoption blocks instead of overwriting it. The digest must come from the
+exact reviewed preview; an unreviewed or stale apply writes nothing.
 
 For an already managed project, start also previews newly added skills and
 complete-package drift. Applying an approved sync writes a new immutable skill
@@ -95,10 +97,26 @@ generation; it never replaces the source skill or an older generation:
 archmarshal-start
 ```
 
-Use `--apply` only after reviewing the proposed generation and expected `HEAD`.
+Use `--apply --expect-plan <plan_digest>` only after reviewing the proposed
+generation and its file hashes.
 Modified, removed, and restored skills are explicit plan entries. ArchMarshal
 updates only its internal `HEAD` pointer under an exclusive lock and stale-plan
 check; human-owned files remain untouched.
+
+If a process stops during adoption, inspect and forward-recover the durable
+create-only transaction:
+
+```bash
+archmarshal adoption-status . --pretty
+archmarshal adoption-recover . --pretty
+archmarshal adoption-recover . --expect-transaction <transaction_id> \
+  --expect-plan <plan_digest> --apply --pretty
+```
+
+Recovery verifies the original backup, journal, target hashes, lock identity,
+and skill-index relationship; staged bytes are rechecked before creating a
+missing target. A changed or replaced target is left untouched and blocks
+recovery.
 
 Inspect verified index history or preview an audited metadata rollback:
 
@@ -106,7 +124,8 @@ Inspect verified index history or preview an audited metadata rollback:
 archmarshal skill-index-status . --pretty
 archmarshal skill-index-rollback . --to <ancestor-sha256> --pretty
 archmarshal skill-index-rollback . --to <ancestor-sha256> \
-  --expect-head <preview-head> --reason "reviewed rollback" --apply --pretty
+  --expect-head <preview-head> --expect-plan <plan_digest> \
+  --reason "reviewed rollback" --apply --pretty
 ```
 
 Rollback creates a new generation; it never points `HEAD` backward and never
@@ -133,20 +152,26 @@ Choose the amount of evidence the project warrants:
 
 ```bash
 # 1. Rough summary
-archmarshal-end . --level quick --summary "Finished the release review" --apply
+archmarshal-end . --level quick --summary "Finished the release review"
+archmarshal-end . --level quick --summary "Finished the release review" \
+  --expect-plan <plan_digest> --apply
 
 # 2. Careful record of steps and key scripts
 archmarshal-end . --level standard --summary "Validated the release" \
-  --step "Run tests" --step "Review artifacts" --script scripts/validate.py --apply
+  --step "Run tests" --step "Review artifacts" --script scripts/validate.py
+# Repeat the same evidence with --expect-plan <plan_digest> --apply.
 
 # 3. Reproduction-evidence capsule with hashed scripts and a reference run script
 archmarshal-end . --level reproducible --summary "Reproduced benchmark A" \
   --step "Prepare data" --step "Run evaluation" --script scripts/eval.py \
-  --command "python scripts/eval.py --config configs/a.yaml" --shell bash --apply
+  --command "python scripts/eval.py --config configs/a.yaml" --shell bash
+# Repeat the same evidence with --expect-plan <plan_digest> --apply.
 ```
 
 All three modes preview by default and write only to a new
-`.agent/history/YYYY/MM/DD/...` directory with `--apply`. Reproducible mode
+`.agent/history/YYYY/MM/DD/...` directory with the exact reviewed plan digest.
+`COMMITTED.json` is written last; learning ignores incomplete or hash-mismatched
+sessions. Reproducible mode
 reports `reproduction_evidence_ready: false` until summary, ordered steps, key
 scripts, and exact commands are present. Readiness means required evidence is
 present; ArchMarshal does not execute the commands or prove the result.
@@ -180,12 +205,15 @@ reproducible evidence when writing a session.
 - No marketplace.
 - No automatic third-party skill installation.
 - No automatic project directory rewrite.
-- No deletion.
+- No deletion of human-owned project or Skill files.
 - No in-place edits to adopted skills; source skills are referenced through overlays.
 - No overwrite or force mode for human-owned files; the only replacement is ArchMarshal's internal, backed-up `HEAD` pointer after lock/CAS validation.
 - No summarization that deletes or replaces original project history.
 - No automatic global configuration mutation.
 - No dynamic context loading runtime.
+- No claim of protection against a malicious process that can concurrently
+  rewrite workspace directories; link/reparse checks and identity checks reduce
+  races, but a handle-relative no-follow filesystem backend is still planned.
 
 ## Repository Layout
 
@@ -264,14 +292,20 @@ Preview and explicitly apply safe lifecycle writes:
 
 ```bash
 archmarshal adopt path/to/existing-project --tag research --pretty
-archmarshal adopt path/to/existing-project --tag research --apply --pretty
-archmarshal end path/to/project --level quick --summary "Phase complete" --apply --pretty
+archmarshal adopt path/to/existing-project --tag research \
+  --expect-plan <plan_digest> --apply --pretty
+archmarshal adoption-status path/to/existing-project --pretty
+archmarshal adoption-recover path/to/existing-project \
+  --expect-transaction <transaction_id> --expect-plan <plan_digest> --apply --pretty
+archmarshal end path/to/project --level quick --summary "Phase complete" --pretty
+archmarshal end path/to/project --level quick --summary "Phase complete" \
+  --expect-plan <plan_digest> --apply --pretty
 archmarshal learn path/to/project --apply --pretty
 archmarshal backup-verify path/to/backup.zip --pretty
 archmarshal backup-restore path/to/backup.zip path/to/new-directory --apply --pretty
 archmarshal skill-index-rollback path/to/project --to <ancestor-sha256> --pretty
 archmarshal skill-index-rollback path/to/project --to <ancestor-sha256> \
-  --expect-head <preview-head> --apply --pretty
+  --expect-head <preview-head> --expect-plan <plan_digest> --apply --pretty
 ```
 
 The compatibility wrapper still works:
@@ -281,15 +315,17 @@ python scripts/inventory.py examples/simple-project --pretty
 ```
 
 `--apply` is deliberately narrow: adoption creates missing control-plane files
-after a verified backup, skill sync creates immutable generation objects and
-atomically advances an internal `HEAD`, and closeout/learning create append-only
-artifacts. There is no overwrite, move, delete, force, or automatic promotion
-path for human-owned project or skill files.
+through a durable transaction after a verified backup, skill sync creates
+immutable generation objects and atomically advances an internal `HEAD`, and
+closeout/learning create append-only artifacts. Adoption and closeout additionally
+require the exact digest of a reviewed preview. There is no overwrite, move,
+delete, force, or automatic promotion path for human-owned project or skill files.
 
 ## Safety Rules
 
 - Inventory, lint, audit, and plan are read-only by default.
-- Adoption, closeout recording, and learning are preview-only unless `--apply` is explicit.
+- Adoption and closeout require both explicit `--apply` and the exact reviewed
+  `--expect-plan`; learning remains preview-first with explicit `--apply`.
 - Adoption backs up managed metadata and complete non-root skill packages before writing; root skills remain entrypoint-only. `--backup-scope full` creates a bounded project-content snapshot excluding VCS, dependencies, virtual environments, and prior backups.
 - Existing skill sources are immutable to ArchMarshal; overlay manifests live under `.agent/skill-overlays/`.
 - Skill sync uses immutable content-addressed objects, an exclusive `HEAD.lock`, and an expected-`HEAD` compare-and-swap; stale or concurrent plans fail without changing the active generation.
@@ -297,7 +333,11 @@ path for human-owned project or skill files.
 - Resolver output quarantines source-missing, unsafe, untracked, or drifted skills instead of suggesting them for activation.
 - Directory scans do not follow symlinks, junctions, or Windows reparse points and enforce file/package bounds.
 - Reserved control-file conflicts block the whole adoption before managed files are written.
-- Closeout uses unique append-only directories and verifies copied script hashes.
+- Closeout uses unique append-only directories, verifies copied script hashes,
+  and writes `COMMITTED.json` last; incomplete or hash-mismatched sessions are
+  not learned.
+- Atomic create-only publication requires same-filesystem hard-link support and
+  fails closed when the filesystem cannot provide it.
 - Environment variables are not captured. Known inline-secret patterns are blocked, but user-selected text and script snapshots may still contain sensitive material and require review.
 - YAML inputs fail softly: bad workspace, registry, skill, or context module YAML becomes a structured diagnostic.
 - Workspace, registry, skill, memory-store, and memory-record schemas are enforced during lint.
@@ -352,6 +392,7 @@ path for human-owned project or skill files.
 - [x] Memory-aware resolve and closeout candidate output
 - [x] Tests for clean examples, missing entry files, skill conflicts, and historical read policy
 - [x] Preview-first, backup-before-write adoption for existing projects
+- [x] Reviewed-plan binding and durable forward-recoverable adoption transactions
 - [x] Non-mutating skill metadata overlays
 - [x] Complete skill-package fingerprints and drift reporting
 - [x] Immutable skill generations with add/modify/remove/restore history and lock/CAS publication
@@ -360,6 +401,7 @@ path for human-owned project or skill files.
 - [x] Content-verified backup inspection and restore-to-new-directory flow
 - [x] Conflict blocking and exclusive file creation (no overwrite mode)
 - [x] Quick, standard, and reproducible append-only closeout records
+- [x] Commit-last closeout manifests with learning-time integrity verification
 - [x] Hashed key-script snapshots and explicit reproducibility readiness gaps
 - [x] Date- and tag-aware workspace/session organization
 - [x] Read-only cross-project catalog sorted by date and filtered by tags

@@ -10,7 +10,8 @@ rearrange the project itself.
 3. An existing `SKILL.md` remains the behavioral source of truth.
 4. Missing routing metadata is created under `.agent/skill-overlays/`, never in
    the source skill directory.
-5. Preview is the default. Writes require explicit `--apply`.
+5. Preview is the default. Adoption and closeout writes require explicit
+   `--apply` plus the exact SHA-256 digest of the reviewed preview.
 6. Adoption verifies a backup before creating the first managed file.
 7. A reserved control-file conflict blocks adoption instead of triggering a
    merge or guessed rewrite.
@@ -21,10 +22,15 @@ rearrange the project itself.
     ArchMarshal-owned `HEAD`, after backup, exclusive lock, and expected-value
     validation.
 12. Directory scans never follow symbolic links, junctions, or reparse points.
+13. Adoption publishes a durable journal before visible control-plane targets
+    and writes a receipt last; interruption is recovered forward, never by
+    deleting paths.
+14. Closeout writes a hash manifest last. Incomplete or hash-mismatched sessions
+    are preserved but excluded from learning.
 
 These constraints intentionally make ArchMarshal less aggressive than a general
-project formatter. A safe partial adoption is preferable to a clever rewrite
-that changes a working project.
+project formatter. A blocked or explicitly recoverable adoption is preferable
+to a clever rewrite that changes a working project.
 
 ## Existing Project Adoption
 
@@ -40,8 +46,13 @@ conflict. `source_will_change` is always false.
 Apply only after reviewing the plan:
 
 ```bash
-archmarshal adopt path/to/project --tag research --tag vision --apply --pretty
+archmarshal adopt path/to/project --tag research --tag vision \
+  --expect-plan <plan_digest> --apply --pretty
 ```
+
+The digest covers the proposed control-file bytes, project tags, backup scope,
+source preconditions, and proposed skill-index generation. If the workspace or
+request changes, the apply blocks and a new preview is required.
 
 The managed backup scope contains:
 
@@ -62,7 +73,40 @@ sensitive project files and must not be shared casually.
 
 Use `archmarshal backup-verify` to re-check every archived byte. Restore is
 deliberately one-way into a new, non-existing directory; ArchMarshal never
-restores over the original project.
+restores over the original project. If extraction fails, the incomplete new
+directory is preserved for explicit inspection. ArchMarshal does not recursively
+delete it because another process may have added or replaced content there.
+
+### Durable Adoption Transaction
+
+After backup verification and reviewed-plan validation, ArchMarshal stages exact
+payload bytes and a journal under:
+
+```text
+.agent/transactions/adoption/
+|-- LOCK
+|-- ACTIVE
+`-- <transaction-id>/
+    |-- journal.json
+    |-- payloads/
+    `-- COMMITTED.json
+```
+
+The journal is durable before visible control-plane targets (the already
+verified backup archive is published first). The OS-lifetime lock is held for
+control-plane publication. The journal binds target paths,
+byte sizes, hashes, the verified backup, the reviewed plan digest, and the
+skill-index plan. Each visible control file is created exclusively from a fully
+staged payload; an existing exact match is accepted, while a changed, linked,
+or replaced path blocks without overwrite. The immutable skill generation is
+published only against its expected `HEAD`, and `COMMITTED.json` is written
+last. `ACTIVE` is cleared only when its identity and bytes still match.
+
+After a process interruption, use `adoption-status` and preview
+`adoption-recover` before applying recovery with that exact transaction id and
+plan digest. Recovery repeats every verification and completes only missing
+create-only targets. It never removes an uncertain file or rolls the workspace
+backward.
 
 ## Skill Overlay Model
 
@@ -151,9 +195,9 @@ Long output is paged with `--history-limit` and the returned continuation digest
 can be supplied as `--history-from`.
 
 `archmarshal skill-index-rollback` is preview-first. Apply requires the exact
-`--expect-head` shown by the reviewed preview. The target must be a reachable
-ancestor, and the command creates a new generation whose parent is the current
-HEAD; it never moves HEAD backward. Source skill files are never restored,
+`--expect-head` and `--expect-plan` shown by the reviewed preview. The target
+must be a reachable ancestor, and the command creates a new generation whose
+parent is the current HEAD; it never moves HEAD backward. Source skill files are never restored,
 deleted, or rewritten. Every active target skill must already match its recorded
 complete-package hash, so old routing metadata cannot silently activate newer
 implementation bytes.
@@ -180,8 +224,10 @@ New management data is small and human-readable:
 └─ backups/
 ```
 
-`workspace.yaml` records `created_on`, `adopted_on`, and tags. `INDEX.md` is the
-human entrypoint. Raw history, reports, and backups remain explicit-only.
+The control plane also contains `ownership.json` and
+`.agent/transactions/`. `workspace.yaml` records `created_on`, `adopted_on`, and
+tags. `INDEX.md` is the human entrypoint. Raw history, reports, transactions,
+and backups remain explicit-only.
 
 Use `archmarshal catalog` with repeated `--include-root` and `--tag` options to
 view several projects sorted by creation date. The catalog reads only their
@@ -212,12 +258,24 @@ were executed successfully or that an external environment can be reconstructed.
 Generated run scripts are never executed by ArchMarshal. They are references
 that must be reviewed by a human.
 
+All closeout levels are preview-bound by `--expect-plan`. Files are created in a
+new date-organized directory and `COMMITTED.json` is created only after every
+session file and selected script snapshot exists. The marker records exact
+relative paths, sizes, and SHA-256 hashes. A crash before that point leaves a
+visible incomplete directory for review; no cleanup routine deletes it.
+
 ## Learning Without Global Bloat
 
-`archmarshal learn` reads only compact `session.yaml` records. It does not scan
-raw project history. Repeated skill usage can become a common-project-skill
+`archmarshal learn` reads only compact `session.yaml` records whose final commit
+manifest and every declared file verify. It ignores incomplete and
+hash-mismatched sessions and does not scan raw project history. Repeated skill
+usage can become a common-project-skill
 candidate; repeated tags can become user-preference candidates. Candidate lists
 are capped and written to `.agent/inbox/learning/` for review.
+
+Legacy v1 sessions predate the commit marker. They are reported as
+`legacy_unverified_session_count` and are not automatically promoted to trusted
+evidence. A future explicit migration may re-commit them after review.
 
 The command never edits global skills or user configuration automatically. This
 keeps the global layer small while still allowing deliberate improvement from

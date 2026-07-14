@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import platform
 import re
-import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,11 +13,24 @@ from typing import Any
 import yaml
 
 from .closeout import closeout_workspace
-from .errors import require_workspace_root
-from .safety import create_text_exclusive, ensure_managed_path, sha256_file, unique_path
+from .errors import ArchMarshalError, require_workspace_root
+from .io import load_yaml_safe
+from .safety import (
+    create_bytes_exclusive,
+    create_text_exclusive,
+    ensure_managed_path,
+    files_below_no_links,
+    is_link_or_reparse,
+    sha256_file,
+    unique_path,
+)
 
 CLOSEOUT_LEVELS = ("quick", "standard", "reproducible")
 MAX_SNAPSHOT_BYTES = 20 * 1024 * 1024
+MAX_SESSION_FILES = 1_000
+MAX_SESSION_COMMIT_BYTES = 4 * 1024 * 1024
+SESSION_FORMAT = "archmarshal-session-v2"
+SESSION_COMMIT_FORMAT = "archmarshal-session-commit-v1"
 
 
 def record_closeout(
@@ -32,6 +45,7 @@ def record_closeout(
     tags: list[str] | None = None,
     used_skills: list[str] | None = None,
     shell: str | None = None,
+    expected_plan: str | None = None,
 ) -> dict[str, Any]:
     root_path = require_workspace_root(root)
     if level not in CLOSEOUT_LEVELS:
@@ -56,18 +70,14 @@ def record_closeout(
     )
     script_errors.extend(sensitive_errors)
     now = datetime.now(timezone.utc)
-    timestamp = now.strftime("%Y%m%d-%H%M%S")
     topic = _human_slug(summary, fallback="project-closeout")[:48]
-    base_dir = root_path / ".agent" / "history" / now.strftime("%Y/%m/%d")
-    session_dir = unique_path(base_dir / f"{timestamp}-{topic}-{level}")
-    ensure_managed_path(root_path, session_dir, purpose="Closeout session directory")
     git = _git_snapshot(root_path)
     environment = _environment_snapshot(root_path)
     readiness_gaps = _readiness_gaps(level, summary, steps, script_records, commands)
     closeout = closeout_workspace(root_path, used_skills)
     session = {
-        "format": "archmarshal-session-v1",
-        "recorded_at": now.isoformat(),
+        "format": SESSION_FORMAT,
+        "recorded_on": now.date().isoformat(),
         "level": level,
         "summary": summary.strip(),
         "tags": normalized_tags,
@@ -79,8 +89,12 @@ def record_closeout(
         "environment": environment if level == "reproducible" else {},
         "reproducibility": {
             "ready": not readiness_gaps,
+            "evidence_complete": not readiness_gaps,
+            "execution_observed": False,
             "gaps": readiness_gaps,
             "execution_validated": False,
+            "reproducible_claim": False,
+            "claim_mode": "reference_only",
             "environment_variables_captured": False,
             "known_inline_secret_patterns_blocked": True,
             "selected_script_content_may_be_sensitive": bool(script_records),
@@ -94,14 +108,40 @@ def record_closeout(
         },
     }
     files = _session_files(session, shell)
+    session_key = _session_intent_digest(session, shell)[:12]
+    base_dir = root_path / ".agent" / "history" / now.strftime("%Y/%m/%d")
+    session_dir = unique_path(base_dir / f"{topic}-{level}-{session_key}")
+    ensure_managed_path(root_path, session_dir, purpose="Closeout session directory")
+    planned_records = _planned_session_records(files, script_records, level=level)
+    commit_content = _session_commit_bytes(session["recorded_on"], planned_records)
+    plan_digest = _session_plan_digest(
+        root_path,
+        session,
+        shell,
+        session_dir,
+        files,
+        script_records,
+        commit_content,
+    )
     operations = [
         {
             "action": "create",
             "path": (session_dir / relative).relative_to(root_path).as_posix(),
+            "bytes": len(content.encode("utf-8")),
+            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
             "overwrite": False,
         }
-        for relative in files
+        for relative, content in files.items()
     ]
+    operations.append(
+        {
+            "action": "commit_manifest_last",
+            "path": (session_dir / "COMMITTED.json").relative_to(root_path).as_posix(),
+            "bytes": len(commit_content),
+            "sha256": hashlib.sha256(commit_content).hexdigest(),
+            "overwrite": False,
+        }
+    )
     if level == "reproducible":
         operations.extend(
             {
@@ -110,6 +150,8 @@ def record_closeout(
                 .relative_to(root_path)
                 .as_posix(),
                 "source": record["path"],
+                "bytes": record["bytes"],
+                "sha256": record["sha256"],
                 "overwrite": False,
             }
             for record in script_records
@@ -126,6 +168,8 @@ def record_closeout(
         "reproduction_evidence_ready": not readiness_gaps,
         "reproducibility_gaps": readiness_gaps,
         "script_errors": script_errors,
+        "plan_digest": plan_digest,
+        "apply_precondition": "--expect-plan <plan_digest>",
         "operations": operations,
         "notes": [
             "Closeout writes only to a new date-organized session directory.",
@@ -134,6 +178,7 @@ def record_closeout(
             "User-selected summaries, steps, and script snapshots may still contain sensitive content and must be reviewed.",
             "Generated run scripts are references and must be reviewed before execution.",
             "Readiness means required evidence is present; commands were not executed or validated.",
+            "Learning ignores this session unless COMMITTED.json and every declared file hash verify.",
         ],
     }
     if script_errors:
@@ -147,8 +192,21 @@ def record_closeout(
         return payload
     if not apply:
         return payload
+    if expected_plan is None:
+        payload["mode"] = "review_required"
+        payload["notes"].append(
+            "Closeout apply requires --expect-plan from this exact preview; nothing was written."
+        )
+        return payload
+    if expected_plan != plan_digest:
+        payload["mode"] = "blocked"
+        payload["notes"].append(
+            "The reviewed closeout plan no longer matches the requested evidence or workspace state."
+        )
+        payload["expected_plan"] = expected_plan
+        payload["actual_plan"] = plan_digest
+        return payload
 
-    created: list[Path] = []
     try:
         session_dir.mkdir(parents=True, exist_ok=False)
     except FileExistsError:
@@ -157,30 +215,200 @@ def record_closeout(
             "The session directory was claimed concurrently; rerun to receive a new path."
         )
         return payload
-    try:
-        for relative, content in files.items():
-            target = session_dir / relative
-            create_text_exclusive(target, content)
+    created: list[Path] = []
+    for relative, content in files.items():
+        target = session_dir / relative
+        create_text_exclusive(target, content)
+        created.append(target)
+    if level == "reproducible":
+        for record in script_records:
+            source = root_path / record["path"]
+            content = source.read_bytes()
+            if len(content) != record["bytes"] or hashlib.sha256(content).hexdigest() != record["sha256"]:
+                raise ArchMarshalError(
+                    "session_source_changed",
+                    "A selected script changed after closeout planning; the incomplete session was preserved.",
+                    details={"path": record["path"]},
+                )
+            target = session_dir / "scripts" / record["snapshot_name"]
+            create_bytes_exclusive(target, content)
             created.append(target)
-        if level == "reproducible":
-            for record in script_records:
-                source = root_path / record["path"]
-                target = session_dir / "scripts" / record["snapshot_name"]
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with source.open("rb") as source_handle, target.open("xb") as target_handle:
-                    shutil.copyfileobj(source_handle, target_handle)
-                created.append(target)
-                if sha256_file(target) != record["sha256"]:
-                    raise OSError(f"Snapshot hash mismatch for {record['path']}")
-    except BaseException:
-        for target in reversed(created):
-            target.unlink(missing_ok=True)
-        shutil.rmtree(session_dir, ignore_errors=True)
-        raise
+    commit_path = _commit_session(session_dir, created, commit_content)
+    created.append(commit_path)
 
     payload["mode"] = "append_only_applied"
     payload["created"] = [path.relative_to(root_path).as_posix() for path in created]
     return payload
+
+
+def verify_committed_session(session_dir: Path | str) -> dict[str, Any]:
+    directory = Path(session_dir).resolve()
+    marker = directory / "COMMITTED.json"
+    if (
+        not marker.is_file()
+        or is_link_or_reparse(marker)
+        or marker.stat().st_size > MAX_SESSION_COMMIT_BYTES
+    ):
+        raise ArchMarshalError(
+            "session_commit_invalid",
+            "Session commit marker is missing, linked, or exceeds the safe size limit.",
+            details={"path": str(marker)},
+        )
+    try:
+        commit = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ArchMarshalError(
+            "session_commit_invalid",
+            "Session commit marker is not valid UTF-8 JSON.",
+            details={"path": str(marker)},
+        ) from exc
+    records = commit.get("files") if isinstance(commit, dict) else None
+    if (
+        not isinstance(commit, dict)
+        or commit.get("format") != SESSION_COMMIT_FORMAT
+        or not isinstance(records, list)
+        or len(records) > MAX_SESSION_FILES
+        or commit.get("file_count") != len(records)
+    ):
+        raise ArchMarshalError(
+            "session_commit_invalid",
+            "Session commit marker structure is invalid.",
+        )
+    declared: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            raise ArchMarshalError("session_commit_invalid", "Session file record is invalid.")
+        relative = _safe_session_relative(record.get("path"))
+        if (
+            relative in declared
+            or not isinstance(record.get("bytes"), int)
+            or record["bytes"] < 0
+            or not _is_sha256(record.get("sha256"))
+        ):
+            raise ArchMarshalError("session_commit_invalid", "Session file record is invalid.")
+        path = directory.joinpath(*Path(relative).parts)
+        if (
+            not path.is_file()
+            or is_link_or_reparse(path)
+            or path.stat().st_size != record["bytes"]
+            or sha256_file(path) != record["sha256"]
+        ):
+            raise ArchMarshalError(
+                "session_integrity_failed",
+                "Committed session file is missing or does not match its hash.",
+                details={"path": relative},
+            )
+        declared.add(relative)
+    actual = {
+        path.relative_to(directory).as_posix()
+        for path in files_below_no_links(directory, purpose="Committed session verification")
+        if path.is_file() and path.name != "COMMITTED.json"
+    }
+    if actual != declared:
+        raise ArchMarshalError(
+            "session_integrity_failed",
+            "Committed session contains undeclared or missing files.",
+            details={"undeclared": sorted(actual - declared), "missing": sorted(declared - actual)},
+        )
+    session_path = directory / "session.yaml"
+    session_result = load_yaml_safe(session_path)
+    if (
+        session_result.error
+        or not isinstance(session_result.data, dict)
+        or session_result.data.get("format") != SESSION_FORMAT
+    ):
+        raise ArchMarshalError(
+            "session_integrity_failed",
+            "Committed session.yaml is invalid or has an unsupported format.",
+        )
+    return {"commit": commit, "session": session_result.data}
+
+
+def _commit_session(session_dir: Path, created: list[Path], content: bytes) -> Path:
+    actual_records = _records_for_paths(session_dir, created)
+    expected = json.loads(content.decode("utf-8"))
+    if actual_records != expected.get("files"):
+        raise ArchMarshalError(
+            "session_integrity_failed",
+            "Session files no longer match the exact reviewed commit manifest.",
+        )
+    marker = session_dir / "COMMITTED.json"
+    create_bytes_exclusive(marker, content, mode=0o600)
+    verify_committed_session(session_dir)
+    return marker
+
+
+def _records_for_paths(session_dir: Path, paths: list[Path]) -> list[dict[str, Any]]:
+    return [
+        {
+            "path": path.relative_to(session_dir).as_posix(),
+            "bytes": path.stat().st_size,
+            "sha256": sha256_file(path),
+        }
+        for path in sorted(paths, key=lambda item: item.relative_to(session_dir).as_posix())
+    ]
+
+
+def _planned_session_records(
+    files: dict[str, str],
+    script_records: list[dict[str, Any]],
+    *,
+    level: str,
+) -> list[dict[str, Any]]:
+    records = [
+        {
+            "path": relative,
+            "bytes": len(content.encode("utf-8")),
+            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        }
+        for relative, content in files.items()
+    ]
+    if level == "reproducible":
+        records.extend(
+            {
+                "path": f"scripts/{record['snapshot_name']}",
+                "bytes": record["bytes"],
+                "sha256": record["sha256"],
+            }
+            for record in script_records
+        )
+    return sorted(records, key=lambda item: item["path"])
+
+
+def _session_commit_bytes(recorded_on: str, records: list[dict[str, Any]]) -> bytes:
+    commit = {
+        "format": SESSION_COMMIT_FORMAT,
+        "committed_on": recorded_on,
+        "session_format": SESSION_FORMAT,
+        "file_count": len(records),
+        "files": records,
+        "source_mutation": False,
+    }
+    content = (
+        json.dumps(commit, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("utf-8")
+    if len(content) > MAX_SESSION_COMMIT_BYTES:
+        raise ArchMarshalError(
+            "session_commit_limit_exceeded",
+            "Session commit marker exceeds the safe size limit.",
+        )
+    return content
+
+
+def _safe_session_relative(value: object) -> str:
+    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
+        raise ArchMarshalError("session_commit_invalid", "Session file path is invalid.")
+    path = Path(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ArchMarshalError("session_commit_invalid", "Session file path is invalid.")
+    return path.as_posix()
+
+
+def _is_sha256(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(
+        character in "0123456789abcdef" for character in value
+    )
 
 
 def _session_files(session: dict[str, Any], shell: str) -> dict[str, str]:
@@ -208,11 +436,76 @@ def _session_files(session: dict[str, Any], shell: str) -> dict[str, str]:
     return files
 
 
+def _session_intent_digest(session: dict[str, Any], shell: str) -> str:
+    canonical = json.dumps(
+        {
+            "format": "archmarshal-closeout-intent-v1",
+            "shell": shell,
+            "session": session,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _session_plan_digest(
+    root: Path,
+    session: dict[str, Any],
+    shell: str,
+    session_dir: Path,
+    files: dict[str, str],
+    script_records: list[dict[str, Any]],
+    commit_content: bytes,
+) -> str:
+    writes = [
+        {
+            "path": (session_dir / relative).relative_to(root).as_posix(),
+            "bytes": len(content.encode("utf-8")),
+            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        }
+        for relative, content in files.items()
+    ]
+    if session["level"] == "reproducible":
+        writes.extend(
+            {
+                "path": (session_dir / "scripts" / record["snapshot_name"])
+                .relative_to(root)
+                .as_posix(),
+                "bytes": record["bytes"],
+                "sha256": record["sha256"],
+            }
+            for record in script_records
+        )
+    writes.append(
+        {
+            "path": (session_dir / "COMMITTED.json").relative_to(root).as_posix(),
+            "bytes": len(commit_content),
+            "sha256": hashlib.sha256(commit_content).hexdigest(),
+        }
+    )
+    canonical = json.dumps(
+        {
+            "format": "archmarshal-closeout-plan-v2",
+            "root": str(root),
+            "shell": shell,
+            "session": session,
+            "session_dir": session_dir.relative_to(root).as_posix(),
+            "writes": sorted(writes, key=lambda item: item["path"]),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def _summary_markdown(session: dict[str, Any]) -> str:
     lines = [
         "# Project closeout",
         "",
-        f"- Recorded: {session['recorded_at']}",
+        f"- Recorded: {session['recorded_on']}",
         f"- Level: `{session['level']}`",
         f"- Tags: {', '.join(session['tags']) or 'none'}",
         f"- Git commit: `{session['git'].get('commit') or 'unavailable'}`",
@@ -405,4 +698,4 @@ def _human_slug(value: str, *, fallback: str) -> str:
     return slug or fallback
 
 
-__all__ = ["CLOSEOUT_LEVELS", "record_closeout"]
+__all__ = ["CLOSEOUT_LEVELS", "record_closeout", "verify_committed_session"]

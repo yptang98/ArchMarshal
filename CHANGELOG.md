@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.8.0 - 2026-07-15
+
+- Bind adoption and closeout writes to the exact reviewed preview through a
+  SHA-256 plan digest; `--apply` without `--expect-plan` writes nothing.
+- Add a durable, create-only adoption journal with staged payload hashes,
+  backup verification, an OS-lifetime lock, forward recovery, and a receipt
+  written last. Recovery never overwrites or deletes a changed target.
+- Add `adoption-status` and preview-first `adoption-recover` commands for
+  inspecting and completing interrupted adoption transactions. Apply requires
+  the exact reviewed transaction id and plan digest.
+- Atomically publish new files and backups through exclusive hard links, fsync
+  data and POSIX directory entries, and preserve uncertain restore/closeout
+  output instead of recursively deleting paths that another process may own.
+- Validate the complete reachable skill-index chain, quarantine loose
+  unindexed overlays, block readers during publication, reject portable path
+  aliases, and verify persistent lock-file identity throughout commits.
+- Preserve supported source-manifest routing fields in generated overlays;
+  invalid imported metadata is disabled and marked for review while source
+  files remain unchanged.
+- Add a root-bound ownership marker whose Skill-index mode must agree with the
+  workspace; required indexes never fall back to loose metadata when HEAD is
+  missing, including during unchanged repair-transaction recovery.
+- Commit closeout sessions with a final hash manifest. Learning ignores
+  incomplete or hash-mismatched sessions, reports legacy v1 sessions as
+  unverified rather than silently trusting them, and keeps reproducible
+  closeouts reference-only until execution validation exists.
+- Bind metadata rollback to both the reviewed HEAD and exact logical rollback
+  plan, preventing a reviewed ancestor/reason from being swapped at apply time.
+- Add fault-injection tests for interrupted adoption, changed targets, journal
+  and backup tampering, receipt-finalization recovery, lock replacement,
+  incomplete sessions, and concurrent file replacement.
+
 ## 0.7.0 - 2026-07-15
 
 - Recheck complete skill-package hashes while holding the commit lock so source
