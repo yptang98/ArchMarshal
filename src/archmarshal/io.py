@@ -6,6 +6,8 @@ from typing import Any
 
 import yaml
 
+from .safety import files_below_no_links
+
 PLACEHOLDER_FILES = {".gitkeep"}
 
 
@@ -47,6 +49,6 @@ def list_files(path: Path) -> list[Path]:
         return []
     return sorted(
         item
-        for item in path.rglob("*")
+        for item in files_below_no_links(path, purpose="File inventory")
         if item.is_file() and not is_placeholder(item)
     )

@@ -25,7 +25,9 @@ archmarshal-start . --apply --tag research --pretty
 
 This creates a verified backup and then adds only missing control-plane files.
 Existing project files, `SKILL.md`, and source skill manifests are not changed.
-Skill routing metadata lives in `.agent/skill-overlays/`.
+Skill routing metadata lives in `.agent/skill-overlays/`. Later syncs create
+immutable, content-addressed generations and atomically advance only
+ArchMarshal's internal `HEAD` after an exclusive lock and stale-plan check.
 
 For a project that is already managed, type:
 
@@ -35,6 +37,10 @@ archmarshal-start
 
 ArchMarshal checks save paths, naming, memory/history rules, and then Codex can
 keep using it quietly while you give normal project instructions.
+
+If start reports a modified, removed, or restored skill, inspect the preview
+before adding `--apply`. A concurrent or stale preview is rejected. ArchMarshal
+does not edit, move, or delete the source skill during either preview or apply.
 
 Then give normal instructions, for example:
 

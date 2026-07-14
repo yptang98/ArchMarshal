@@ -6,7 +6,7 @@ rearrange the project itself.
 ## Non-Negotiable Invariants
 
 1. Existing project files and skills are human-owned.
-2. Adoption never overwrites, moves, renames, or deletes an existing path.
+2. Adoption never overwrites, moves, renames, or deletes a human-owned path.
 3. An existing `SKILL.md` remains the behavioral source of truth.
 4. Missing routing metadata is created under `.agent/skill-overlays/`, never in
    the source skill directory.
@@ -17,6 +17,10 @@ rearrange the project itself.
 8. Closeout writes to a unique new directory and never edits prior sessions.
 9. Reproduction records exclude environment variables and block known inline-secret patterns; selected text and scripts still require review.
 10. Skill and preference promotion is review-only.
+11. Skill sync creates immutable generations. The only replaced path is the
+    ArchMarshal-owned `HEAD`, after backup, exclusive lock, and expected-value
+    validation.
+12. Directory scans never follow symbolic links, junctions, or reparse points.
 
 These constraints intentionally make ArchMarshal less aggressive than a general
 project formatter. A safe partial adoption is preferable to a clever rewrite
@@ -43,8 +47,10 @@ The managed backup scope contains:
 
 - Existing ArchMarshal control files, if any.
 - Existing `.agent/` files.
-- Every discovered `SKILL.md`.
-- Every existing source skill `manifest.yaml`.
+- Every regular file in each discovered non-root skill package (bounded by the
+  same link, file-count, and byte limits used for fingerprinting).
+- For a repository-root `SKILL.md`, only the entrypoint and root manifest, so a
+  managed backup does not silently become a full-project backup.
 
 Use `--backup-scope full` when the user requires a broad project-content snapshot. VCS
 internals, dependency directories, virtual environments, and previous backups
@@ -92,6 +98,41 @@ fingerprint. Linked or unexpectedly huge packages are rejected rather than
 followed implicitly. This is analogous
 to a module registry or package-lock overlay: identity and routing are managed
 without rewriting the module implementation.
+
+### Immutable Sync Generations
+
+Initial adoption keeps human-readable overlay manifests. Incremental start/sync
+also maintains this internal registry:
+
+```text
+.agent/skill-overlays/.archmarshal/
+├─ HEAD
+├─ HEAD.lock
+└─ objects/sha256/<generation-digest>.json
+```
+
+A generation is a complete, canonical JSON view of active and removed skills.
+It points to its parent and records `added`, `modified`, `removed`, and
+`restored` changes. Every regular file in a skill package contributes to its
+fingerprint, so changing a script, reference, template, or asset produces a new
+generation without editing the source.
+
+Commit order is deliberately narrow:
+
+1. Create and verify the pre-sync backup.
+2. Acquire `HEAD.lock` exclusively; an existing lock blocks the commit.
+3. Confirm `HEAD` still equals the preview's expected digest.
+4. Exclusively create or verify the content-addressed object.
+5. Recheck `HEAD`, then atomically replace the internal pointer.
+6. Reload and verify the published generation before reporting success.
+
+If publication fails before step 5, the old `HEAD` remains authoritative. A
+fully written orphan object is harmless and retained for audit; ArchMarshal has
+no automatic garbage collector yet. If a process is killed hard, a stale lock
+may remain. ArchMarshal intentionally does not guess that it is safe to break:
+confirm no ArchMarshal process is running, preserve/copy `HEAD.lock` for audit,
+and only then remove it manually before replanning. Never delete `HEAD` or edit
+an object in place.
 
 ## Project Layout
 

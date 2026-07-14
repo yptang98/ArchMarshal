@@ -37,6 +37,7 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 - Detects skill conflicts, missing manifests, unsafe read policies, unregistered generated skills, unregistered memory locations, and workspace mappings that could bloat context.
 - Adopts existing projects through **metadata overlays**: existing `SKILL.md` and project files stay untouched.
 - Fingerprints the **complete skill package**, so script/reference/asset drift is visible without rewriting the source.
+- Records skill additions, modifications, removals, and restores as immutable, content-addressed generations with a locked compare-and-swap `HEAD`.
 - Records **quick**, **standard**, or **reproducible** closeouts in append-only, date-organized directories.
 - Catalogs multiple projects by recorded creation date and AND-filtered tags.
 - Extracts review-only common-skill and user-preference candidates from compact session manifests.
@@ -86,14 +87,17 @@ existing skill in place, and stores generated routing metadata under
 tool, adoption blocks instead of overwriting it.
 
 For an already managed project, start also previews newly added skills and
-complete-package drift:
+complete-package drift. Applying an approved sync writes a new immutable skill
+generation; it never replaces the source skill or an older generation:
 
 ```text
 archmarshal-start
 ```
 
-Use `--apply` only to create missing overlay metadata. Changed existing overlays
-are reported for review and are never replaced implicitly.
+Use `--apply` only after reviewing the proposed generation and expected `HEAD`.
+Modified, removed, and restored skills are explicit plan entries. ArchMarshal
+updates only its internal `HEAD` pointer under an exclusive lock and stale-plan
+check; human-owned files remain untouched.
 
 Then continue with normal work:
 
@@ -162,7 +166,7 @@ reproducible evidence when writing a session.
 - No automatic project directory rewrite.
 - No deletion.
 - No in-place edits to adopted skills; source skills are referenced through overlays.
-- No overwrite or force mode for adoption and closeout.
+- No overwrite or force mode for human-owned files; the only replacement is ArchMarshal's internal, backed-up `HEAD` pointer after lock/CAS validation.
 - No summarization that deletes or replaces original project history.
 - No automatic global configuration mutation.
 - No dynamic context loading runtime.
@@ -256,17 +260,20 @@ The compatibility wrapper still works:
 python scripts/inventory.py examples/simple-project --pretty
 ```
 
-`--apply` is deliberately narrow: adoption creates only missing control-plane
-files after a verified backup; closeout and learning create only new append-only
+`--apply` is deliberately narrow: adoption creates missing control-plane files
+after a verified backup, skill sync creates immutable generation objects and
+atomically advances an internal `HEAD`, and closeout/learning create append-only
 artifacts. There is no overwrite, move, delete, force, or automatic promotion
-path.
+path for human-owned project or skill files.
 
 ## Safety Rules
 
 - Inventory, lint, audit, and plan are read-only by default.
 - Adoption, closeout recording, and learning are preview-only unless `--apply` is explicit.
-- Adoption backs up managed metadata and skill entry documents before writing; `--backup-scope full` creates a bounded project-content snapshot excluding VCS, dependencies, virtual environments, and prior backups.
+- Adoption backs up managed metadata and complete non-root skill packages before writing; root skills remain entrypoint-only. `--backup-scope full` creates a bounded project-content snapshot excluding VCS, dependencies, virtual environments, and prior backups.
 - Existing skill sources are immutable to ArchMarshal; overlay manifests live under `.agent/skill-overlays/`.
+- Skill sync uses immutable content-addressed objects, an exclusive `HEAD.lock`, and an expected-`HEAD` compare-and-swap; stale or concurrent plans fail without changing the active generation.
+- Directory scans do not follow symlinks, junctions, or Windows reparse points and enforce file/package bounds.
 - Reserved control-file conflicts block the whole adoption before managed files are written.
 - Closeout uses unique append-only directories and verifies copied script hashes.
 - Environment variables are not captured. Known inline-secret patterns are blocked, but user-selected text and script snapshots may still contain sensitive material and require review.
@@ -325,6 +332,7 @@ path.
 - [x] Preview-first, backup-before-write adoption for existing projects
 - [x] Non-mutating skill metadata overlays
 - [x] Complete skill-package fingerprints and drift reporting
+- [x] Immutable skill generations with add/modify/remove/restore history and lock/CAS publication
 - [x] Content-verified backup inspection and restore-to-new-directory flow
 - [x] Conflict blocking and exclusive file creation (no overwrite mode)
 - [x] Quick, standard, and reproducible append-only closeout records

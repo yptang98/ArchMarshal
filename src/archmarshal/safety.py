@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -27,6 +28,7 @@ MAX_BACKUP_CONTENT_BYTES = 20 * 1024 * 1024 * 1024
 MAX_BACKUP_MANIFEST_BYTES = 32 * 1024 * 1024
 MAX_SKILL_FILES = 10_000
 MAX_SKILL_CONTENT_BYTES = 1024 * 1024 * 1024
+MAX_DIRECTORY_SCAN_FILES = 100_000
 WINDOWS_RESERVED_NAMES = {
     "CON",
     "PRN",
@@ -45,6 +47,17 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def is_link_or_reparse(path: Path) -> bool:
+    """Detect POSIX links and Windows reparse points without following them."""
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return False
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return path.is_symlink() or bool(reparse_flag and attributes & reparse_flag)
+
+
 def fingerprint_directory(
     root: Path,
     *,
@@ -58,7 +71,7 @@ def fingerprint_directory(
     routine start operation consume unbounded resources.
     """
     directory = root.resolve()
-    if not directory.is_dir() or root.is_symlink():
+    if not directory.is_dir() or is_link_or_reparse(root):
         raise ArchMarshalError(
             "fingerprint_root_invalid",
             f"{purpose} must be a real directory, not a symbolic link.",
@@ -66,8 +79,13 @@ def fingerprint_directory(
         )
     records: list[dict[str, Any]] = []
     total_bytes = 0
-    for path in _walk_files_no_links(directory, reject_links=True, purpose=purpose):
-        if path.is_symlink():
+    for path in _walk_files_no_links(
+        directory,
+        reject_links=True,
+        purpose=purpose,
+        max_files=MAX_SKILL_FILES + 1,
+    ):
+        if is_link_or_reparse(path):
             raise ArchMarshalError(
                 "fingerprint_symlink_unsupported",
                 f"{purpose} contains a symbolic link; ArchMarshal will not follow it implicitly.",
@@ -160,7 +178,7 @@ def ensure_managed_path(root: Path, path: Path, *, purpose: str) -> Path:
     current = root
     for part in lexical.parts:
         current = current / part
-        if current.exists() and current.is_symlink():
+        if current.exists() and is_link_or_reparse(current):
             raise ArchMarshalError(
                 "unsafe_managed_link",
                 f"{purpose} crosses a symbolic link or junction.",
@@ -214,7 +232,7 @@ def create_backup(
     selected: dict[str, Path] = {}
     estimated_bytes = 0
     for item in files:
-        if item.is_symlink():
+        if is_link_or_reparse(item):
             raise ArchMarshalError(
                 "backup_symlink_unsupported",
                 "Backup source is a symbolic link; ArchMarshal will not follow it implicitly.",
@@ -504,7 +522,7 @@ def restore_backup(
             "Restore destination parent must be an existing directory.",
             details={"parent": str(parent)},
         )
-    if target_root.exists() or target_root.is_symlink():
+    if target_root.exists() or is_link_or_reparse(target_root):
         raise ArchMarshalError(
             "restore_destination_exists",
             "Restore destination must not already exist; ArchMarshal never restores over files.",
@@ -593,21 +611,36 @@ def files_for_full_backup(root: Path) -> list[Path]:
     root = root.resolve()
     return [
         path
-        for path in _walk_files_no_links(root, reject_links=False, purpose="Project backup")
+        for path in _walk_files_no_links(
+            root,
+            reject_links=False,
+            purpose="Project backup",
+            max_files=MAX_BACKUP_FILES,
+        )
         if path.is_file()
         and not any(part in EXCLUDED_BACKUP_PARTS for part in path.relative_to(root).parts)
         and not path.relative_to(root).as_posix().startswith(".agent/backups/")
     ]
 
 
-def files_below_no_links(directory: Path, *, purpose: str) -> list[Path]:
-    if directory.is_symlink():
+def files_below_no_links(
+    directory: Path,
+    *,
+    purpose: str,
+    max_files: int = MAX_DIRECTORY_SCAN_FILES,
+) -> list[Path]:
+    if is_link_or_reparse(directory):
         raise ArchMarshalError(
             "unsafe_managed_link",
             f"{purpose} root must not be a symbolic link or junction.",
             details={"path": str(directory)},
         )
-    return _walk_files_no_links(directory.resolve(), reject_links=False, purpose=purpose)
+    return _walk_files_no_links(
+        directory.resolve(),
+        reject_links=False,
+        purpose=purpose,
+        max_files=max_files,
+    )
 
 
 def _walk_files_no_links(
@@ -615,6 +648,7 @@ def _walk_files_no_links(
     *,
     reject_links: bool,
     purpose: str,
+    max_files: int,
 ) -> list[Path]:
     files: list[Path] = []
     for current, directories, filenames in os.walk(directory, topdown=True, followlinks=False):
@@ -622,7 +656,7 @@ def _walk_files_no_links(
         kept: list[str] = []
         for name in sorted(directories, key=str.casefold):
             candidate = current_path / name
-            if candidate.is_symlink():
+            if is_link_or_reparse(candidate):
                 if reject_links:
                     raise ArchMarshalError(
                         "fingerprint_symlink_unsupported",
@@ -632,7 +666,23 @@ def _walk_files_no_links(
                 continue
             kept.append(name)
         directories[:] = kept
-        files.extend(current_path / name for name in sorted(filenames, key=str.casefold))
+        for name in sorted(filenames, key=str.casefold):
+            candidate = current_path / name
+            if is_link_or_reparse(candidate):
+                if reject_links:
+                    raise ArchMarshalError(
+                        "fingerprint_symlink_unsupported",
+                        f"{purpose} contains a linked file; ArchMarshal will not follow it.",
+                        details={"path": str(candidate)},
+                    )
+                continue
+            if len(files) >= max_files:
+                raise ArchMarshalError(
+                    "directory_scan_limit_exceeded",
+                    f"{purpose} exceeds the {max_files}-file scan limit.",
+                    details={"path": str(directory)},
+                )
+            files.append(candidate)
     return files
 
 
@@ -644,6 +694,7 @@ __all__ = [
     "fingerprint_directory",
     "files_below_no_links",
     "files_for_full_backup",
+    "is_link_or_reparse",
     "sha256_file",
     "restore_backup",
     "unique_path",

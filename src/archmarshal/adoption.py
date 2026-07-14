@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from .errors import require_workspace_root
+from .errors import ArchMarshalError, require_workspace_root
 from .io import load_yaml_safe
 from .safety import (
     create_backup,
@@ -20,6 +20,12 @@ from .safety import (
     files_for_full_backup,
     fingerprint_directory,
     sha256_file,
+)
+from .skill_index import (
+    commit_skill_index,
+    disabled_skill_index_plan,
+    plan_skill_index,
+    public_skill_index_plan,
 )
 
 SKILL_ROOT_CANDIDATES = (
@@ -80,7 +86,7 @@ def adopt_workspace(
         payload = _public_plan(built, applied=False)
         payload["mode"] = "blocked"
         return payload
-    if not built["writes"]:
+    if not built["writes"] and not built["skill_index_plan"]["changed"]:
         payload = _public_plan(built, applied=True)
         payload["mode"] = "review_required" if built["review_required"] else "already_managed"
         payload["backup"] = None
@@ -107,6 +113,7 @@ def adopt_workspace(
 
     created: list[Path] = []
     created_directories: list[Path] = []
+    index_commit: dict[str, Any] | None = None
     try:
         for relative in MANAGED_DIRECTORIES:
             directory = root_path / relative
@@ -116,6 +123,22 @@ def adopt_workspace(
         for target, content in built["writes"].items():
             create_text_exclusive(target, content)
             created.append(target)
+        if built["skill_index_plan"]["changed"]:
+            revalidated = plan_skill_index(
+                root_path,
+                _discover_skills(root_path),
+                created_at=built["skill_index_plan"]["generation"]["created_at"],
+            )
+            if (
+                revalidated.get("expected_head")
+                != built["skill_index_plan"].get("expected_head")
+                or revalidated.get("digest") != built["skill_index_plan"].get("digest")
+            ):
+                raise ArchMarshalError(
+                    "skill_index_stale_plan",
+                    "Skill sources or HEAD changed after planning; the sync was not committed.",
+                )
+            index_commit = commit_skill_index(root_path, revalidated)
     except BaseException:
         for target in reversed(created):
             target.unlink(missing_ok=True)
@@ -129,12 +152,14 @@ def adopt_workspace(
     payload = _public_plan(built, applied=True)
     payload["mode"] = "overlay_synced" if built["configured"] else "overlay_applied"
     payload["backup"] = backup
+    payload["skill_index_commit"] = index_commit
     payload["created"] = [path.relative_to(root_path).as_posix() for path in created]
     payload["safety_guarantees"] = [
-        "No existing file was overwritten.",
+        "No existing user-owned file was overwritten.",
         "No existing skill or project file was moved, renamed, or deleted.",
         "Skill metadata was written only under .agent/skill-overlays.",
         "The pre-adoption snapshot was verified before managed files were created.",
+        "Skill generations are immutable; only the internal HEAD pointer is atomically updated.",
     ]
     return payload
 
@@ -155,9 +180,18 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
         if (root / relative).exists() and not configured
     ]
     skills = _discover_skills(root)
-    review_required = any(
+    manage_index = not configured or overlay_enabled
+    skill_index_plan = (
+        plan_skill_index(root, skills) if manage_index else disabled_skill_index_plan()
+    )
+    indexed_review_required = any(
+        change.get("kind") in {"modified", "removed", "restored"}
+        for change in skill_index_plan["changes"]
+    )
+    legacy_review_required = skill_index_plan.get("expected_head") is None and any(
         skill["source_drift"] not in {"new", "unchanged"} for skill in skills
     )
+    review_required = indexed_review_required or legacy_review_required
     normalized_tags = _normalize_tags(tags) or ["archmarshal"]
     writes: dict[Path, str] = {}
 
@@ -185,7 +219,7 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
         agents = root / "AGENTS.md"
         if not agents.exists():
             writes[agents] = _agents_markdown()
-    if overlay_enabled:
+    if overlay_enabled and not configured:
         for skill in skills:
             overlay = root / skill["overlay_manifest"]
             if not overlay.exists():
@@ -214,6 +248,7 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
         "tags": normalized_tags,
         "skills": skills,
         "review_required": review_required,
+        "skill_index_plan": skill_index_plan,
         "writes": writes,
         "backup_files": backup_files,
         "conflicts": reserved_conflicts,
@@ -231,6 +266,12 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
         }
         for path in built["writes"]
     ]
+    tracked_changes = {
+        str(change.get("source")): str(change.get("kind"))
+        for change in built["skill_index_plan"].get("changes", [])
+        if change.get("kind") in {"modified", "restored"}
+    }
+    legacy_review = built["skill_index_plan"].get("expected_head") is None
     operations.extend(
         {
             "action": "review_source_change",
@@ -239,8 +280,27 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
             "overwrite": False,
         }
         for skill in built["skills"]
-        if skill["source_drift"] not in {"new", "unchanged"}
+        if skill["source"] in tracked_changes
+        or (legacy_review and skill["source_drift"] not in {"new", "unchanged"})
     )
+    index_plan = public_skill_index_plan(built["skill_index_plan"])
+    if index_plan["changed"]:
+        operations.extend(
+            [
+                {
+                    "action": "create_immutable_generation",
+                    "path": index_plan["object_path"],
+                    "overwrite": False,
+                },
+                {
+                    "action": "compare_and_swap_internal_head",
+                    "path": ".agent/skill-overlays/.archmarshal/HEAD",
+                    "expected": index_plan["expected_head"],
+                    "value": index_plan["proposed_head"],
+                    "user_owned": False,
+                },
+            ]
+        )
     return {
         "tool": "archmarshal",
         "stage": "sync" if built["configured"] else "adopt",
@@ -250,6 +310,7 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
         "overlay_enabled": built["overlay_enabled"],
         "blocked": built["blocked"],
         "review_required": built["review_required"],
+        "skill_index": index_plan,
         "backup_scope": built["backup_scope"],
         "project_tags": built["tags"],
         "discovered_skills": [
@@ -260,6 +321,12 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
                 "overlay_manifest": skill["overlay_manifest"],
                 "source_will_change": False,
                 "source_drift": skill["source_drift"],
+                "tracking_state": tracked_changes.get(
+                    skill["source"],
+                    "indexed"
+                    if index_plan["enabled"] and index_plan["expected_head"]
+                    else skill["source_drift"],
+                ),
             }
             for skill in built["skills"]
         ],
@@ -267,7 +334,8 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
         "conflicts": built["conflicts"],
         "notes": [
             "Preview is the default; pass --apply to create the listed files.",
-            "Existing files are never overwritten, even with --apply.",
+            "Existing user-owned files are never overwritten, even with --apply.",
+            "Only ArchMarshal's internal HEAD pointer may be atomically replaced after backup and CAS validation.",
             "Existing skills stay in place; overlays provide routing metadata without changing SKILL.md.",
             "A verified backup is created before the first managed file is added.",
             (
@@ -288,7 +356,9 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
         candidate = root / relative
         if not candidate.exists():
             continue
-        for path in candidate.rglob("SKILL.md"):
+        for path in files_below_no_links(candidate, purpose="Skill discovery"):
+            if path.name != "SKILL.md":
+                continue
             if ".agent" not in path.relative_to(root).parts:
                 skill_docs.add(path)
 
@@ -617,10 +687,21 @@ def _managed_backup_files(root: Path, skills: list[dict[str, Any]]) -> list[Path
         )
     for skill in skills:
         source_dir = root / skill["source"]
-        for name in ("SKILL.md", "manifest.yaml"):
-            candidate = source_dir / name
-            if candidate.is_file():
-                files.add(candidate)
+        if source_dir.resolve() == root:
+            for name in ("SKILL.md", "manifest.yaml"):
+                candidate = source_dir / name
+                if candidate.is_file():
+                    files.add(candidate)
+        else:
+            files.update(
+                path
+                for path in files_below_no_links(
+                    source_dir,
+                    purpose="Source skill package backup",
+                    max_files=10_000,
+                )
+                if path.is_file()
+            )
     return sorted(files)
 
 

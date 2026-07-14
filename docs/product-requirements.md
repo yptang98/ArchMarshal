@@ -28,8 +28,8 @@ This document maps the core product needs to concrete ArchMarshal behavior.
 | Context compression should preserve key project state. | `archmarshal checkpoint` creates a read-only candidate checkpoint with summary, decisions, key files, next steps, and memory-record suggestions. | `src/archmarshal/checkpoint.py`, `tests/test_archmarshal.py` |
 | Project completion should produce skill/memory cleanup. | `archmarshal closeout --used-skill` summarizes used skills, preservation needs, reproduction checks, missing skill references, diagnostics, and propose-only cleanup actions. | `src/archmarshal/closeout.py`, `tests/test_archmarshal.py` |
 | Recording depth should be automatic and novelty-aware. | Checkpoint and closeout emit `recording_policy.mode: auto`; routine skill reuse only records important changes, while novel work can suggest memory/context/skill promotion. | `recording_policy.mode`, `recording_policy.level`, `src/archmarshal/checkpoint.py`, `src/archmarshal/closeout.py` |
-| Existing projects and skills must not be damaged during adoption. | Adoption is preview-first, blocks on reserved-file conflicts, exclusively creates new paths, verifies a backup first, and represents source skills through non-mutating overlays. | `src/archmarshal/adoption.py`, `src/archmarshal/safety.py`, `test_adoption_preview_is_read_only_and_apply_uses_skill_overlays` |
-| Existing skills need dynamic metadata without in-place rewrites. | Overlay manifests point to human-owned source directories with `managed: false` and `mutation_policy: never`; complete-package hashes reveal script/reference/asset drift without changing the source. | `package_sha256`, `src/archmarshal/inventory.py` |
+| Existing projects and skills must not be damaged during adoption. | Adoption is preview-first, blocks on reserved-file conflicts, verifies a backup first, exclusively creates user-facing control paths, and never writes source skills. Linked/reparse paths and bounded-scan violations fail or are skipped without traversal. | `src/archmarshal/adoption.py`, `src/archmarshal/safety.py`, `test_adoption_preview_is_read_only_and_apply_uses_skill_overlays` |
+| Existing skills need dynamic metadata without in-place rewrites. | Complete-package hashes feed immutable content-addressed generations. Sync records add/modify/remove/restore events and publishes only by exclusive lock plus expected-`HEAD` compare-and-swap; source skills and old generations are never rewritten. | `src/archmarshal/skill_index.py`, `src/archmarshal/inventory.py`, `tests/test_skill_index.py` |
 | Projects should be human-findable by date and tag. | Workspace metadata records creation/adoption dates and tags; closeout records use `.agent/history/YYYY/MM/DD/<time>-<topic>-<level>/`. | `src/archmarshal/adoption.py`, `src/archmarshal/session.py` |
 | Users need a lightweight view across projects. | `catalog` sorts project control planes by recorded creation date and supports AND-filtered tags without loading raw history. | `src/archmarshal/catalog.py`, `test_catalog_sorts_and_filters_projects_by_date_and_tags` |
 | Project closeout needs three evidence levels. | `quick` records outcome, `standard` adds ordered steps and key-script hashes, and `reproducible` adds environment/dependency fingerprints, script snapshots, exact commands, and a reference run script. | `archmarshal end --level`, `src/archmarshal/session.py` |
@@ -44,11 +44,11 @@ The safe adoption path is:
 
 1. Preview `adopt` and inspect every proposed path and conflict.
 2. Choose managed or broad project-content backup scope.
-3. Apply only missing control-plane files; source skills remain unchanged.
+3. Apply missing control-plane files or a reviewed immutable generation; source skills remain unchanged.
 4. Run inventory/lint/audit/plan against the overlay.
 5. Use append-only checkpoints and one of the three closeout levels.
 6. Aggregate compact session evidence into review-only skill/preference candidates.
 
 ArchMarshal still has no general mutation engine. Apply-capable commands are
-limited to exclusive creation of backups, overlays, session records, and
-candidate packs.
+limited to exclusive creation of backups/managed files, immutable generation
+objects, an atomic internal `HEAD` update, session records, and candidate packs.

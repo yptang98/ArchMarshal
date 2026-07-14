@@ -7,7 +7,8 @@ from typing import Any
 from . import __version__
 from .errors import ArchMarshalError, require_workspace_root
 from .io import list_files, load_yaml_safe, rel
-from .safety import fingerprint_directory, sha256_file
+from .safety import files_below_no_links, fingerprint_directory, sha256_file
+from .skill_index import load_skill_index, skill_index_summary
 
 DEFAULT_PATHS = {
     "project_root": ".",
@@ -71,6 +72,7 @@ class WorkspaceInventory:
     detected_memory_locations: list[dict[str, Any]]
     unregistered_agent_files: list[str]
     unsafe_paths: list[dict[str, str]]
+    skill_index: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,6 +93,7 @@ class WorkspaceInventory:
             "detected_memory_locations": self.detected_memory_locations,
             "unregistered_agent_files": self.unregistered_agent_files,
             "unsafe_paths": self.unsafe_paths,
+            "skill_index": self.skill_index,
             "notes": [
                 "Read-only scan; no files were modified.",
                 "Historical artifact directories should not be loaded by default.",
@@ -275,7 +278,24 @@ def _load_skill_manifest(manifest_path: Path, root: Path) -> dict[str, Any]:
             "_schema_data": result.data,
             "_schema_error": "Skill manifest must be a YAML mapping.",
         }
-    skill_dir = manifest_path.parent
+    return _finalize_skill_manifest(
+        manifest,
+        root=root,
+        manifest_label=rel(manifest_path, root),
+        default_skill_dir=manifest_path.parent,
+        overlay_label=None,
+    )
+
+
+def _finalize_skill_manifest(
+    manifest: dict[str, Any],
+    *,
+    root: Path,
+    manifest_label: str,
+    default_skill_dir: Path,
+    overlay_label: str | None,
+) -> dict[str, Any]:
+    skill_dir = default_skill_dir
     source = manifest.get("source") if isinstance(manifest, dict) else None
     source_dir = source.get("skill_dir") if isinstance(source, dict) else None
     if isinstance(source_dir, str) and source_dir.strip():
@@ -286,8 +306,8 @@ def _load_skill_manifest(manifest_path: Path, root: Path) -> dict[str, Any]:
             manifest["_source_error"] = "Overlay source escapes the workspace root."
         else:
             skill_dir = candidate
-            manifest["_overlay_manifest_path"] = rel(manifest_path, root)
-    manifest["_manifest_path"] = rel(manifest_path, root)
+            manifest["_overlay_manifest_path"] = overlay_label or manifest_label
+    manifest["_manifest_path"] = manifest_label
     manifest["_skill_dir"] = rel(skill_dir, root)
     manifest["_has_skill_md"] = (skill_dir / "SKILL.md").exists()
     if manifest["_has_skill_md"]:
@@ -322,7 +342,30 @@ def _load_skill_manifest(manifest_path: Path, root: Path) -> dict[str, Any]:
     return manifest
 
 
-def _find_skills(root: Path, entries: dict[str, list[Path]]) -> list[dict[str, Any]]:
+def _load_virtual_skill(
+    record: dict[str, Any],
+    *,
+    root: Path,
+    object_path: str,
+    index: int,
+) -> dict[str, Any]:
+    manifest = dict(record["manifest"])
+    source = str(record["source"])
+    label = f"{object_path}#$.skills[{index}].manifest"
+    return _finalize_skill_manifest(
+        manifest,
+        root=root,
+        manifest_label=label,
+        default_skill_dir=root / source,
+        overlay_label=label,
+    )
+
+
+def _find_skills(
+    root: Path,
+    entries: dict[str, list[Path]],
+    loaded_skill_index: dict[str, Any],
+) -> list[dict[str, Any]]:
     skill_roots = (
         entries.get("global_skills", [])
         + entries.get("functional_skills", [])
@@ -334,9 +377,10 @@ def _find_skills(root: Path, entries: dict[str, list[Path]]) -> list[dict[str, A
     for skill_root in skill_roots:
         if not skill_root.exists():
             continue
-        for manifest_path in skill_root.rglob("manifest.yaml"):
+        files = files_below_no_links(skill_root, purpose="Skill inventory")
+        for manifest_path in (path for path in files if path.name == "manifest.yaml"):
             manifests[manifest_path.resolve()] = _load_skill_manifest(manifest_path, root)
-        for skill_md in skill_root.rglob("SKILL.md"):
+        for skill_md in (path for path in files if path.name == "SKILL.md"):
             manifest_path = skill_md.parent / "manifest.yaml"
             if not manifest_path.exists():
                 manifests[manifest_path.resolve()] = {
@@ -345,7 +389,23 @@ def _find_skills(root: Path, entries: dict[str, list[Path]]) -> list[dict[str, A
                     "_has_skill_md": True,
                     "_missing_manifest": True,
                 }
-    return sorted(manifests.values(), key=lambda item: item.get("_skill_dir", ""))
+    records = (loaded_skill_index.get("generation") or {}).get("skills", [])
+    indexed_sources = {str(record["source"]) for record in records}
+    skills = [
+        manifest
+        for manifest in manifests.values()
+        if not (
+            isinstance(manifest.get("source"), dict)
+            and str(manifest["source"].get("skill_dir") or "") in indexed_sources
+        )
+    ]
+    object_path = str(loaded_skill_index.get("object_path") or "")
+    skills.extend(
+        _load_virtual_skill(record, root=root, object_path=object_path, index=index)
+        for index, record in enumerate(records)
+        if record.get("state") == "active"
+    )
+    return sorted(skills, key=lambda item: item.get("_skill_dir", ""))
 
 
 def _load_context_module(module_path: Path, root: Path) -> dict[str, Any]:
@@ -368,7 +428,9 @@ def _find_context_modules(root: Path, entries: dict[str, list[Path]]) -> list[di
     for context_root in entries.get("context_modules", []):
         if not context_root.exists():
             continue
-        for module_path in context_root.rglob("module.yaml"):
+        for module_path in files_below_no_links(context_root, purpose="Context module inventory"):
+            if module_path.name != "module.yaml":
+                continue
             modules.append(_load_context_module(module_path, root))
     return sorted(modules, key=lambda item: item.get("_module_path", ""))
 
@@ -452,6 +514,7 @@ def collect_inventory(root: Path | str) -> WorkspaceInventory:
             ) from exc
     workspace, paths, save_paths, naming = _load_workspace(resolved_root)
     entries, unsafe_paths = _path_entries(resolved_root, paths)
+    loaded_skill_index = load_skill_index(resolved_root)
     artifacts = _load_registry(resolved_root)
     memory_stores = _load_memory_stores(resolved_root)
     memory_records = _load_memory_records(resolved_root)
@@ -464,11 +527,12 @@ def collect_inventory(root: Path | str) -> WorkspaceInventory:
         files=_file_status(resolved_root),
         directories=_directory_status(resolved_root, entries),
         artifacts=artifacts,
-        skills=_find_skills(resolved_root, entries),
+        skills=_find_skills(resolved_root, entries, loaded_skill_index),
         context_modules=_find_context_modules(resolved_root, entries),
         memory_stores=memory_stores,
         memory_records=memory_records,
         detected_memory_locations=_detect_memory_locations(resolved_root),
         unregistered_agent_files=_unregistered_agent_files(resolved_root, artifacts),
         unsafe_paths=unsafe_paths,
+        skill_index=skill_index_summary(loaded_skill_index),
     )

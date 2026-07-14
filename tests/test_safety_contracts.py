@@ -16,6 +16,7 @@ from archmarshal.learning import learn_from_projects
 from archmarshal.lint import lint_workspace
 from archmarshal.safety import create_backup, restore_backup, verify_backup
 from archmarshal.session import record_closeout
+from archmarshal.skill_index import load_skill_index
 
 
 def _skill(root: Path, name: str = "demo") -> Path:
@@ -233,7 +234,13 @@ def test_complete_skill_package_drift_is_detected_without_source_mutation(tmp_pa
     scripts.mkdir()
     script = scripts / "run.py"
     script.write_text("print('v1')\n", encoding="utf-8")
-    adopt_workspace(root, apply=True)
+    adopted = adopt_workspace(root, apply=True)
+    backup = verify_backup(root / adopted["backup"]["path"])
+
+    assert {
+        "skills/demo/SKILL.md",
+        "skills/demo/scripts/run.py",
+    }.issubset({item["path"] for item in backup["manifest"]["files"]})
 
     script.write_text("print('v2')\n", encoding="utf-8")
     preview = plan_adoption(root)
@@ -279,8 +286,11 @@ def test_managed_project_discovers_new_skill_create_only(tmp_path: Path) -> None
     assert applied["mode"] == "overlay_synced"
     assert (new_skill / "SKILL.md").read_bytes() == before
     overlay = root / applied["discovered_skills"][0]["overlay_manifest"]
-    assert overlay.exists()
-    assert yaml.safe_load(overlay.read_text(encoding="utf-8"))["name"] == "新增技能"
+    assert not overlay.exists()
+    index = load_skill_index(root)
+    assert applied["skill_index_commit"]["mode"] == "committed"
+    assert index["head"] == applied["skill_index_commit"]["head"]
+    assert index["generation"]["skills"][0]["manifest"]["name"] == "新增技能"
 
 
 def test_cli_start_apply_and_quick_end_apply(capsys, tmp_path: Path) -> None:
@@ -405,3 +415,24 @@ def test_linked_agent_directory_is_rejected(tmp_path: Path) -> None:
 
     assert raised.value.code in {"unsafe_managed_link", "unsafe_path_escape"}
     assert list(outside.iterdir()) == []
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable")
+def test_nested_linked_skill_directory_is_not_scanned(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    (root / "skills").mkdir()
+    outside_skill = _skill(outside, "private")
+    marker = outside_skill / "scripts" / "secret.txt"
+    marker.parent.mkdir()
+    marker.write_text("must remain outside\n", encoding="utf-8")
+    try:
+        os.symlink(outside_skill, root / "skills" / "linked", target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation is unavailable: {exc}")
+
+    preview = plan_adoption(root)
+
+    assert preview["discovered_skills"] == []
+    assert marker.read_text(encoding="utf-8") == "must remain outside\n"

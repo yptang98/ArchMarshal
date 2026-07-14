@@ -1,6 +1,6 @@
 # Product Readiness
 
-ArchMarshal 0.5 is a safety-hardened alpha, not yet a stable product. This page
+ArchMarshal 0.6 is a safety-hardened alpha, not yet a stable product. This page
 separates implemented behavior from design intent so users can decide what to
 trust.
 
@@ -8,8 +8,8 @@ trust.
 
 | Area | Current state | Safety boundary | Remaining stable-release work |
 |---|---|---|---|
-| Existing project adoption | Implemented | Preview-first, reserved-file conflicts block, create-only writes | Atomic multi-file transaction journal and crash recovery |
-| Existing skill management | Implemented with review gaps | Complete-package fingerprint; source never rewritten | Immutable versioned overlay generations, lock/CAS commit, reviewed activation |
+| Existing project adoption | Implemented | Preview-first, reserved-file conflicts block, user-owned paths never replaced | Atomic multi-file transaction journal and crash recovery |
+| Existing skill management | Implemented, review-first | Complete-package fingerprint; immutable generations; lock/CAS `HEAD`; source never rewritten | Explicit accept/reject/rollback CLI and safe orphan cleanup |
 | Backup | Implemented | Bounded archive, byte hashes, CRC, manifest validation, no partial publish | Large-workspace benchmarks and documented retention policy |
 | Restore | Implemented | Restores only into a new directory and removes partial output on failure | Guided diff/merge tooling; never add in-place restore |
 | Project start | Implemented | Read-only lint plus adoption/sync preview | Share one immutable inventory snapshot for performance |
@@ -25,10 +25,10 @@ trust.
 
 A stable release requires all of the following:
 
-1. No overwrite, move, rename, or delete path in adoption, sync, learning, or closeout.
-2. Symlink/junction escape tests on both Windows and Linux.
-3. Fault injection for interrupted writes, permissions, disk exhaustion, source mutation, corrupt archives, and concurrent sync.
-4. Immutable overlay generations with a stale-plan compare-and-swap check.
+1. No overwrite, move, rename, or delete path for human-owned project or skill files in adoption, sync, learning, or closeout.
+2. Symlink/junction/reparse escape tests on both Windows and Linux. Basic cross-platform link tests exist; native junction coverage remains.
+3. Fault injection for interrupted writes, permissions, disk exhaustion, source mutation, corrupt archives, and concurrent sync. Atomic-swap, collision, lock, tamper, archive, and source-drift cases exist; permission/disk-exhaustion coverage remains.
+4. Immutable overlay generations with a stale-plan compare-and-swap check. Implemented; a reviewed rollback command and stale-lock recovery command remain.
 5. Statement coverage at least 85% and branch coverage at least 75%, with higher coverage for write paths.
 6. Performance baselines for 10,000 files, 100 skills, and multi-project catalogs.
 7. Wheel and sdist clean-install tests for every supported Python/OS boundary.

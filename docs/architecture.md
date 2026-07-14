@@ -77,12 +77,28 @@ directory with `managed: false` and `mutation_policy: never`. Inventory resolves
 local scripts and references against the source directory while routing uses the
 overlay's tags and triggers.
 
+After adoption, incremental sync is a small versioned module registry:
+
+```text
+.agent/skill-overlays/.archmarshal/
+├─ HEAD
+├─ HEAD.lock                     # exists only during publication
+└─ objects/sha256/<digest>.json  # immutable complete generations
+```
+
+Each generation names its parent and records active/removed skill manifests plus
+added, modified, removed, and restored changes. Publication exclusively creates
+the object, rechecks the expected `HEAD`, and atomically replaces only the
+ArchMarshal-owned pointer. A stale plan, lock conflict, digest mismatch, unsafe
+path, linked scan root, or size/count limit is a hard failure. Older and orphaned
+objects are never selected unless `HEAD` names them.
+
 This splits the system into two ownership domains:
 
 ```text
 Human-owned source              ArchMarshal-owned control plane
 project files                   workspace/index/registry
-SKILL.md                        skill overlay metadata
+SKILL.md                        immutable skill generations + HEAD
 source skill manifest           session and learning records
 ```
 
