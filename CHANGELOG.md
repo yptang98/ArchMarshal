@@ -27,9 +27,10 @@
   intentionally required.
 - Return invalid CLI usage through the versioned JSON error contract on stderr
   with exit code 2; help and version output remain plain text.
-- Add independent statement and branch coverage floors for safety, adoption
-  recovery, locking, Skill indexing, closeout, and user-store modules in the
-  Linux/Windows CI matrix.
+- Add independent cross-platform statement and branch coverage floors for
+  safety, adoption recovery, locking, Skill review/indexing, closeout, and
+  user-store modules in the Linux/Windows CI matrix. Platform-specific lock
+  branches are exercised by their native matrix side.
 
 ## 0.10.0 - 2026-07-15
 
