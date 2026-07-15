@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.11.0 - 2026-07-15
+
+### Breaking safety changes
+
+- `skill-review --apply` now requires the complete saved preview through
+  `--plan-file`. The reviewed plan binds the review timestamp, complete
+  immutable generation, proposed HEAD, object path and bytes, validation,
+  source preconditions, and all decision inputs; apply publishes exactly that
+  generation or stops before backup.
+
+### Safety and operability
+
+- Parse adoption recovery journals from the same bounded, stable descriptor
+  bytes used for their SHA-256 check, and retain the ACTIVE marker identity so
+  replacement conflicts stop finalization instead of deleting new state.
+- Keep POSIX restore staging roots at verified mode `0700` while extraction is
+  incomplete. Recorded root permissions are applied only after atomic
+  no-replace publication, and a post-publication permission failure is reported
+  as published-but-incomplete rather than being misreported as private staging.
+  Windows reports stable staging identity without claiming ACL privacy.
+- Stop managed adoption backups from recursively embedding prior backups,
+  transactions, history, inbox, and cache while retaining rollback-critical
+  control state, Skill-index recovery records, and complete non-root Skill
+  packages. Full-workspace backup remains available when broad history is
+  intentionally required.
+- Return invalid CLI usage through the versioned JSON error contract on stderr
+  with exit code 2; help and version output remain plain text.
+- Add independent statement and branch coverage floors for safety, adoption
+  recovery, locking, Skill indexing, closeout, and user-store modules in the
+  Linux/Windows CI matrix.
+
 ## 0.10.0 - 2026-07-15
 
 ### Breaking safety changes

@@ -30,7 +30,7 @@ from .resolver import resolve_workspace
 from .safety import restore_backup, verify_backup
 from .session import CLOSEOUT_LEVELS, record_closeout
 from .skill_index import rollback_skill_index, skill_index_status
-from .skill_review import review_workspace_skill
+from .skill_review import load_reviewed_skill_plan, review_workspace_skill
 from .user_store import (
     apply_user_store_forward_rollback,
     apply_user_store_initialization,
@@ -40,12 +40,23 @@ from .user_store import (
 )
 
 
+class _ArgumentParser(argparse.ArgumentParser):
+    """Keep usage failures inside the versioned JSON CLI contract."""
+
+    def error(self, message: str) -> None:
+        raise ArchMarshalError(
+            "cli_usage_error",
+            message,
+            details={"usage": self.format_usage().strip()},
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     return _guard_cli(_main_impl, argv)
 
 
 def _main_impl(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="archmarshal")
+    parser = _ArgumentParser(prog="archmarshal")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -236,6 +247,10 @@ def _main_impl(argv: list[str] | None = None) -> int:
     skill_review_parser.add_argument(
         "--expect-plan",
         help="Exact review plan digest from preview; required with --apply.",
+    )
+    skill_review_parser.add_argument(
+        "--plan-file",
+        help="Complete saved Skill review preview JSON; required with --apply.",
     )
     skill_review_parser.add_argument(
         "--apply",
@@ -474,6 +489,9 @@ def _main_impl(argv: list[str] | None = None) -> int:
             allow_global_policy=args.allow_global_policy,
             expected_head=args.expect_head,
             expected_plan=args.expect_plan,
+            reviewed_plan=(
+                load_reviewed_skill_plan(args.plan_file) if args.plan_file else None
+            ),
             apply=args.apply,
         )
         _print_json(payload, args.pretty)
@@ -627,7 +645,7 @@ def start_main(argv: list[str] | None = None) -> int:
 
 
 def _start_main_impl(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="archmarshal-start")
+    parser = _ArgumentParser(prog="archmarshal-start")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("root", nargs="?", default=".", help="Workspace root to inspect.")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
@@ -673,7 +691,7 @@ def end_main(argv: list[str] | None = None) -> int:
 
 
 def _end_main_impl(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="archmarshal-end")
+    parser = _ArgumentParser(prog="archmarshal-end")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("root", nargs="?", default=".", help="Workspace root to inspect.")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")

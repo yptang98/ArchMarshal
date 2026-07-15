@@ -63,11 +63,21 @@ request changes, the apply blocks and a new preview is required.
 The managed backup scope contains:
 
 - Existing ArchMarshal control files, if any.
-- Existing `.agent/` files.
+- Existing `.agent/` control and recovery state, except the runtime or
+  append-only roots `.agent/backups/`, `.agent/transactions/`,
+  `.agent/history/`, `.agent/inbox/`, and `.agent/cache/`. Those roots are not
+  modified by Skill-index sync and are never recursively embedded in a new
+  managed backup. Skill-index recovery records under
+  `.agent/skill-overlays/.archmarshal/recovery/` remain covered.
 - Every regular file in each discovered non-root skill package (bounded by the
   same link, file-count, and byte limits used for fingerprinting).
 - For a repository-root `SKILL.md`, only the entrypoint and root manifest, so a
   managed backup does not silently become a full-project backup.
+
+Managed scope is rollback protection for ArchMarshal's mutation boundary, not a
+general history or project-content archive. Use full scope when history,
+transactions, inbox, cache, or other project files must be captured. Prior
+backups remain excluded from full scope to prevent recursive archives.
 
 Use `--backup-scope full` when the user requires a broad project-content snapshot. VCS
 internals, dependency directories, virtual environments, and previous backups

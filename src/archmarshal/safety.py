@@ -1030,8 +1030,12 @@ def restore_backup(
             )
         archive_handle.seek(0)
         extraction_root = parent / f".amr-{uuid.uuid4().hex[:8]}"
+        published = False
+        target_identity: tuple[int, int] | None = None
+        root_mode_applied = False
         try:
             extraction_root.mkdir(mode=0o700, exist_ok=False)
+            os.chmod(extraction_root, 0o700)
             parent_after = parent.stat()
             target_metadata = extraction_root.lstat()
             if (
@@ -1039,10 +1043,14 @@ def restore_backup(
                 or is_link_or_reparse(parent)
                 or is_link_or_reparse(extraction_root)
                 or not extraction_root.is_dir()
+                or (
+                    os.name != "nt"
+                    and (stat.S_IMODE(target_metadata.st_mode) & 0o777) != 0o700
+                )
             ):
                 raise ArchMarshalError(
                     "restore_destination_replaced",
-                    "Private restore staging identity changed during creation; extraction was stopped.",
+                    "Private restore staging identity or mode changed during creation; extraction was stopped.",
                     details={"staging": str(extraction_root)},
                 )
             target_identity = (target_metadata.st_dev, target_metadata.st_ino)
@@ -1133,35 +1141,159 @@ def restore_backup(
                         "A restored directory mode could not be reproduced safely.",
                         details={"path": directory_record["path"]},
                     )
-            if _is_portable_mode(root_mode):
-                os.chmod(extraction_root, root_mode)
-                if os.name != "nt" and (
-                    stat.S_IMODE(extraction_root.lstat().st_mode) & 0o777
-                ) != root_mode:
-                    raise ArchMarshalError(
-                        "restore_mode_failed",
-                        "The restored root directory mode could not be reproduced safely.",
-                    )
             if target_root.exists() or is_link_or_reparse(target_root):
                 raise ArchMarshalError(
                     "restore_destination_exists",
                     "Restore destination appeared before publication; private staging was preserved.",
-                    details={"destination": str(target_root), "staging": str(extraction_root)},
+                    details={
+                        "destination": str(target_root),
+                        "staging": str(extraction_root),
+                        "published": False,
+                    },
                 )
             _publish_directory_exclusive(extraction_root, target_root)
+            published = True
             fsync_directory(parent)
+            if _is_portable_mode(root_mode):
+                _apply_published_root_mode(target_root, target_identity, root_mode)
+                root_mode_applied = True
         except BaseException as exc:
+            if published:
+                raise ArchMarshalError(
+                    "restore_published_incomplete",
+                    "Restore content was atomically published, but final permission metadata did not complete; the new destination was preserved for explicit recovery.",
+                    details={
+                        "destination": str(target_root),
+                        "published": True,
+                        "staging": None,
+                        "root_mode_requested": root_mode,
+                        "root_mode_applied": root_mode_applied,
+                        "destination_identity_verified": _path_has_identity(
+                            target_root, target_identity
+                        ),
+                    },
+                ) from exc
+            staging_private = _private_restore_staging(
+                extraction_root,
+                target_identity,
+            )
+            staging_identity_verified = _path_has_identity(
+                extraction_root,
+                target_identity,
+            )
             if isinstance(exc, ArchMarshalError) and exc.code == "restore_destination_exists":
+                exc.details.update(
+                    {
+                        "published": False,
+                        "staging_identity_verified": staging_identity_verified,
+                        "staging_private": staging_private,
+                        "staging_mode": 0o700 if staging_private and os.name != "nt" else None,
+                    }
+                )
                 raise
             raise ArchMarshalError(
                 "restore_incomplete",
-                "Restore stopped before publication; incomplete private staging was preserved for review.",
-                details={"staging": str(extraction_root), "destination": str(target_root)},
+                (
+                    "Restore stopped before publication; incomplete private staging was preserved for review."
+                    if staging_private
+                    else (
+                        "Restore stopped before publication; staging identity was preserved, but private permissions could not be verified on this platform."
+                        if staging_identity_verified
+                        else "Restore stopped before publication; staging was preserved, but its identity and private permissions could not be verified."
+                    )
+                ),
+                details={
+                    "staging": str(extraction_root),
+                    "destination": str(target_root),
+                    "published": False,
+                    "staging_identity_verified": staging_identity_verified,
+                    "staging_private": staging_private,
+                    "staging_mode": 0o700 if staging_private and os.name != "nt" else None,
+                },
             ) from exc
 
     payload["mode"] = "restored"
     payload["created"] = str(target_root.resolve())
     return payload
+
+
+def _path_has_identity(path: Path, identity: tuple[int, int] | None) -> bool:
+    if identity is None:
+        return False
+    try:
+        metadata = path.lstat()
+        return (
+            not is_link_or_reparse(path)
+            and stat.S_ISDIR(metadata.st_mode)
+            and (metadata.st_dev, metadata.st_ino) == identity
+        )
+    except (ArchMarshalError, OSError):
+        return False
+
+
+def _private_restore_staging(path: Path, identity: tuple[int, int] | None) -> bool:
+    if not _path_has_identity(path, identity):
+        return False
+    if os.name == "nt":
+        # Python's chmod/mkdir mode does not establish a private Windows ACL.
+        # Never claim confidentiality that this backend cannot verify.
+        return False
+    try:
+        return (stat.S_IMODE(path.lstat().st_mode) & 0o777) == 0o700
+    except OSError:
+        return False
+
+
+def _apply_published_root_mode(
+    target_root: Path,
+    expected_identity: tuple[int, int],
+    root_mode: int,
+) -> None:
+    """Apply the recorded root mode only after atomic no-replace publication."""
+    if os.name == "nt":
+        if not _path_has_identity(target_root, expected_identity):
+            raise ArchMarshalError(
+                "restore_destination_replaced",
+                "Published restore destination changed before final mode application.",
+            )
+        os.chmod(target_root, root_mode)
+        if not _path_has_identity(target_root, expected_identity):
+            raise ArchMarshalError(
+                "restore_destination_replaced",
+                "Published restore destination changed during final mode application.",
+            )
+        return
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = os.open(target_root, flags)
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(before.st_mode)
+            or (before.st_dev, before.st_ino) != expected_identity
+        ):
+            raise ArchMarshalError(
+                "restore_destination_replaced",
+                "Published restore destination changed before final mode application.",
+            )
+        os.fchmod(descriptor, root_mode)
+        os.fsync(descriptor)
+        after = os.fstat(descriptor)
+        if (
+            (after.st_dev, after.st_ino) != expected_identity
+            or (stat.S_IMODE(after.st_mode) & 0o777) != root_mode
+            or not _path_has_identity(target_root, expected_identity)
+        ):
+            raise ArchMarshalError(
+                "restore_mode_failed",
+                "The published root directory mode could not be reproduced safely.",
+            )
+    finally:
+        os.close(descriptor)
 
 
 def _publish_directory_exclusive(source: Path, destination: Path) -> None:

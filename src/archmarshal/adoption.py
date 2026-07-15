@@ -15,6 +15,7 @@ from .errors import ArchMarshalError, require_workspace_root
 from .io import load_yaml_safe
 from .ownership import ownership_skill_index_mode, valid_ownership_marker, workspace_id
 from .safety import (
+    MAX_DIRECTORY_SCAN_FILES,
     create_backup,
     ensure_managed_path,
     ensure_path_within,
@@ -56,6 +57,15 @@ MANAGED_PLACEHOLDERS = (
     ".agent/knowledge/.gitkeep",
     ".agent/plans/.gitkeep",
     ".agent/reports/.gitkeep",
+)
+MANAGED_BACKUP_EXCLUDED_AGENT_ROOTS = frozenset(
+    {
+        "backups",
+        "cache",
+        "history",
+        "inbox",
+        "transactions",
+    }
 )
 
 
@@ -1019,11 +1029,35 @@ def _managed_backup_files(root: Path, skills: list[dict[str, Any]]) -> list[Path
             files.add(candidate)
     agent_root = root / ".agent"
     if agent_root.exists():
-        files.update(
-            path
-            for path in files_below_no_links(agent_root, purpose="Managed metadata backup")
-            if path.is_file()
-        )
+        if is_link_or_reparse(agent_root) or not agent_root.is_dir():
+            # Preserve the previous fail-closed behavior for the managed root.
+            files_below_no_links(agent_root, purpose="Managed metadata backup")
+        agent_files: list[Path] = []
+        for child in sorted(agent_root.iterdir(), key=lambda path: path.name.casefold()):
+            if child.name.casefold() in MANAGED_BACKUP_EXCLUDED_AGENT_ROOTS:
+                continue
+            if is_link_or_reparse(child):
+                # The bounded scanner never followed linked children. Keep that
+                # behavior while avoiding traversal of excluded runtime stores.
+                continue
+            if child.is_file():
+                if len(agent_files) >= MAX_DIRECTORY_SCAN_FILES:
+                    raise ArchMarshalError(
+                        "directory_scan_limit_exceeded",
+                        "Managed metadata backup exceeds the bounded file scan limit.",
+                        details={"path": str(agent_root)},
+                    )
+                agent_files.append(child)
+            elif child.is_dir():
+                remaining = MAX_DIRECTORY_SCAN_FILES - len(agent_files)
+                agent_files.extend(
+                    files_below_no_links(
+                        child,
+                        purpose="Managed metadata backup",
+                        max_files=remaining,
+                    )
+                )
+        files.update(path for path in agent_files if path.is_file())
     for skill in skills:
         source_dir = root / skill["source"]
         if source_dir.resolve() == root:

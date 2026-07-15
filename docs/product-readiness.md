@@ -1,6 +1,6 @@
 # Product Readiness
 
-ArchMarshal 0.10 is a safety-hardened alpha, not yet a stable product. This page
+ArchMarshal 0.11 is a safety-hardened alpha, not yet a stable product. This page
 separates implemented behavior from design intent so users can decide what to
 trust.
 
@@ -9,9 +9,9 @@ trust.
 | Area | Current state | Safety boundary | Remaining stable-release work |
 |---|---|---|---|
 | Existing project adoption | Implemented, review-first | Root-bound ownership; one backup-through-publication lifetime lock; exact plan digest; verified backup; durable create-only journal; receipt-last forward recovery; changed targets block and are never replaced | Handle-relative no-follow filesystem backend; orphan transaction inspection |
-| Existing skill management | Implemented, quarantined and reviewed | Codex package validation; exact package+routing approval; separate global-policy confirmation; immutable generations; full reachable-chain verification; reader/writer exclusion; OS lock/CAS `HEAD`; exact-plan rollback; source never rewritten | Ownership migration audit and safe orphan inspection/cleanup |
-| Backup | Implemented | Bounded archive, streamed cumulative limits and free-space reserve, byte hashes, CRC, manifest validation, atomic exclusive publish | Large-workspace benchmarks and documented retention policy |
-| Restore | Implemented | Exact archive/destination plan; private staging plus atomic no-replace publication; portable root/directory/file modes and empty directories in full backups; restores only into a new directory; optional verified full-backup ownership rebind affects only the copy; uncertain partial staging is preserved | Resumable restore and guided diff/merge tooling; never add in-place restore |
+| Existing skill management | Implemented, quarantined and reviewed | Codex package validation; complete saved review plan binds the exact generation/HEAD; exact package+routing approval; separate global-policy confirmation; immutable generations; full reachable-chain verification; reader/writer exclusion; OS lock/CAS `HEAD`; exact-plan rollback; source never rewritten | Ownership migration audit and safe orphan inspection/cleanup |
+| Backup | Implemented | Bounded archive, streamed cumulative limits and free-space reserve, byte hashes, CRC, manifest validation, atomic exclusive publish; managed rollback scope excludes recursive runtime/history stores | Large-workspace benchmarks and documented retention policy |
+| Restore | Implemented | Exact archive/destination plan; POSIX staging stays at verified `0700` until atomic no-replace publication; Windows reports identity without claiming ACL privacy; post-publish mode failures are explicit; portable root/directory/file modes and empty directories in full backups; restores only into a new directory; optional verified full-backup ownership rebind affects only the copy | Native private Windows ACL backend; resumable restore and guided diff/merge tooling; never add in-place restore |
 | Project start | Implemented | Read-only lint plus adoption/sync preview | Share one immutable inventory snapshot for performance |
 | Project closeout | Partial | Exact reviewed plan/path/bytes; create-only directory; commit-last file hashes; incomplete or hash-mismatched sessions excluded from learning | Recovery/status UI; declared cwd/inputs/outputs/expected results; optional execution validation |
 | Human project map | Partial | YAML plus `INDEX.md` remain readable | Regenerate versioned views from machine state without overwriting human notes |
@@ -30,7 +30,8 @@ A stable release requires all of the following:
 2. Symlink/junction/reparse escape tests on both Windows and Linux. Basic cross-platform link tests and Windows reparse detection exist; native junction creation coverage remains.
 3. Fault injection for interrupted writes, permissions, disk exhaustion, source mutation, corrupt archives, and concurrent sync. Atomic creation, journal/backup tampering, changed-target preservation, receipt-finalization recovery, post-publish rollback, object collision, OS lock replacement, recoverable transaction, directory-scan failure, archive, and source-race cases exist; disk-exhaustion and native permission integration coverage remain.
 4. Immutable overlay generations with a stale-plan compare-and-swap check. Implemented with OS-lifetime locking, verified parent transitions, audited forward rollback, and relationship-checked released-transaction recovery; legacy lock migration tooling remains.
-5. Statement coverage at least 85% and branch coverage at least 75%, with higher coverage for write paths.
+5. Statement coverage at least 85% and branch coverage at least 75%, with
+   independent non-regression floors for safety-critical write-path modules.
 6. Performance baselines for 10,000 files, 100 skills, and multi-project catalogs.
 7. Wheel and sdist clean-install tests for every supported Python/OS boundary.
 8. Version/tag consistency, signed artifacts, changelog, release checklist, and rollback documentation.
@@ -43,8 +44,11 @@ A stable release requires all of the following:
   workspace directories during a filesystem operation; a handle-relative
   no-follow backend is still required for that claim.
 - Windows file and archive contents are flushed, while directory-entry fsync is
-  only available on POSIX. Therefore 0.10 does not claim a cross-platform
+  only available on POSIX. Therefore 0.11 does not claim a cross-platform
   power-loss durability guarantee.
+- Python's portable mode APIs do not establish a private Windows ACL. Restore
+  staging has verified identity there, but ArchMarshal does not claim staging
+  confidentiality on Windows until a native ACL backend is implemented.
 - A reproducible closeout is an integrity-checked evidence capsule, not proof of
   successful execution. Generated run scripts are never executed automatically.
 - Learning and promotion provide integrity and explicit review, not identity

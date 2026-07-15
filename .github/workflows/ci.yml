@@ -29,7 +29,18 @@ jobs:
       - name: Test with branch coverage
         run: python -m pytest --cov=archmarshal --cov-branch --cov-report=term-missing --cov-report=json:coverage.json
       - name: Enforce statement and branch gates
-        run: python scripts/check_coverage.py coverage.json --statements 85 --branches 75
+        run: >-
+          python scripts/check_coverage.py coverage.json
+          --statements 85 --branches 75
+          --module src/archmarshal/adoption.py=88,80
+          --module src/archmarshal/safety.py=80,64
+          --module src/archmarshal/adoption_tx.py=80,65
+          --module src/archmarshal/io.py=95,88
+          --module src/archmarshal/workspace_lock.py=85,60
+          --module src/archmarshal/skill_index.py=85,75
+          --module src/archmarshal/skill_review.py=85,61
+          --module src/archmarshal/session.py=85,75
+          --module src/archmarshal/user_store.py=84,70
       - name: CLI smoke test
         run: archmarshal lint examples/simple-project --pretty
 

@@ -255,18 +255,21 @@ ArchMarshal operations should mature in this order:
 8. `adopt --expect-plan ... --apply`: after an exact reviewed preview and
    verified backup, create only missing management-overlay files through a
    recoverable transaction.
-9. `end --level ... --expect-plan ... --apply`: append and commit a new quick,
+9. `skill-review --plan-file ... --expect-head ... --expect-plan ... --apply`:
+   publish only the exact saved immutable review generation after revalidating
+   the package, routing subject, HEAD, and full plan before and after backup.
+10. `end --level ... --expect-plan ... --apply`: append and commit a new quick,
    standard, or reproducible session record.
-10. `learn --plan-file ... --expect-plan ... --apply`: append a bounded,
+11. `learn --plan-file ... --expect-plan ... --apply`: append a bounded,
     review-only learning candidate pack only when roots, evidence, bytes, and
     target still match the complete saved preview.
-11. `candidate-review`: append an accept/reject/defer decision to the isolated
+12. `candidate-review`: append an accept/reject/defer decision to the isolated
     user store from a verified committed candidate.
-12. `candidate-promote`: after an exact accepted decision, copy a common-Skill
+13. `candidate-promote`: after an exact accepted decision, copy a common-Skill
     draft with explicit candidate/source lineage, or the exact preference
     candidate, into a new immutable user-store generation. Replacing an active
     id/key requires explicit type-specific confirmation.
-13. `user-store-rollback`: publish a new generation from a verified ancestor
+14. `user-store-rollback`: publish a new generation from a verified ancestor
     snapshot without deleting newer history.
 
 Mutation is capability-specific rather than a general `apply` engine. No command

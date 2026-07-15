@@ -34,6 +34,7 @@ class StableBytesResult:
     error: str | None = None
     byte_count: int | None = None
     sha256: str | None = None
+    identity: tuple[int, int] | None = None
 
 
 def read_text(path: Path) -> str:
@@ -99,6 +100,7 @@ def read_bytes_safe(path: Path, *, max_bytes: int, label: str = "File") -> Stabl
             raw,
             byte_count=len(raw),
             sha256=hashlib.sha256(raw).hexdigest(),
+            identity=(before.st_dev, before.st_ino),
         )
     except OSError as exc:
         return StableBytesResult(b"", str(exc))

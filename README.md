@@ -113,15 +113,18 @@ revision before it can resolve:
 
 ```bash
 archmarshal skill-review . --source skills/release-helper \
-  --decision approve --expect-head <skill-index-head> --pretty
+  --decision approve --expect-head <skill-index-head> --pretty \
+  > skill-review.json
 archmarshal skill-review . --source skills/release-helper \
   --decision approve --expect-head <skill-index-head> \
-  --expect-plan <plan_digest> --apply --pretty
+  --plan-file skill-review.json --expect-plan <plan_digest> --apply --pretty
 ```
 
 Use `--allow-global-policy` in both commands only when intentionally approving a
 global, global-scope, or highest-priority Skill. Any later package or routing
-change invalidates that approval.
+change invalidates that approval. The saved plan binds the exact `reviewed_at`,
+complete immutable generation, proposed HEAD, object path, and generation byte
+digest; apply never creates a new review timestamp.
 
 If a process stops during adoption, inspect and forward-recover the durable
 create-only transaction:
@@ -419,7 +422,7 @@ delete, force, or automatic promotion path for human-owned project or skill file
 - Inventory, lint, audit, and plan are read-only by default.
 - Adoption and closeout require both explicit `--apply` and the exact reviewed
   `--expect-plan`; learning additionally requires the complete saved preview.
-- Adoption backs up managed metadata and complete non-root skill packages before writing; root skills remain entrypoint-only. `--backup-scope full` creates a bounded project-content snapshot excluding VCS, dependencies, virtual environments, and prior backups, and preserves portable root/directory/file modes plus empty directories.
+- Adoption backs up the relevant managed control state and complete non-root skill packages before writing; root skills remain entrypoint-only. Managed backups never recursively embed prior backups, transactions, history, inbox, or cache. `--backup-scope full` creates a bounded project-content snapshot excluding VCS, dependencies, virtual environments, and prior backups, and preserves portable root/directory/file modes plus empty directories.
 - Existing skill sources are immutable to ArchMarshal; overlay manifests live under `.agent/skill-overlays/`.
 - Skill sync uses immutable content-addressed objects, an exclusive `HEAD.lock`, and an expected-`HEAD` compare-and-swap; stale or concurrent plans fail without changing the active generation.
 - `HEAD.lock` uses an OS-lifetime lock. Released v2 transaction metadata is recovered only after expected/proposed/current HEAD validation and is recorded under the internal recovery audit directory; legacy or malformed locks remain blocked.
@@ -519,6 +522,7 @@ delete, force, or automatic promotion path for human-owned project or skill file
 
 - [Agent Memory and Skill Organization Landscape](docs/agent-memory-landscape-2026.md): design direction for memory stores, memory records, retrieval budgets, and closeout-driven promotion.
 - [Product Readiness](docs/product-readiness.md): honest capability matrix, safety gates, and remaining work before a stable release.
+- [CLI Contract](docs/cli-contract.md): versioned JSON envelopes, streams, and exit codes for automation.
 
 ## Development
 

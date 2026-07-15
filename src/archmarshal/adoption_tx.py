@@ -14,6 +14,7 @@ else:
     import fcntl
 
 from .errors import ArchMarshalError, require_workspace_root
+from .io import read_bytes_safe
 from .safety import (
     create_bytes_exclusive,
     ensure_managed_path,
@@ -433,19 +434,18 @@ def _complete_transaction(root: Path, journal: dict[str, Any], held: _HeldLock) 
 def _load_active_journal(root: Path) -> dict[str, Any]:
     active = root / STATE_RELATIVE / ACTIVE_NAME
     ensure_managed_path(root, active, purpose="Adoption transaction marker")
-    if not active.is_file() or is_link_or_reparse(active):
+    loaded_active = read_bytes_safe(
+        active,
+        max_bytes=MAX_ACTIVE_BYTES,
+        label="Adoption ACTIVE marker",
+    )
+    if loaded_active.error or loaded_active.identity is None:
         raise ArchMarshalError(
             "adoption_transaction_invalid",
-            "Adoption ACTIVE marker is missing, linked, or not a regular file.",
+            "Adoption ACTIVE marker is missing, linked, unreadable, or unstable.",
+            details={"path": str(active), "reason": loaded_active.error},
         )
-    with active.open("rb") as handle:
-        active_metadata = os.fstat(handle.fileno())
-        raw = handle.read(MAX_ACTIVE_BYTES + 1)
-    if len(raw) > MAX_ACTIVE_BYTES:
-        raise ArchMarshalError(
-            "adoption_transaction_invalid",
-            "Adoption ACTIVE marker exceeds the safe size limit.",
-        )
+    raw = loaded_active.data
     try:
         marker = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -462,26 +462,26 @@ def _load_active_journal(root: Path) -> dict[str, Any]:
         )
     journal_path = root / STATE_RELATIVE / transaction_id / JOURNAL_NAME
     ensure_managed_path(root, journal_path, purpose="Adoption transaction journal")
-    if not journal_path.is_file() or is_link_or_reparse(journal_path):
+    loaded_journal = read_bytes_safe(
+        journal_path,
+        max_bytes=MAX_JOURNAL_BYTES,
+        label="Adoption transaction journal",
+    )
+    if loaded_journal.error:
         raise ArchMarshalError(
             "adoption_transaction_invalid",
-            "Active adoption journal is missing, linked, or not a regular file.",
-            details={"path": str(journal_path)},
+            "Active adoption journal is missing, linked, unreadable, or unstable.",
+            details={"path": str(journal_path), "reason": loaded_journal.error},
         )
-    if not _is_sha256(journal_hash) or sha256_file(journal_path) != journal_hash:
+    if not _is_sha256(journal_hash) or loaded_journal.sha256 != journal_hash:
         raise ArchMarshalError(
             "adoption_transaction_invalid",
             "Active adoption journal does not match its content hash.",
             details={"path": str(journal_path)},
         )
-    if journal_path.stat().st_size > MAX_JOURNAL_BYTES:
-        raise ArchMarshalError(
-            "adoption_transaction_invalid",
-            "Active adoption journal exceeds the safe size limit.",
-        )
     try:
-        journal = json.loads(journal_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        journal = json.loads(loaded_journal.data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ArchMarshalError(
             "adoption_transaction_invalid",
             "Active adoption journal is not valid UTF-8 JSON.",
@@ -492,7 +492,7 @@ def _load_active_journal(root: Path) -> dict[str, Any]:
             "adoption_transaction_invalid",
             "Adoption ACTIVE marker and journal id do not match.",
         )
-    journal["_active_identity"] = (active_metadata.st_dev, active_metadata.st_ino)
+    journal["_active_identity"] = loaded_active.identity
     journal["_active_bytes"] = raw
     return journal
 

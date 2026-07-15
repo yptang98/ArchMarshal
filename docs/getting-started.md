@@ -52,12 +52,15 @@ apply an exact review decision before use:
 
 ```text
 archmarshal skill-review . --source skills/example --decision approve \
-  --expect-head <head> --pretty
+  --expect-head <head> --pretty > skill-review.json
 archmarshal skill-review . --source skills/example --decision approve \
-  --expect-head <head> --expect-plan <plan_digest> --apply --pretty
+  --expect-head <head> --plan-file skill-review.json \
+  --expect-plan <plan_digest> --apply --pretty
 ```
 
 Global/highest policy also requires `--allow-global-policy` in both calls.
+Apply uses the exact saved generation and review timestamp from preview; it
+fails before backup if the plan, generation bytes, digest, or object path differ.
 
 An interrupted adoption is not rolled back by deleting visible paths. Inspect
 and safely finish it instead:

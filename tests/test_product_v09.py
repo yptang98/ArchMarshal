@@ -88,6 +88,7 @@ def _approve(root: Path, source: str, *, allow_global_policy: bool = False) -> d
         allow_global_policy=allow_global_policy,
         expected_head=head,
         expected_plan=preview["plan_digest"],
+        reviewed_plan=preview["review_plan"],
         apply=True,
     )
 
