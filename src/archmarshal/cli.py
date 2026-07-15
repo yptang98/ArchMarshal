@@ -7,6 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .adoption import adopt_workspace
 from .adoption_tx import adoption_transaction_status, recover_adoption_transaction
 from .audit import audit_workspace
@@ -45,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _main_impl(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="archmarshal")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     _add_root_command(subparsers, "inventory", "Scan workspace structure without modifying files.")
@@ -101,6 +103,14 @@ def _main_impl(argv: list[str] | None = None) -> int:
     )
     learn_parser.add_argument("--apply", action="store_true", help="Write a new candidate pack to inbox.")
     learn_parser.add_argument(
+        "--plan-file",
+        help="Saved JSON preview containing learning_plan; required with --apply.",
+    )
+    learn_parser.add_argument(
+        "--expect-plan",
+        help="Exact learning plan digest from preview; required with --apply.",
+    )
+    learn_parser.add_argument(
         "--include-root",
         action="append",
         default=[],
@@ -110,6 +120,11 @@ def _main_impl(argv: list[str] | None = None) -> int:
         "backup-verify", help="Verify every archived file against an ArchMarshal backup manifest."
     )
     verify_backup_parser.add_argument("archive", help="Backup zip to verify.")
+    verify_backup_parser.add_argument(
+        "--show-files",
+        action="store_true",
+        help="Include the complete verified backup manifest and file list.",
+    )
     verify_backup_parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
     restore_backup_parser = subparsers.add_parser(
         "backup-restore", help="Restore a verified backup into a new, non-existing directory."
@@ -117,6 +132,14 @@ def _main_impl(argv: list[str] | None = None) -> int:
     restore_backup_parser.add_argument("archive", help="Backup zip to restore.")
     restore_backup_parser.add_argument("destination", help="New directory to create.")
     restore_backup_parser.add_argument("--apply", action="store_true", help="Create the destination.")
+    restore_backup_parser.add_argument(
+        "--rebind-workspace",
+        action="store_true",
+        help="After exact restore and backup, root-bind a verified ArchMarshal ownership marker to the new directory.",
+    )
+    restore_backup_parser.add_argument(
+        "--expect-plan", help="Exact plan digest from the reviewed restore preview."
+    )
     restore_backup_parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
     user_store_init_parser = subparsers.add_parser(
         "user-store-init",
@@ -237,6 +260,16 @@ def _main_impl(argv: list[str] | None = None) -> int:
     candidate_promote_parser.add_argument(
         "--draft", help="Reviewed common-Skill draft directory; required for Skill candidates."
     )
+    candidate_promote_parser.add_argument(
+        "--replace-existing-skill",
+        action="store_true",
+        help="Explicitly confirm replacement when the draft id already has a different active user-store record.",
+    )
+    candidate_promote_parser.add_argument(
+        "--replace-existing-preference",
+        action="store_true",
+        help="Explicitly confirm replacement when the key already has a different active user-store preference.",
+    )
     end_parser = _add_root_command(subparsers, "end", "Close out ArchMarshal project governance.")
     end_parser.add_argument(
         "--used-skill",
@@ -314,17 +347,31 @@ def _main_impl(argv: list[str] | None = None) -> int:
     if args.command == "backup-verify":
         verification = verify_backup(args.archive)
         verification.update({"tool": "archmarshal", "stage": "backup_verify", "mode": "verified"})
-        verification.pop("manifest", None)
+        if not args.show_files:
+            manifest = verification.pop("manifest")
+            files = manifest.get("files") or []
+            verification["manifest_summary"] = {
+                key: manifest.get(key)
+                for key in ("format", "scope", "project_root", "created_at", "reason", "file_count")
+            }
+            verification["file_preview"] = files[:100]
+            verification["file_preview_truncated"] = len(files) > 100
         _print_json(verification, args.pretty)
         return 0
     if args.command == "backup-restore":
-        payload = restore_backup(args.archive, args.destination, apply=args.apply)
+        payload = restore_backup(
+            args.archive,
+            args.destination,
+            apply=args.apply,
+            expected_plan=args.expect_plan,
+            rebind_workspace=args.rebind_workspace,
+        )
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
     if args.command == "user-store-status":
         payload = user_store_status(args.user_store)
         _print_json(payload, args.pretty)
-        return 0 if payload.get("state") in {"absent", "uninitialized", "healthy"} else 2
+        return 0 if payload.get("state") in {"absent", "initialized_empty", "healthy"} else 2
     if args.command == "user-store-init":
         if args.apply:
             plan = _required_reviewed_plan(args.plan_file)
@@ -457,6 +504,8 @@ def _main_impl(argv: list[str] | None = None) -> int:
             expected_head_token=args.expect_head,
             expected_plan=args.expect_plan,
             reviewed_plan=_optional_reviewed_plan(args.plan_file),
+            replace_existing_skill=args.replace_existing_skill,
+            replace_existing_preference=args.replace_existing_preference,
             apply=args.apply,
         )
         _print_json(payload, args.pretty)
@@ -480,15 +529,29 @@ def _main_impl(argv: list[str] | None = None) -> int:
                 backup_scope=args.backup_scope,
                 expected_plan=args.expect_plan,
             )
-            payload = start_workspace(root, task=args.task, user_store=args.user_store)
+            payload = start_workspace(
+                root,
+                task=args.task,
+                user_store=args.user_store,
+                tags=args.tag,
+                backup_scope=args.backup_scope,
+            )
             payload["adoption"] = adoption
+            _mark_start_apply(payload, adoption)
             if adoption["mode"] in {"overlay_applied", "overlay_synced", "review_required"}:
                 payload["mode"] = adoption["mode"]
             _print_json(payload, args.pretty)
             return _payload_exit_code(adoption)
         else:
             _print_json(
-                start_workspace(root, task=args.task, user_store=args.user_store), args.pretty
+                start_workspace(
+                    root,
+                    task=args.task,
+                    user_store=args.user_store,
+                    tags=args.tag,
+                    backup_scope=args.backup_scope,
+                ),
+                args.pretty,
             )
         return 0
     if args.command == "catalog":
@@ -498,8 +561,16 @@ def _main_impl(argv: list[str] | None = None) -> int:
         )
         return 0
     if args.command == "learn":
+        reviewed = _optional_reviewed_plan(args.plan_file)
+        if isinstance(reviewed, dict) and isinstance(reviewed.get("learning_plan"), dict):
+            reviewed = reviewed["learning_plan"]
         _print_json(
-            learn_from_projects([root, *[Path(item) for item in args.include_root]], apply=args.apply),
+            learn_from_projects(
+                [root, *[Path(item) for item in args.include_root]],
+                reviewed_plan=reviewed,
+                expected_plan=args.expect_plan,
+                apply=args.apply,
+            ),
             args.pretty,
         )
         return 0
@@ -557,13 +628,20 @@ def start_main(argv: list[str] | None = None) -> int:
 
 def _start_main_impl(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="archmarshal-start")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("root", nargs="?", default=".", help="Workspace root to inspect.")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
     _add_adoption_arguments(parser)
     _add_resolution_arguments(parser, task_required=False)
     args = parser.parse_args(argv)
     root = require_workspace_root(args.root)
-    payload = start_workspace(root, task=args.task, user_store=args.user_store)
+    payload = start_workspace(
+        root,
+        task=args.task,
+        user_store=args.user_store,
+        tags=args.tag,
+        backup_scope=args.backup_scope,
+    )
     if args.apply:
         payload["adoption"] = adopt_workspace(
             root,
@@ -573,8 +651,13 @@ def _start_main_impl(argv: list[str] | None = None) -> int:
             expected_plan=args.expect_plan,
         )
         payload = start_workspace(
-            root, task=args.task, user_store=args.user_store
+            root,
+            task=args.task,
+            user_store=args.user_store,
+            tags=args.tag,
+            backup_scope=args.backup_scope,
         ) | {"adoption": payload["adoption"]}
+        _mark_start_apply(payload, payload["adoption"])
         if payload["adoption"]["mode"] in {
             "overlay_applied",
             "overlay_synced",
@@ -591,6 +674,7 @@ def end_main(argv: list[str] | None = None) -> int:
 
 def _end_main_impl(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="archmarshal-end")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("root", nargs="?", default=".", help="Workspace root to inspect.")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
     parser.add_argument(
@@ -675,7 +759,7 @@ def _add_user_store_plan_arguments(
     parser.add_argument("--apply", action="store_true", help="Apply the exact saved preview plan.")
     parser.add_argument(
         "--plan-file",
-        help="UTF-8 JSON file containing the complete reviewed preview; required with --apply.",
+        help="UTF-8, UTF-8 BOM, or BOM-marked UTF-16 JSON reviewed preview; required with --apply.",
     )
     parser.add_argument(
         "--expect-plan", help="Exact plan digest from the saved preview; required with --apply."
@@ -700,7 +784,7 @@ def _add_candidate_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--apply", action="store_true", help="Apply the exact saved preview plan.")
     parser.add_argument(
         "--plan-file",
-        help="UTF-8 JSON file containing the complete reviewed preview; required with --apply.",
+        help="UTF-8, UTF-8 BOM, or BOM-marked UTF-16 JSON reviewed preview; required with --apply.",
     )
     parser.add_argument(
         "--expect-head",
@@ -823,6 +907,30 @@ def _payload_exit_code(payload: dict[str, Any]) -> int:
     )
 
 
+def _mark_start_apply(payload: dict[str, Any], adoption: dict[str, Any]) -> None:
+    applied = adoption.get("mode") in {"overlay_applied", "overlay_synced"}
+    payload["mutation"] = {
+        "requested": True,
+        "performed": applied,
+        "scope": "archmarshal_control_plane_only" if applied else "none",
+        "source_files_modified": False,
+    }
+    notes = [
+        item
+        for item in payload.get("notes") or []
+        if item != "Start is read-only and does not modify files."
+    ]
+    notes.insert(
+        0,
+        (
+            "Start --apply created only the reviewed ArchMarshal control-plane and immutable index changes."
+            if applied
+            else "Start --apply requested a change, but no control-plane mutation was completed."
+        ),
+    )
+    payload["notes"] = notes
+
+
 def _guard_cli(function: Any, argv: list[str] | None) -> int:
     tokens = argv if argv is not None else sys.argv[1:]
     pretty = "--pretty" in tokens
@@ -849,6 +957,12 @@ def _guard_cli(function: Any, argv: list[str] | None) -> int:
 
 
 def _print_json(payload: Any, pretty: bool, *, stream: Any = None) -> None:
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        schema_version = payload.pop("api_version", None)
+        payload = {"api_version": "archmarshal-cli-v1", **payload}
+        if schema_version is not None:
+            payload["payload_schema_version"] = schema_version
     print(
         json.dumps(payload, default=_json_default, indent=2 if pretty else None, sort_keys=True),
         file=stream,

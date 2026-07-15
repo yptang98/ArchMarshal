@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import shutil
 from pathlib import Path
 
 import pytest
 import yaml
 
+import archmarshal.io as io_module
 from archmarshal.adoption import adopt_workspace, plan_adoption
 from archmarshal.cli import main
 from archmarshal.errors import ArchMarshalError
 from archmarshal.inventory import collect_inventory
-from archmarshal.learning import learn_from_projects, verify_learning_pack
+from archmarshal.io import load_yaml_safe
+from archmarshal.learning import LEARNING_FORMAT, learn_from_projects, verify_learning_pack
 from archmarshal.lint import lint_workspace
 from archmarshal.promotion import promote_learning_candidate, review_learning_candidate
 from archmarshal.resolver import resolve_workspace
@@ -120,7 +125,22 @@ def _closeout(
     )
 
 
-def _common_draft(root: Path, name: str = "demo-common") -> Path:
+def _apply_learning(roots: list[Path]) -> dict:
+    preview = learn_from_projects(roots)
+    return learn_from_projects(
+        roots,
+        reviewed_plan=preview["learning_plan"],
+        expected_plan=preview["plan_digest"],
+        apply=True,
+    )
+
+
+def _common_draft(
+    root: Path,
+    name: str = "demo-common",
+    *,
+    promotion: dict[str, str] | None = None,
+) -> Path:
     draft = root / name
     draft.mkdir(parents=True)
     (draft / "SKILL.md").write_text(
@@ -131,23 +151,23 @@ def _common_draft(root: Path, name: str = "demo-common") -> Path:
         f"# {name}\n",
         encoding="utf-8",
     )
+    manifest = {
+        "id": f"skill.common-project.{name}",
+        "name": name,
+        "summary": "Reusable reviewed demo workflow.",
+        "version": "1.0.0",
+        "kind": "common_project_skill",
+        "scope": "common_project",
+        "status": "active",
+        "priority": "normal",
+        "tags": ["demo"],
+        "triggers": ["run demo"],
+        "negative_triggers": ["skip demo"],
+    }
+    if promotion is not None:
+        manifest["promotion"] = promotion
     (draft / "manifest.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "id": f"skill.common-project.{name}",
-                "name": name,
-                "summary": "Reusable reviewed demo workflow.",
-                "version": "1.0.0",
-                "kind": "common_project_skill",
-                "scope": "common_project",
-                "status": "active",
-                "priority": "normal",
-                "tags": ["demo"],
-                "triggers": ["run demo"],
-                "negative_triggers": ["skip demo"],
-            },
-            sort_keys=False,
-        ),
+        yaml.safe_dump(manifest, sort_keys=False),
         encoding="utf-8",
     )
     return draft
@@ -171,6 +191,52 @@ def test_invalid_existing_skill_is_quarantined_and_cannot_be_approved(tmp_path: 
             decision="approve",
             expected_head=_head(root),
         )
+
+
+def test_recursive_yaml_manifest_is_quarantined_without_blocking_adoption(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "project"
+    bad = _skill(root, "bad")
+    _skill(root, "good")
+    manifest = bad / "manifest.yaml"
+    manifest.write_text("permissions: &loop\n  self: *loop\n", encoding="utf-8")
+
+    loaded = load_yaml_safe(manifest)
+    assert loaded.data == {}
+    assert "recursive alias" in str(loaded.error)
+    _adopt(root)
+
+    skills = {skill["name"]: skill for skill in collect_inventory(root).skills}
+    assert skills["bad"]["status"] == "disabled"
+    assert skills["bad"]["review_state"] == "needs_review"
+    assert skills["good"]["status"] != "disabled"
+
+
+def test_yaml_loader_blocks_path_replacement_before_bounded_read(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "manifest.yaml"
+    replacement = tmp_path / "replacement.yaml"
+    source.write_text("name: reviewed\n", encoding="utf-8")
+    replacement.write_text("name: replacement\n", encoding="utf-8")
+    real_open = io_module.os.open
+    swapped = False
+
+    def swap_before_open(path, flags, mode=0o777):  # type: ignore[no-untyped-def]
+        nonlocal swapped
+        if Path(path) == source and not swapped:
+            swapped = True
+            os.replace(replacement, source)
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(io_module.os, "open", swap_before_open)
+
+    result = load_yaml_safe(source)
+
+    assert result.data == {}
+    assert result.error == "YAML changed while it was being read"
 
 
 def test_skill_validation_rejects_linked_optional_metadata_directory(tmp_path: Path) -> None:
@@ -271,8 +337,14 @@ def test_unowned_workspace_cannot_write_closeout_or_learning(tmp_path: Path) -> 
             expected_plan=preview["plan_digest"],
             apply=True,
         )
+    learning_preview = learn_from_projects([root])
     with pytest.raises(ArchMarshalError, match="root-bound ownership"):
-        learn_from_projects([root], apply=True)
+        learn_from_projects(
+            [root],
+            reviewed_plan=learning_preview["learning_plan"],
+            expected_plan=learning_preview["plan_digest"],
+            apply=True,
+        )
     assert not (root / ".agent/history").exists()
     assert not (root / ".agent/inbox/learning").exists()
 
@@ -309,15 +381,114 @@ def test_learning_pack_is_commit_last_and_tamper_evident(tmp_path: Path) -> None
     skill_id = resolve_workspace(root, "demo")["suggested_skills"][0]["id"]
     _closeout(root, "Demo run one", skill_id)
     _closeout(root, "Demo run two", skill_id)
-    result = learn_from_projects([root], apply=True)
+    result = _apply_learning([root])
     pack = root / result["created"]
 
     verified = verify_learning_pack(pack)
-    assert verified["profile"]["format"] == "archmarshal-learning-candidates-v2"
+    assert verified["profile"]["format"] == LEARNING_FORMAT
     assert str(root) not in (pack / "candidates.yaml").read_text(encoding="utf-8")
     (pack / "candidates.yaml").write_text("format: tampered\n", encoding="utf-8")
     with pytest.raises(ArchMarshalError, match="do not match"):
         verify_learning_pack(pack)
+
+
+def test_learning_apply_requires_exact_saved_preview_and_rejects_stale_evidence(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    _adopt(root)
+    preview = learn_from_projects([root])
+
+    with pytest.raises(ArchMarshalError) as missing_review:
+        learn_from_projects([root], apply=True)
+    assert missing_review.value.code == "learning_review_required"
+
+    closeout = record_closeout(root, level="quick", summary="Evidence added later.")
+    record_closeout(
+        root,
+        level="quick",
+        summary="Evidence added later.",
+        expected_plan=closeout["plan_digest"],
+        apply=True,
+    )
+    with pytest.raises(ArchMarshalError) as stale:
+        learn_from_projects(
+            [root],
+            reviewed_plan=preview["learning_plan"],
+            expected_plan=preview["plan_digest"],
+            apply=True,
+        )
+    assert stale.value.code == "learning_plan_stale"
+    assert not (root / preview["target"]).exists()
+
+
+def test_learning_pack_verifier_accepts_v2_and_binds_declared_format(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    _adopt(root)
+    result = _apply_learning([root])
+    pack = root / result["created"]
+    candidate_path = pack / "candidates.yaml"
+    marker_path = pack / "COMMITTED.json"
+
+    profile = yaml.safe_load(candidate_path.read_text(encoding="utf-8"))
+    profile["format"] = "archmarshal-learning-candidates-v2"
+    candidate_bytes = yaml.safe_dump(profile, sort_keys=False, allow_unicode=True).encode("utf-8")
+    candidate_path.write_bytes(candidate_bytes)
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker.update(
+        {
+            "candidate_format": "archmarshal-learning-candidates-v2",
+            "bytes": len(candidate_bytes),
+            "sha256": hashlib.sha256(candidate_bytes).hexdigest(),
+        }
+    )
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+
+    assert verify_learning_pack(pack)["profile"]["format"].endswith("-v2")
+    marker["candidate_format"] = LEARNING_FORMAT
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+    with pytest.raises(ArchMarshalError, match="Candidate payload is invalid"):
+        verify_learning_pack(pack)
+
+
+def test_learning_pack_anonymizes_repeated_script_sources(tmp_path: Path) -> None:
+    root = tmp_path / "private-project-name"
+    root.mkdir()
+    _adopt(root)
+    script = root / "scripts" / "repeat.py"
+    script.parent.mkdir()
+    script.write_text("print('repeat')\n", encoding="utf-8")
+    for summary in ("Repeated script one", "Repeated script two"):
+        preview = record_closeout(
+            root,
+            level="reproducible",
+            summary=summary,
+            steps=["Run the repeated script."],
+            scripts=["scripts/repeat.py"],
+            commands=["python scripts/repeat.py"],
+        )
+        record_closeout(
+            root,
+            level="reproducible",
+            summary=summary,
+            steps=["Run the repeated script."],
+            scripts=["scripts/repeat.py"],
+            commands=["python scripts/repeat.py"],
+            expected_plan=preview["plan_digest"],
+            apply=True,
+        )
+
+    result = _apply_learning([root])
+    pack = root / result["created"]
+    profile = verify_learning_pack(pack)["profile"]
+
+    assert profile["repeated_scripts"]
+    source = profile["repeated_scripts"][0]["sources"][0]
+    assert set(source) == {"workspace_id", "path"}
+    assert source["path"] == "scripts/repeat.py"
+    assert str(root) not in (pack / "candidates.yaml").read_text(encoding="utf-8")
 
 
 def test_workspace_lifetime_lock_blocks_overlapping_mutations(tmp_path: Path) -> None:
@@ -339,16 +510,35 @@ def test_candidate_to_user_store_to_new_project_is_reversible_and_source_safe(
     skill_id = resolve_workspace(source, "demo")["suggested_skills"][0]["id"]
     _closeout(source, "Demo run one", skill_id, tags=["release"])
     _closeout(source, "Demo run two", skill_id, tags=["release"])
-    learned = learn_from_projects([source], apply=True)
+    learned = _apply_learning([source])
     pack = source / learned["created"]
-    skill_candidate = learned["common_skill_candidates"][0]["candidate_id"]
+    skill_candidate_record = learned["common_skill_candidates"][0]
+    skill_candidate = skill_candidate_record["candidate_id"]
+    skill_candidate_digest = hashlib.sha256(
+        json.dumps(
+            skill_candidate_record,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     preference_candidate = learned["preference_candidates"][0]["candidate_id"]
 
     store = tmp_path / "user-store"
     init = plan_user_store_initialization(store)
     apply_user_store_initialization(store, init, expected_plan=init["plan_digest"])
 
-    draft = _common_draft(tmp_path / "drafts")
+    draft = _common_draft(
+        tmp_path / "drafts",
+        promotion={
+            "candidate_id": skill_candidate,
+            "candidate_digest": skill_candidate_digest,
+            "source_skill_id": skill_candidate_record["skill_id"],
+            "source_implementation_sha256": skill_candidate_record[
+                "implementation_sha256"
+            ],
+        },
+    )
     with pytest.raises(ArchMarshalError) as invalid_decision:
         review_learning_candidate(
             source, pack, preference_candidate, store, decision="invalid"
@@ -372,10 +562,9 @@ def test_candidate_to_user_store_to_new_project_is_reversible_and_source_safe(
             source, pack, preference_candidate, store, draft=draft
         )
     assert preference_draft.value.code == "learning_promotion_draft_invalid"
-    preference_preview = promote_learning_candidate(
-        source, pack, preference_candidate, store
-    )
-    assert preference_preview["candidate_type"] == "preference"
+    with pytest.raises(ArchMarshalError) as unreviewed_promotion:
+        promote_learning_candidate(source, pack, preference_candidate, store)
+    assert unreviewed_promotion.value.code == "user_store_candidate_not_accepted"
 
     decision_preview = review_learning_candidate(
         source,
@@ -386,7 +575,7 @@ def test_candidate_to_user_store_to_new_project_is_reversible_and_source_safe(
         reason="Keep an auditable ancestor before promotion.",
     )
     decision_plan = decision_preview["user_store_plan"]
-    decision = review_learning_candidate(
+    review_learning_candidate(
         source,
         pack,
         preference_candidate,
@@ -398,7 +587,43 @@ def test_candidate_to_user_store_to_new_project_is_reversible_and_source_safe(
         reviewed_plan=decision_plan,
         apply=True,
     )
-    ancestor = decision["user_store"]["head"]
+    with pytest.raises(ArchMarshalError) as deferred_promotion:
+        promote_learning_candidate(source, pack, preference_candidate, store)
+    assert deferred_promotion.value.code == "user_store_candidate_not_accepted"
+
+    acceptance_preview = review_learning_candidate(
+        source,
+        pack,
+        skill_candidate,
+        store,
+        decision="accept",
+        reason="Approved for a reusable common-Skill draft.",
+    )
+    acceptance = review_learning_candidate(
+        source,
+        pack,
+        skill_candidate,
+        store,
+        decision="accept",
+        reason="Approved for a reusable common-Skill draft.",
+        expected_head_token=acceptance_preview["expected_head_token"],
+        expected_plan=acceptance_preview["plan_digest"],
+        reviewed_plan=acceptance_preview["user_store_plan"],
+        apply=True,
+    )
+    ancestor = acceptance["user_store"]["head"]
+
+    unrelated_draft = _common_draft(tmp_path / "unrelated-drafts", name="unrelated")
+    with pytest.raises(ArchMarshalError) as lineage_mismatch:
+        promote_learning_candidate(
+            source,
+            pack,
+            skill_candidate,
+            store,
+            draft=unrelated_draft,
+        )
+    assert lineage_mismatch.value.code == "learning_promotion_lineage_mismatch"
+    assert user_store_status(store)["head"] == ancestor
 
     source_before = fingerprint_directory(source, purpose="source project safety check")
     draft_before = fingerprint_directory(draft, purpose="draft safety check")
@@ -463,6 +688,19 @@ def test_candidate_to_user_store_to_new_project_is_reversible_and_source_safe(
     assert resolved["suggested_skills"][0]["origin"] == "user_store"
     assert resolved["suggested_skills"][0]["id"] == "skill.common-project.demo-common"
 
+    conflict_project = tmp_path / "conflict-project"
+    local_skill = conflict_project / "skills" / "demo-common"
+    shutil.copytree(draft, local_skill)
+    _adopt(conflict_project)
+    _approve(conflict_project, "skills/demo-common")
+    conflicted = resolve_workspace(conflict_project, "run demo", user_store=store)
+
+    assert [item["id"] for item in conflicted["suggested_skills"]] == [
+        "skill.common-project.demo-common"
+    ]
+    assert conflicted["suggested_skills"][0]["origin"] == "workspace"
+    assert conflicted["skill_conflicts"][0]["suppressed"][0]["origin"] == "user_store"
+
     rollback = plan_user_store_forward_rollback(
         store,
         ancestor,
@@ -480,7 +718,7 @@ def test_candidate_to_user_store_to_new_project_is_reversible_and_source_safe(
     assert (
         store / ".archmarshal" / "objects" / "sha256" / f"{promoted_head}.json"
     ).is_file()
-    assert user_store_status(store)["generation_count"] == 3
+    assert user_store_status(store)["generation_count"] == 4
 
 
 def test_user_store_cli_apply_requires_complete_saved_preview(

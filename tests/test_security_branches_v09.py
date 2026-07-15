@@ -195,11 +195,14 @@ def test_reviewed_plan_and_candidate_helpers_fail_closed(tmp_path: Path) -> None
     draft = _skill_dir(tmp_path, "draft")
     common = {"candidate_type": "common_skill"}
     with pytest.raises(ArchMarshalError):
-        promotion._verify_promotion_payload({}, candidate=common, draft=draft)
+        promotion._verify_promotion_payload(
+            {}, candidate=common, candidate_digest="a" * 64, draft=draft
+        )
     with pytest.raises(ArchMarshalError):
         promotion._verify_promotion_payload(
             {"generation": {"operation": {"kind": "promotion_preference"}}},
             candidate=common,
+            candidate_digest="a" * 64,
             draft=draft,
         )
 
@@ -230,7 +233,12 @@ def test_preference_promotion_plan_is_exactly_bound(mutation: str) -> None:
     else:
         changed["generation"]["operation"]["kind"] = "promotion_skill"
     with pytest.raises(ArchMarshalError):
-        promotion._verify_promotion_payload(changed, candidate=candidate, draft=None)
+        promotion._verify_promotion_payload(
+            changed,
+            candidate=candidate,
+            candidate_digest="a" * 64,
+            draft=None,
+        )
 
 
 def test_reviewed_plan_loader_rejects_invalid_json_and_non_object(tmp_path: Path) -> None:
@@ -394,6 +402,7 @@ def test_user_store_draft_and_file_preconditions_fail_closed(tmp_path: Path) -> 
 
 def test_json_plan_file_envelope_still_loads(tmp_path: Path) -> None:
     plan = {"kind": "decision", "plan_digest": "digest"}
-    path = tmp_path / "plan.json"
-    path.write_text(json.dumps({"user_store_plan": plan}), encoding="utf-8")
-    assert promotion.load_reviewed_plan(path) == plan
+    for encoding in ("utf-8", "utf-8-sig", "utf-16"):
+        path = tmp_path / f"plan-{encoding}.json"
+        path.write_text(json.dumps({"user_store_plan": plan}), encoding=encoding)
+        assert promotion.load_reviewed_plan(path) == plan

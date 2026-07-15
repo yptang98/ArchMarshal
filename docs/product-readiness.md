@@ -1,6 +1,6 @@
 # Product Readiness
 
-ArchMarshal 0.9 is a safety-hardened alpha, not yet a stable product. This page
+ArchMarshal 0.10 is a safety-hardened alpha, not yet a stable product. This page
 separates implemented behavior from design intent so users can decide what to
 trust.
 
@@ -10,17 +10,17 @@ trust.
 |---|---|---|---|
 | Existing project adoption | Implemented, review-first | Root-bound ownership; one backup-through-publication lifetime lock; exact plan digest; verified backup; durable create-only journal; receipt-last forward recovery; changed targets block and are never replaced | Handle-relative no-follow filesystem backend; orphan transaction inspection |
 | Existing skill management | Implemented, quarantined and reviewed | Codex package validation; exact package+routing approval; separate global-policy confirmation; immutable generations; full reachable-chain verification; reader/writer exclusion; OS lock/CAS `HEAD`; exact-plan rollback; source never rewritten | Ownership migration audit and safe orphan inspection/cleanup |
-| Backup | Implemented | Bounded archive, byte hashes, CRC, manifest validation, atomic exclusive publish | Large-workspace benchmarks and documented retention policy |
-| Restore | Implemented | Restores only into a new directory; uncertain partial output is preserved rather than recursively deleted | Resumable restore and guided diff/merge tooling; never add in-place restore |
+| Backup | Implemented | Bounded archive, streamed cumulative limits and free-space reserve, byte hashes, CRC, manifest validation, atomic exclusive publish | Large-workspace benchmarks and documented retention policy |
+| Restore | Implemented | Exact archive/destination plan; private staging plus atomic no-replace publication; portable root/directory/file modes and empty directories in full backups; restores only into a new directory; optional verified full-backup ownership rebind affects only the copy; uncertain partial staging is preserved | Resumable restore and guided diff/merge tooling; never add in-place restore |
 | Project start | Implemented | Read-only lint plus adoption/sync preview | Share one immutable inventory snapshot for performance |
 | Project closeout | Partial | Exact reviewed plan/path/bytes; create-only directory; commit-last file hashes; incomplete or hash-mismatched sessions excluded from learning | Recovery/status UI; declared cwd/inputs/outputs/expected results; optional execution validation |
 | Human project map | Partial | YAML plus `INDEX.md` remain readable | Regenerate versioned views from machine state without overwriting human notes |
 | Project catalog | Implemented | Reads compact control planes, not raw history | Durable user-level catalog database and rename/move handling |
-| Skill/preference learning | Review and promotion implemented | Session-pinned package hashes; commit-last candidate packs; exact candidate digest and provenance; explicit accept/reject/defer; no automatic promotion | Explicit legacy migration, candidate supersession UI, and richer evidence explanations |
-| Lightweight user preferences | Implemented in isolated store | Count/byte budgets; secret and absolute-path rejection; immutable generations; explicit application and forward rollback | Schema-versioned preference consumers and ergonomic profile selection |
-| User common-Skill store | Implemented | Root-bound ownership; validated immutable packages; complete saved-plan apply; expected-HEAD CAS; OS lock; commit-last copy; forward rollback; source/draft unchanged | Signed/exportable bundles, orphan inspection, retention policy, and native host integration |
+| Skill/preference learning | Review and promotion implemented | Exact saved learning plan; session-pinned package hashes; privacy-preserving v3 packs; exact candidate digest/provenance; latest-decision acceptance gate; explicit Skill draft lineage and replacement confirmation; no automatic promotion | Explicit legacy migration, candidate supersession UI, and richer evidence explanations |
+| Lightweight user preferences | Implemented in isolated store | Count/byte budgets; secret and absolute-path rejection; immutable generations; explicit replacement confirmation, application, and forward rollback | Ergonomic profile selection |
+| User common-Skill store | Implemented | Root-bound ownership; validated immutable packages; complete saved-plan apply; expected-HEAD CAS; OS lock; commit-last copy; discoverable generation history; forward rollback; source/draft unchanged | Signed/exportable bundles, orphan inspection, retention policy, and native host integration |
 | Dynamic context runtime | Not implemented | Resolver is advisory | Token-budgeted loader and host integrations |
-| Packaging | Implemented in CI | Linux/Windows and Python 3.10-3.13 tests; clean wheel/sdist install | Signed releases, release notes, provenance, rollback drill |
+| Packaging | Implemented in CI | Linux/Windows and Python 3.10-3.13 tests; wheel/sdist clean installs on Linux/Windows at Python 3.10/3.13 boundaries; CLI version checks | Signed tagged releases, provenance, and rollback drill |
 
 ## Release Gates
 
@@ -43,7 +43,7 @@ A stable release requires all of the following:
   workspace directories during a filesystem operation; a handle-relative
   no-follow backend is still required for that claim.
 - Windows file and archive contents are flushed, while directory-entry fsync is
-  only available on POSIX. Therefore 0.9 does not claim a cross-platform
+  only available on POSIX. Therefore 0.10 does not claim a cross-platform
   power-loss durability guarantee.
 - A reproducible closeout is an integrity-checked evidence capsule, not proof of
   successful execution. Generated run scripts are never executed automatically.

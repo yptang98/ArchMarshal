@@ -4,14 +4,14 @@ import hashlib
 import json
 import os
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
 
 from .errors import ArchMarshalError, require_workspace_root
 from .inventory import collect_inventory
-from .io import load_yaml_safe
+from .io import load_yaml_safe, read_bytes_safe
 from .ownership import require_owned_workspace, workspace_id
 from .safety import (
     create_bytes_exclusive,
@@ -19,16 +19,25 @@ from .safety import (
     ensure_path_within,
     files_below_no_links,
     is_link_or_reparse,
-    sha256_file,
     unique_path,
 )
 from .session import verify_committed_session
 from .workspace_lock import workspace_mutation_lock
 
+LEARNING_FORMAT = "archmarshal-learning-candidates-v3"
+LEARNING_PLAN_FORMAT = "archmarshal-learning-plan-v1"
+SUPPORTED_LEARNING_FORMATS = {
+    "archmarshal-learning-candidates-v2",
+    LEARNING_FORMAT,
+}
+MAX_LEARNING_COMMIT_BYTES = 2 * 1024 * 1024
+
 
 def learn_from_projects(
     roots: list[Path | str],
     *,
+    reviewed_plan: dict[str, Any] | None = None,
+    expected_plan: str | None = None,
     apply: bool = False,
 ) -> dict[str, Any]:
     project_roots: list[Path] = []
@@ -41,6 +50,21 @@ def learn_from_projects(
             project_roots.append(root)
     if not project_roots:
         raise ValueError("At least one project root is required.")
+    if apply and (reviewed_plan is None or not expected_plan):
+        raise ArchMarshalError(
+            "learning_review_required",
+            "Creating a learning pack requires the complete saved preview and its exact plan digest.",
+        )
+    if not apply and (reviewed_plan is not None or expected_plan is not None):
+        raise ArchMarshalError(
+            "learning_plan_unexpected",
+            "Reviewed learning plans are accepted only with --apply.",
+        )
+    generated_at = (
+        _reviewed_generated_at(reviewed_plan)
+        if reviewed_plan is not None
+        else datetime.now(timezone.utc)
+    )
     sessions: list[dict[str, Any]] = []
     legacy_unverified_session_count = 0
     skill_metadata: dict[tuple[str, str, str], dict[str, Any]] = {}
@@ -147,7 +171,9 @@ def learn_from_projects(
             if not isinstance(digest, str) or len(digest) != 64 or not isinstance(path, str):
                 continue
             script_observations.setdefault(digest, set()).add(session_id)
-            script_sources.setdefault(digest, set()).add((project, path))
+            script_sources.setdefault(digest, set()).add(
+                (workspace_id(session["_project_root"]), path)
+            )
 
     common_skill_candidates = []
     for key, observed_sessions in sorted(
@@ -182,8 +208,8 @@ def learn_from_projects(
         {
             "sha256": digest,
             "sources": [
-                {"project": project, "path": path}
-                for project, path in sorted(script_sources[digest])
+                {"workspace_id": source_workspace_id, "path": path}
+                for source_workspace_id, path in sorted(script_sources[digest])
             ],
             "observed_sessions": len(observed_sessions),
             "suggestion": "Review as a reusable common-project skill script.",
@@ -213,8 +239,8 @@ def learn_from_projects(
         if len(observed_sessions) >= 2
     ]
     profile = {
-        "format": "archmarshal-learning-candidates-v2",
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "format": LEARNING_FORMAT,
+        "generated_at": generated_at.isoformat(),
         "source_project_count": len(project_roots),
         "source_session_count": len(sessions),
         "legacy_unverified_session_count": legacy_unverified_session_count,
@@ -238,12 +264,18 @@ def learn_from_projects(
         ],
     }
     primary = project_roots[0]
-    generated_at = datetime.now(timezone.utc)
     profile_bytes = yaml.safe_dump(profile, sort_keys=False, allow_unicode=True).encode("utf-8")
     profile_digest = hashlib.sha256(profile_bytes).hexdigest()
     timestamp = generated_at.strftime("%H%M%S")
     base = primary / ".agent" / "inbox" / "learning" / generated_at.strftime("%Y/%m/%d")
-    pack_dir = unique_path(base / f"{timestamp}-{profile_digest[:12]}")
+    if reviewed_plan is None:
+        pack_dir = unique_path(base / f"{timestamp}-{profile_digest[:12]}")
+    else:
+        pack_dir = _reviewed_pack_dir(
+            primary,
+            reviewed_plan,
+            generated_at=generated_at,
+        )
     target = pack_dir / "candidates.yaml"
     ensure_managed_path(primary, pack_dir, purpose="Learning candidate pack")
     commit = {
@@ -261,6 +293,25 @@ def learn_from_projects(
     commit_bytes = (
         json.dumps(commit, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode("utf-8")
+    target_relative = pack_dir.relative_to(primary).as_posix()
+    learning_plan = {
+        "format": LEARNING_PLAN_FORMAT,
+        "mode": "propose_only",
+        "primary_root": str(primary),
+        "source_projects": [str(item) for item in project_roots],
+        "generated_at": generated_at.isoformat(),
+        "target": target_relative,
+        "candidate_pack_sha256": profile_digest,
+        "commit_sha256": hashlib.sha256(commit_bytes).hexdigest(),
+        "source_mutation": False,
+    }
+    learning_plan["plan_digest"] = _canonical_digest(learning_plan)
+    if reviewed_plan is not None:
+        _verify_reviewed_learning_plan(
+            reviewed_plan,
+            learning_plan,
+            expected_plan=str(expected_plan),
+        )
     payload = {
         "tool": "archmarshal",
         "stage": "learn",
@@ -271,8 +322,10 @@ def learn_from_projects(
         "unversioned_skill_usage_count": unversioned_skill_usage_count,
         "unreviewed_skill_usage_count": unreviewed_skill_usage_count,
         "ineligible_skill_usage_count": ineligible_skill_usage_count,
-        "target": pack_dir.relative_to(primary).as_posix(),
+        "target": target_relative,
         "candidate_pack_sha256": profile_digest,
+        "plan_digest": learning_plan["plan_digest"],
+        "learning_plan": learning_plan,
         "common_skill_candidates": common_skill_candidates,
         "preference_candidates": preference_candidates,
         "repeated_scripts": repeated_scripts,
@@ -314,28 +367,36 @@ def verify_learning_pack(pack_dir: Path | str) -> dict[str, Any]:
             "Learning candidate pack is incomplete or linked.",
             details={"path": str(directory)},
         )
+    loaded_marker = read_bytes_safe(
+        marker,
+        max_bytes=MAX_LEARNING_COMMIT_BYTES,
+        label="Learning commit marker",
+    )
     try:
-        commit = json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        if loaded_marker.error:
+            raise ValueError(loaded_marker.error)
+        commit = json.loads(loaded_marker.data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ArchMarshalError("learning_pack_invalid", "Candidate commit marker is invalid.") from exc
+    result = load_yaml_safe(candidate_file)
     if (
         not isinstance(commit, dict)
         or commit.get("format") != "archmarshal-learning-candidate-commit-v1"
         or commit.get("file") != "candidates.yaml"
         or commit.get("source_mutation") is not False
-        or commit.get("bytes") != candidate_file.stat().st_size
-        or commit.get("sha256") != sha256_file(candidate_file)
+        or commit.get("bytes") != result.byte_count
+        or commit.get("sha256") != result.sha256
     ):
         raise ArchMarshalError(
             "learning_pack_integrity_failed",
             "Candidate pack bytes do not match the commit marker.",
         )
-    result = load_yaml_safe(candidate_file)
     profile = result.data
     if (
         result.error
         or not isinstance(profile, dict)
-        or profile.get("format") != "archmarshal-learning-candidates-v2"
+        or profile.get("format") not in SUPPORTED_LEARNING_FORMATS
+        or commit.get("candidate_format") != profile.get("format")
     ):
         raise ArchMarshalError("learning_pack_invalid", "Candidate payload is invalid.")
     candidates = (profile.get("common_skill_candidates") or []) + (
@@ -354,7 +415,7 @@ def verify_learning_pack(pack_dir: Path | str) -> dict[str, Any]:
     return {
         "path": str(directory),
         "sha256": str(commit["sha256"]),
-        "commit_sha256": sha256_file(marker),
+        "commit_sha256": loaded_marker.sha256,
         "commit": commit,
         "profile": profile,
     }
@@ -397,7 +458,7 @@ def _load_sessions(root: Path) -> tuple[list[dict[str, Any]], int]:
                 "_session_path": (marker.parent / "session.yaml")
                 .relative_to(root)
                 .as_posix(),
-                "_session_commit_sha256": sha256_file(marker),
+                "_session_commit_sha256": verified["commit_sha256"],
             }
         )
     return sessions, legacy_unverified
@@ -411,4 +472,88 @@ def _canonical_digest(value: object) -> str:
     ).hexdigest()
 
 
-__all__ = ["learn_from_projects", "verify_learning_pack"]
+def _reviewed_generated_at(plan: dict[str, Any]) -> datetime:
+    if not isinstance(plan, dict) or plan.get("format") != LEARNING_PLAN_FORMAT:
+        raise ArchMarshalError(
+            "learning_plan_invalid",
+            "Saved learning plan is missing or has an unsupported format.",
+        )
+    value = plan.get("generated_at")
+    if not isinstance(value, str):
+        raise ArchMarshalError("learning_plan_invalid", "Saved learning plan has no timestamp.")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ArchMarshalError(
+            "learning_plan_invalid", "Saved learning plan timestamp is invalid."
+        ) from exc
+    if parsed.tzinfo is None:
+        raise ArchMarshalError(
+            "learning_plan_invalid", "Saved learning plan timestamp must include a timezone."
+        )
+    return parsed
+
+
+def _reviewed_pack_dir(
+    primary: Path,
+    plan: dict[str, Any],
+    *,
+    generated_at: datetime,
+) -> Path:
+    target = plan.get("target")
+    if not isinstance(target, str):
+        raise ArchMarshalError("learning_plan_invalid", "Saved learning plan has no target.")
+    profile_digest = plan.get("candidate_pack_sha256")
+    if not isinstance(profile_digest, str) or len(profile_digest) != 64:
+        raise ArchMarshalError(
+            "learning_plan_invalid", "Saved learning plan has no valid candidate digest."
+        )
+    relative = PurePosixPath(target)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ArchMarshalError("learning_plan_invalid", "Saved learning target is not relative.")
+    expected_parent = PurePosixPath(
+        ".agent/inbox/learning"
+    ) / generated_at.strftime("%Y/%m/%d")
+    expected_name = f"{generated_at.strftime('%H%M%S')}-{profile_digest[:12]}"
+    suffix = relative.name.removeprefix(expected_name)
+    if (
+        relative.parent != expected_parent
+        or not relative.name.startswith(expected_name)
+        or (suffix and (not suffix.startswith("-") or not suffix[1:].isdigit()))
+    ):
+        raise ArchMarshalError(
+            "learning_plan_invalid",
+            "Saved learning target does not match its reviewed timestamp and content digest.",
+        )
+    return ensure_managed_path(
+        primary,
+        primary.joinpath(*relative.parts),
+        purpose="Reviewed learning candidate pack",
+    )
+
+
+def _verify_reviewed_learning_plan(
+    reviewed: dict[str, Any],
+    current: dict[str, Any],
+    *,
+    expected_plan: str,
+) -> None:
+    actual = _canonical_digest({key: value for key, value in reviewed.items() if key != "plan_digest"})
+    if reviewed.get("plan_digest") != actual or expected_plan != actual:
+        raise ArchMarshalError(
+            "learning_plan_digest_mismatch",
+            "Saved learning plan does not match the exact digest supplied for apply.",
+        )
+    if reviewed != current:
+        raise ArchMarshalError(
+            "learning_plan_stale",
+            "Projects or committed evidence changed after the learning preview; review a new plan.",
+        )
+
+
+__all__ = [
+    "LEARNING_FORMAT",
+    "LEARNING_PLAN_FORMAT",
+    "learn_from_projects",
+    "verify_learning_pack",
+]

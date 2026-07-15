@@ -14,7 +14,7 @@ import yaml
 
 from .closeout import closeout_workspace
 from .errors import ArchMarshalError, require_workspace_root
-from .io import load_yaml_safe
+from .io import load_yaml_safe, read_bytes_safe
 from .ownership import require_owned_workspace
 from .safety import (
     create_bytes_exclusive,
@@ -257,19 +257,22 @@ def record_closeout(
 def verify_committed_session(session_dir: Path | str) -> dict[str, Any]:
     directory = Path(session_dir).resolve()
     marker = directory / "COMMITTED.json"
-    if (
-        not marker.is_file()
-        or is_link_or_reparse(marker)
-        or marker.stat().st_size > MAX_SESSION_COMMIT_BYTES
-    ):
+    if not marker.is_file() or is_link_or_reparse(marker):
         raise ArchMarshalError(
             "session_commit_invalid",
             "Session commit marker is missing, linked, or exceeds the safe size limit.",
             details={"path": str(marker)},
         )
+    loaded_marker = read_bytes_safe(
+        marker,
+        max_bytes=MAX_SESSION_COMMIT_BYTES,
+        label="Session commit marker",
+    )
     try:
-        commit = json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        if loaded_marker.error:
+            raise ValueError(loaded_marker.error)
+        commit = json.loads(loaded_marker.data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ArchMarshalError(
             "session_commit_invalid",
             "Session commit marker is not valid UTF-8 JSON.",
@@ -288,6 +291,7 @@ def verify_committed_session(session_dir: Path | str) -> dict[str, Any]:
             "Session commit marker structure is invalid.",
         )
     declared: set[str] = set()
+    declared_records: dict[str, dict[str, Any]] = {}
     for record in records:
         if not isinstance(record, dict):
             raise ArchMarshalError("session_commit_invalid", "Session file record is invalid.")
@@ -312,6 +316,7 @@ def verify_committed_session(session_dir: Path | str) -> dict[str, Any]:
                 details={"path": relative},
             )
         declared.add(relative)
+        declared_records[relative] = record
     actual = {
         path.relative_to(directory).as_posix()
         for path in files_below_no_links(directory, purpose="Committed session verification")
@@ -325,8 +330,12 @@ def verify_committed_session(session_dir: Path | str) -> dict[str, Any]:
         )
     session_path = directory / "session.yaml"
     session_result = load_yaml_safe(session_path)
+    session_record = declared_records.get("session.yaml")
     if (
         session_result.error
+        or session_record is None
+        or session_result.byte_count != session_record.get("bytes")
+        or session_result.sha256 != session_record.get("sha256")
         or not isinstance(session_result.data, dict)
         or session_result.data.get("format") != SESSION_FORMAT
     ):
@@ -334,7 +343,11 @@ def verify_committed_session(session_dir: Path | str) -> dict[str, Any]:
             "session_integrity_failed",
             "Committed session.yaml is invalid or has an unsupported format.",
         )
-    return {"commit": commit, "session": session_result.data}
+    return {
+        "commit": commit,
+        "commit_sha256": loaded_marker.sha256,
+        "session": session_result.data,
+    }
 
 
 def _commit_session(session_dir: Path, created: list[Path], content: bytes) -> Path:

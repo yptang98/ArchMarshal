@@ -71,17 +71,31 @@ The managed backup scope contains:
 
 Use `--backup-scope full` when the user requires a broad project-content snapshot. VCS
 internals, dependency directories, virtual environments, and previous backups
-are excluded. The resulting zip contains a JSON manifest with the original
-relative path, byte size, and SHA-256 hash for each file; the zip is tested and
+are excluded. The full set is scanned internally, rescanned before publication,
+and fails closed on links, junctions, or reparse points instead of silently
+omitting them. The resulting zip contains a JSON manifest with the original
+root mode, every included directory and empty directory with portable permission
+bits, and the relative path, portable permission bits, byte size, and SHA-256
+hash for each file; the zip is tested and
 hashed before adoption continues. `.agent/backups/.gitignore` prevents backup
 archives from being committed accidentally; these backups may still contain
 sensitive project files and must not be shared casually.
 
 Use `archmarshal backup-verify` to re-check every archived byte. Restore is
 deliberately one-way into a new, non-existing directory; ArchMarshal never
-restores over the original project. If extraction fails, the incomplete new
-directory is preserved for explicit inspection. ArchMarshal does not recursively
-delete it because another process may have added or replaced content there.
+restores over the original project. Apply requires the exact preview digest,
+which binds archive bytes, manifest, and destination. A restored managed copy
+normally retains an ownership marker bound to the old root and therefore cannot
+mutate. `--rebind-workspace` is an explicit restore-plan option: it accepts only
+a verified **full-workspace** backup created through `--backup-scope full`, with
+a marker matching the backup's source root and the minimum indexed control
+plane. It backs that old marker up inside the new copy, and binds only the copy
+to the new root. Extraction occurs under a private randomly named sibling
+staging directory. Only after every file hash and all recorded root, directory,
+empty-directory, and file modes verify, plus any optional rebind, is the complete
+directory atomically published to the requested
+new path with no-replace semantics. Failed staging is reported and preserved
+for explicit inspection; ArchMarshal does not recursively delete it.
 
 ### Durable Adoption Transaction
 
@@ -287,6 +301,11 @@ The command never edits global skills or user configuration automatically. This
 keeps the global layer small while still allowing deliberate improvement from
 cross-project evidence.
 
+Learning publication requires the complete saved preview plus its exact
+`--expect-plan` digest. The plan binds the ordered roots, generation time,
+candidate and commit bytes, and target directory. Changed committed evidence
+stops publication and requires a new review.
+
 ## Reviewed User Skill Store
 
 The user store is a separate ownership domain, not a hidden rewrite of a project
@@ -328,6 +347,11 @@ requires all three reviewed inputs:
 1. the complete saved JSON preview (`--plan-file`);
 2. its exact `--expect-plan` digest; and
 3. its exact `--expect-head`, using `none` only when the preview says so.
+
+An active Skill id or preference key is never silently replaced. Replacement
+needs the matching `--replace-existing-skill` or
+`--replace-existing-preference` confirmation in the saved preview and again at
+apply time.
 
 The store publishes a package commit marker before the generation object and
 advances only its internal `HEAD` under an OS lock and compare-and-swap. An

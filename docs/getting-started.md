@@ -5,7 +5,7 @@ Use ArchMarshal as a Python CLI that Codex or a human invokes in the project.
 ## 1. Install
 
 ```bash
-python -m pip install "git+https://github.com/yptang98/ArchMarshal.git"
+python -m pip install "git+https://github.com/yptang98/ArchMarshal.git@<reviewed-full-commit-sha>"
 archmarshal --help
 ```
 
@@ -123,7 +123,9 @@ explicit migration workflow is still planned.
 After repeated sessions, create a review-only learning pack:
 
 ```text
-archmarshal learn . --include-root ../another-project --apply --pretty
+archmarshal learn . --include-root ../another-project --pretty > learning-plan.json
+archmarshal learn . --include-root ../another-project \
+  --plan-file learning-plan.json --expect-plan <plan_digest> --apply --pretty
 ```
 
 Promotion is optional. Initialize a separate user store, save its preview as
@@ -135,7 +137,13 @@ archmarshal user-store-init <store> --plan-file init-plan.json \
   --expect-plan <plan_digest> --apply
 
 archmarshal candidate-review . --pack <committed-pack> \
-  --candidate <id> --decision defer --user-store <store> --pretty
+  --candidate <id> --decision accept --reason "approved evidence" \
+  --user-store <store> --pretty > acceptance-plan.json
+# Repeat candidate-review with the saved --plan-file, exact --expect-head,
+# exact --expect-plan, and --apply.
+
+# The reviewed draft manifest must declare promotion.candidate_id,
+# candidate_digest, source_skill_id, and source_implementation_sha256 exactly.
 archmarshal candidate-promote . --pack <committed-pack> \
   --candidate <id> --draft <reviewed-skill-draft> \
   --user-store <store> --pretty > promotion-plan.json
@@ -147,6 +155,10 @@ archmarshal-start . --task "prepare release" --user-store <store> --pretty
 
 Preference candidates omit `--draft`. The store holds copies and immutable
 metadata; the source project, candidate pack, and draft remain unchanged.
+Rejected, deferred, or unreviewed candidates cannot be promoted.
+Replacing an active record with the same Skill id or preference key also
+requires `--replace-existing-skill` or `--replace-existing-preference` in both
+preview and apply.
 
 ## Rule
 

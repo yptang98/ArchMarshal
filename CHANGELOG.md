@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.10.0 - 2026-07-15
+
+### Breaking safety changes
+
+- `learn --apply` now requires the complete saved preview through `--plan-file`
+  and its exact `--expect-plan`; digest-only or unreviewed learning writes stop.
+- Common-Skill drafts promoted from learning packs must declare exact candidate
+  and source lineage. Replacing an active Skill id or preference key requires
+  the matching type-specific replacement flag in preview and apply.
+- User-store status uses the `initialized_empty` state for an owned store with
+  no active generation and publishes a versioned status payload.
+- Restore with `--rebind-workspace` accepts only internally scanned
+  full-workspace backups that preserve portable root, directory, empty-directory,
+  and file modes and contain the minimum complete ArchMarshal control plane.
+- New promotion generations may only reference the latest exact acceptance in
+  their parent generation; accepting and activating a candidate in one
+  generation is rejected.
+
+- Harden backup and restore boundaries: reject linked destination ancestors and
+  NTFS alternate data streams, enforce actual streamed byte limits, bind apply
+  to exact archive bytes and destination, and preserve incomplete output for
+  inspection in private staging. Successful restore uses atomic no-replace
+  directory publication, so nested extraction paths are never exposed at the
+  requested destination while files are being written. An explicit
+  `--rebind-workspace` restore option verifies the old
+  root-bound ownership marker, backs it up inside the new copy, and atomically
+  binds only the restored copy to its new root.
+- Bound YAML parsing by bytes, aliases, nodes, and depth while preserving ISO
+  date compatibility; recursive aliases and non-finite/complex values are
+  quarantined rather than crashing project discovery.
+- Parse committed learning/session YAML from the same bounded stable bytes used
+  for size and SHA-256 verification, and bound reviewed-plan reads against file
+  replacement or growth.
+- Require the latest decision for an exact candidate digest and provenance to
+  be accepted before promotion. Common-Skill drafts must declare exact
+  candidate/source lineage, so a reviewed candidate cannot authorize an
+  unrelated draft. Rejected and deferred candidates remain blocked.
+- Require explicit type-specific confirmation before replacing an active
+  user-store Skill id or preference key; the reviewed plan records that intent.
+- Bind learning-pack creation to a complete saved preview and exact plan digest;
+  changed evidence, candidate bytes, commit bytes, roots, or target paths stop
+  before publication.
+- Prevent draft/package destination overlap and keep source projects, source
+  Skills, and reviewed drafts byte-for-byte unchanged across promotion.
+- Resolve same-id workspace/user-store Skills deterministically with local
+  workspace precedence and an explicit conflict record; newly discovered or
+  restored unindexed Skills are surfaced as blocked sync work rather than
+  disappearing from task resolution.
+- Preserve existing project tags during incremental start, distinguish
+  governance/project/task readiness, and report the narrow mutation performed
+  by `start --apply` instead of describing it as read-only.
+- Add discoverable user-store generation history and current decision summaries,
+  PowerShell UTF-16 saved-plan compatibility, privacy-preserving learning-pack
+  v3 repeated-script sources, versioned CLI JSON envelopes, and `--version`
+  support on all three CLI entrypoints.
+- Stream Skill fingerprints through descriptor identity and post-read checks,
+  enforce entrypoint-only scans for root Skills, and expand regression coverage
+  for source growth, archive replacement, Windows junctions/streams, unsafe
+  topology, review bypass, resolver conflict, and restored-workspace rebind.
+
 ## 0.9.0 - 2026-07-15
 
 - Quarantine every Skill discovered during adoption until its exact package and

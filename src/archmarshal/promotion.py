@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import ArchMarshalError
+from .io import read_bytes_safe
 from .learning import verify_learning_pack
 from .ownership import require_owned_workspace
 from .safety import ensure_managed_path, is_link_or_reparse
@@ -15,6 +16,8 @@ from .user_store import (
     _plan_user_store_decision,
     _plan_user_store_promotion,
 )
+
+MAX_REVIEWED_PLAN_BYTES = 32 * 1024 * 1024
 
 
 def review_learning_candidate(
@@ -96,6 +99,8 @@ def promote_learning_candidate(
     expected_head_token: str | None = None,
     expected_plan: str | None = None,
     reviewed_plan: dict[str, Any] | None = None,
+    replace_existing_skill: bool = False,
+    replace_existing_preference: bool = False,
     apply: bool = False,
 ) -> dict[str, Any]:
     candidate, candidate_digest, provenance, pack_info = _candidate_context(
@@ -110,6 +115,11 @@ def promote_learning_candidate(
             )
         skill_draft: Path | str | None = draft
         preference = None
+        if replace_existing_preference:
+            raise ArchMarshalError(
+                "learning_promotion_replace_invalid",
+                "Common Skill promotion does not accept preference replacement confirmation.",
+            )
     elif candidate_type == "preference":
         if draft is not None:
             raise ArchMarshalError(
@@ -118,6 +128,11 @@ def promote_learning_candidate(
             )
         skill_draft = None
         preference = {"key": candidate.get("key"), "value": candidate.get("value")}
+        if replace_existing_skill:
+            raise ArchMarshalError(
+                "learning_promotion_replace_invalid",
+                "Preference promotion does not accept Skill replacement confirmation.",
+            )
     else:
         raise ArchMarshalError(
             "learning_candidate_type_invalid",
@@ -132,6 +147,16 @@ def promote_learning_candidate(
             skill_draft=skill_draft,
             preference=preference,
             reason=reason,
+            allow_skill_replace=replace_existing_skill,
+            allow_preference_replace=replace_existing_preference,
+        )
+        _verify_promotion_payload(
+            plan,
+            candidate=candidate,
+            candidate_digest=candidate_digest,
+            draft=draft,
+            replace_existing_skill=replace_existing_skill,
+            replace_existing_preference=replace_existing_preference,
         )
         return _candidate_plan_envelope(candidate, candidate_digest, pack_info, plan, "promotion")
     plan, expected_head = _reviewed_plan(
@@ -147,8 +172,16 @@ def promote_learning_candidate(
         provenance=provenance,
         decision="accepted",
         reason=reason,
+        prior_acceptance=True,
     )
-    _verify_promotion_payload(plan, candidate=candidate, draft=draft)
+    _verify_promotion_payload(
+        plan,
+        candidate=candidate,
+        candidate_digest=candidate_digest,
+        draft=draft,
+        replace_existing_skill=replace_existing_skill,
+        replace_existing_preference=replace_existing_preference,
+    )
     result = _apply_user_store_promotion(
         user_store,
         plan,
@@ -170,11 +203,29 @@ def promote_learning_candidate(
 def load_reviewed_plan(path: Path | str) -> dict[str, Any]:
     plan_path = Path(path)
     try:
-        payload = json.loads(plan_path.read_text(encoding="utf-8"))
+        loaded = read_bytes_safe(
+            plan_path,
+            max_bytes=MAX_REVIEWED_PLAN_BYTES,
+            label="Reviewed plan",
+        )
+        if loaded.error:
+            raise ValueError(loaded.error)
+        raw = loaded.data
+        if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            text = raw.decode("utf-16")
+        else:
+            text = raw.decode("utf-8-sig")
+        payload = json.loads(text)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ArchMarshalError(
             "reviewed_plan_invalid",
-            "Reviewed plan file is not readable UTF-8 JSON.",
+            "Reviewed plan file is not readable UTF-8 or BOM-marked UTF-16 JSON.",
+            details={"path": str(plan_path)},
+        ) from exc
+    except ValueError as exc:
+        raise ArchMarshalError(
+            "reviewed_plan_invalid",
+            "Reviewed plan file is linked or exceeds the safe size limit.",
             details={"path": str(plan_path)},
         ) from exc
     if isinstance(payload, dict) and isinstance(payload.get("user_store_plan"), dict):
@@ -324,6 +375,7 @@ def _verify_plan_candidate(
     provenance: list[dict[str, str]],
     decision: str,
     reason: str,
+    prior_acceptance: bool = False,
 ) -> None:
     generation = plan.get("generation")
     decisions = generation.get("candidate_decisions") if isinstance(generation, dict) else None
@@ -335,15 +387,20 @@ def _verify_plan_candidate(
         and item.get("candidate_digest") == candidate_digest
         and item.get("decision") == decision
         and item.get("provenance") == provenance
-        and item.get("reason") == reason.strip()
+        and (prior_acceptance or item.get("reason") == reason.strip())
     ]
     operation = generation.get("operation") if isinstance(generation, dict) else None
-    if len(matches) != 1 or not isinstance(operation, dict):
+    if not matches or not isinstance(operation, dict):
         raise ArchMarshalError(
             "reviewed_plan_candidate_mismatch",
             "Saved plan does not bind this exact candidate, decision, and provenance.",
         )
-    if operation.get("decision_digest") != matches[0].get("digest"):
+    referenced = [
+        item for item in matches if operation.get("decision_digest") == item.get("digest")
+    ]
+    if len(referenced) != 1 or (
+        prior_acceptance and operation.get("reason") != reason.strip()
+    ):
         raise ArchMarshalError(
             "reviewed_plan_candidate_mismatch",
             "Saved plan operation does not reference the exact candidate decision.",
@@ -354,7 +411,10 @@ def _verify_promotion_payload(
     plan: dict[str, Any],
     *,
     candidate: dict[str, Any],
+    candidate_digest: str,
     draft: Path | str | None,
+    replace_existing_skill: bool = False,
+    replace_existing_preference: bool = False,
 ) -> None:
     generation = plan.get("generation")
     operation = generation.get("operation") if isinstance(generation, dict) else None
@@ -376,6 +436,25 @@ def _verify_promotion_payload(
                 "reviewed_plan_candidate_mismatch",
                 "Saved plan is not a common-Skill promotion for this candidate.",
             )
+        manifest = package.get("manifest") if isinstance(package, dict) else None
+        lineage = manifest.get("promotion") if isinstance(manifest, dict) else None
+        expected_lineage = {
+            "candidate_id": candidate.get("candidate_id"),
+            "candidate_digest": candidate_digest,
+            "source_skill_id": candidate.get("skill_id"),
+            "source_implementation_sha256": candidate.get("implementation_sha256"),
+        }
+        if lineage != expected_lineage:
+            raise ArchMarshalError(
+                "learning_promotion_lineage_mismatch",
+                "Reviewed Skill draft must declare exact promotion lineage for this candidate.",
+                details={"expected_promotion": expected_lineage},
+            )
+        if bool(operation.get("replace_existing")) is not replace_existing_skill:
+            raise ArchMarshalError(
+                "reviewed_plan_candidate_mismatch",
+                "Saved plan does not match the explicit Skill replacement confirmation.",
+            )
         supplied = Path(draft).expanduser().absolute()
         if is_link_or_reparse(supplied) or str(supplied.resolve(strict=False)) != draft_root:
             raise ArchMarshalError(
@@ -387,6 +466,11 @@ def _verify_promotion_payload(
         raise ArchMarshalError(
             "reviewed_plan_candidate_mismatch",
             "Saved plan promotion kind does not match the committed candidate.",
+        )
+    if bool(operation.get("replace_existing")) is not replace_existing_preference:
+        raise ArchMarshalError(
+            "reviewed_plan_candidate_mismatch",
+            "Saved plan does not match the explicit preference replacement confirmation.",
         )
     record_digest = operation.get("record_digest")
     preferences = generation.get("preferences") if isinstance(generation, dict) else None

@@ -96,6 +96,24 @@ def _promotion_plan(store: Path, draft: Path, candidate: str, digest: str) -> di
     )
 
 
+def _accept_candidate(store: Path, candidate: str, digest: str) -> dict[str, object]:
+    plan = plan_user_store_decision(
+        store,
+        candidate_id=candidate,
+        candidate_digest=digest,
+        decision="accepted",
+        provenance=PROVENANCE,
+        reason="Reviewed before promotion.",
+        created_at="2026-07-15T00:30:00+00:00",
+    )
+    return apply_user_store_decision(
+        store,
+        plan,
+        expected_head=plan["expected_head"],
+        expected_plan=plan["plan_digest"],
+    )
+
+
 def _apply_promotion(store: Path, plan: dict[str, object]) -> dict[str, object]:
     return apply_user_store_promotion(
         store,
@@ -124,7 +142,7 @@ def test_initialization_is_create_only_and_root_bound(tmp_path: Path) -> None:
 
     assert applied["mode"] == "initialized"
     assert ownership["store_id"] == applied["store_id"]
-    assert user_store_status(store)["state"] == "uninitialized"
+    assert user_store_status(store)["state"] == "initialized_empty"
     with pytest.raises(ArchMarshalError) as raised:
         plan_user_store_initialization(store)
     assert raised.value.code == "user_store_already_initialized"
@@ -205,7 +223,18 @@ def test_decision_apply_requires_exact_plan_and_head(tmp_path: Path) -> None:
     status = user_store_status(store)
 
     assert applied["head"] == status["head"]
+    assert status["api_version"] == "archmarshal-user-store-status-v2"
     assert status["candidate_decisions"] == 1
+    assert status["current_candidate_decisions"] == [
+        {
+            "candidate_id": "candidate.reject-one",
+            "candidate_digest": "b" * 64,
+            "decision": "rejected",
+            "reason": "Project-specific behavior should stay local.",
+            "decided_at": "2026-07-15T01:00:00+00:00",
+            "decision_digest": plan["generation"]["operation"]["decision_digest"],
+        }
+    ]
     assert read_user_store_active(store)["common_skills"] == []
 
 
@@ -213,6 +242,7 @@ def test_promotion_rejects_stale_draft_and_never_mutates_source(tmp_path: Path) 
     store = tmp_path / "user-store"
     _initialize(store)
     draft = _draft(tmp_path, "release-helper")
+    _accept_candidate(store, "candidate.release", "c" * 64)
     stale = _promotion_plan(store, draft, "candidate.release", "c" * 64)
     (draft / "SKILL.md").write_text(
         "---\nname: release-helper\ndescription: Changed after review.\n---\n",
@@ -222,8 +252,9 @@ def test_promotion_rejects_stale_draft_and_never_mutates_source(tmp_path: Path) 
     with pytest.raises(ArchMarshalError) as raised:
         _apply_promotion(store, stale)
     assert raised.value.code == "user_store_source_changed"
-    assert user_store_status(store)["head"] is None
+    assert user_store_status(store)["head"] == stale["expected_head"]
 
+    _accept_candidate(store, "candidate.release-v2", "d" * 64)
     reviewed = _promotion_plan(store, draft, "candidate.release-v2", "d" * 64)
     before = fingerprint_directory(draft, purpose="test source")
     applied = _apply_promotion(store, reviewed)
@@ -236,11 +267,81 @@ def test_promotion_rejects_stale_draft_and_never_mutates_source(tmp_path: Path) 
     assert Path(active["common_skills"][0]["package_dir"]).is_dir()
 
 
+def test_rejected_candidate_cannot_be_promoted_until_later_acceptance(tmp_path: Path) -> None:
+    store = tmp_path / "user-store"
+    _initialize(store)
+    draft = _draft(tmp_path, "review-gate")
+    candidate = "candidate.review-gate"
+    digest = "a" * 64
+    rejected = plan_user_store_decision(
+        store,
+        candidate_id=candidate,
+        candidate_digest=digest,
+        decision="rejected",
+        provenance=PROVENANCE,
+        reason="Not reusable yet.",
+    )
+    rejected_result = apply_user_store_decision(
+        store,
+        rejected,
+        expected_head=rejected["expected_head"],
+        expected_plan=rejected["plan_digest"],
+    )
+
+    with pytest.raises(ArchMarshalError) as raised:
+        _promotion_plan(store, draft, candidate, digest)
+
+    assert raised.value.code == "user_store_candidate_not_accepted"
+    assert raised.value.details["latest_decision"] == "rejected"
+    assert user_store_status(store)["head"] == rejected_result["head"]
+
+    _accept_candidate(store, candidate, digest)
+    assert _promotion_plan(store, draft, candidate, digest)["kind"] == "promotion"
+
+
+def test_new_promotion_cannot_append_its_own_acceptance(tmp_path: Path) -> None:
+    store = tmp_path / "user-store"
+    _initialize(store)
+    draft = _draft(tmp_path, "prior-review-required")
+    candidate = "candidate.prior-review-required"
+    candidate_digest = "9" * 64
+    _accept_candidate(store, candidate, candidate_digest)
+    valid_plan = _promotion_plan(store, draft, candidate, candidate_digest)
+    forged_generation = json.loads(json.dumps(valid_plan["generation"]))
+    forged_generation["parent"] = None
+    forged_digest = hashlib.sha256(
+        user_store_module._generation_bytes(forged_generation)
+    ).hexdigest()
+
+    with pytest.raises(ArchMarshalError) as raised:
+        user_store_module._validate_history_transitions(
+            [{"digest": forged_digest, "generation": forged_generation}]
+        )
+
+    assert raised.value.code == "user_store_history_invalid"
+
+
+def test_promotion_rejects_draft_overlapping_immutable_destination(tmp_path: Path) -> None:
+    store = tmp_path / "user-store"
+    _initialize(store)
+    draft = _draft(store / ".archmarshal", "packages")
+    before = fingerprint_directory(draft, purpose="overlapping draft")
+
+    with pytest.raises(ArchMarshalError) as raised:
+        _promotion_plan(store, draft, "candidate.overlap", "e" * 64)
+
+    assert raised.value.code == "user_store_source_destination_overlap"
+    assert fingerprint_directory(draft, purpose="overlapping draft") == before
+    assert not (draft / "sha256").exists()
+
+
 def test_concurrent_reviewed_plans_use_expected_head_cas(tmp_path: Path) -> None:
     store = tmp_path / "user-store"
     _initialize(store)
     first_draft = _draft(tmp_path, "first")
     second_draft = _draft(tmp_path, "second")
+    _accept_candidate(store, "candidate.first", "1" * 64)
+    _accept_candidate(store, "candidate.second", "2" * 64)
     first = _promotion_plan(store, first_draft, "candidate.first", "1" * 64)
     second = _promotion_plan(store, second_draft, "candidate.second", "2" * 64)
 
@@ -259,6 +360,7 @@ def test_committed_orphan_package_is_not_activated(tmp_path: Path, monkeypatch) 
     store = tmp_path / "user-store"
     _initialize(store)
     draft = _draft(tmp_path, "orphan")
+    _accept_candidate(store, "candidate.orphan", "3" * 64)
     plan = _promotion_plan(store, draft, "candidate.orphan", "3" * 64)
     real_publish = user_store_module._publish_generation_object
 
@@ -271,7 +373,7 @@ def test_committed_orphan_package_is_not_activated(tmp_path: Path, monkeypatch) 
 
     package = store / str(plan["package"]["package_path"])
     assert (package / "COMMITTED.json").is_file()
-    assert user_store_status(store)["head"] is None
+    assert user_store_status(store)["head"] == plan["expected_head"]
     assert read_user_store_active(store)["common_skills"] == []
 
     monkeypatch.setattr(user_store_module, "_publish_generation_object", real_publish)
@@ -286,6 +388,7 @@ def test_package_staging_orphan_does_not_block_safe_promotion(tmp_path: Path) ->
     staging.mkdir(parents=True)
     (staging / ".am-deadbeef.tmp").write_text("orphan\n", encoding="utf-8")
     draft = _draft(tmp_path, "staging-safe")
+    _accept_candidate(store, "candidate.staging", "6" * 64)
     plan = _promotion_plan(store, draft, "candidate.staging", "6" * 64)
 
     applied = _apply_promotion(store, plan)
@@ -321,9 +424,11 @@ def test_forward_rollback_publishes_new_head_and_keeps_old_objects(
     store = tmp_path / "user-store"
     _initialize(store)
     draft = _draft(tmp_path, "review")
+    _accept_candidate(store, "candidate.review", "4" * 64)
     first_plan = _promotion_plan(store, draft, "candidate.review", "4" * 64)
     first = _apply_promotion(store, first_plan)
 
+    _accept_candidate(store, "candidate.preference.shell", "5" * 64)
     preference_plan = plan_user_store_promotion(
         store,
         candidate_id="candidate.preference.shell",
@@ -382,9 +487,109 @@ def test_forward_rollback_publishes_new_head_and_keeps_old_objects(
         "skill.common-project.review"
     ]
     assert (store / ".archmarshal" / "objects" / "sha256" / f"{second['head']}.json").is_file()
-    assert user_store_status(store)["generation_count"] == 3
+    assert user_store_status(store)["generation_count"] == 5
+    history = user_store_status(store)["history"]
+    assert history[0]["active"] is True
+    assert history[0]["operation"]["kind"] == "rollback"
+    assert history[0]["parent"] == second["head"]
+    assert history[-1]["operation"]["kind"] == "decision"
+    assert {item["digest"] for item in history} >= {first["head"], second["head"]}
 
 
 def test_raw_candidate_publication_primitives_are_not_supported_public_api() -> None:
     assert "plan_user_store_promotion" not in user_store_module.__all__
     assert "apply_user_store_promotion" not in user_store_module.__all__
+
+
+def test_active_skill_and_preference_replacement_require_explicit_confirmation(
+    tmp_path: Path,
+) -> None:
+    store = tmp_path / "user-store"
+    _initialize(store)
+
+    first_candidate = "candidate.preference.first"
+    first_digest = "1" * 64
+    _accept_candidate(store, first_candidate, first_digest)
+    first_preference = plan_user_store_promotion(
+        store,
+        candidate_id=first_candidate,
+        candidate_digest=first_digest,
+        provenance=PROVENANCE,
+        preference={"key": "preferred.shell", "value": "powershell"},
+    )
+    _apply_promotion(store, first_preference)
+
+    second_candidate = "candidate.preference.second"
+    second_digest = "2" * 64
+    _accept_candidate(store, second_candidate, second_digest)
+    with pytest.raises(ArchMarshalError) as preference_replacement:
+        plan_user_store_promotion(
+            store,
+            candidate_id=second_candidate,
+            candidate_digest=second_digest,
+            provenance=PROVENANCE,
+            preference={"key": "preferred.shell", "value": "bash"},
+        )
+    assert (
+        preference_replacement.value.code
+        == "user_store_preference_replace_requires_confirmation"
+    )
+    with pytest.raises(ArchMarshalError) as casefold_replacement:
+        plan_user_store_promotion(
+            store,
+            candidate_id=second_candidate,
+            candidate_digest=second_digest,
+            provenance=PROVENANCE,
+            preference={"key": "Preferred.Shell", "value": "bash"},
+        )
+    assert (
+        casefold_replacement.value.code
+        == "user_store_preference_replace_requires_confirmation"
+    )
+    confirmed_preference = plan_user_store_promotion(
+        store,
+        candidate_id=second_candidate,
+        candidate_digest=second_digest,
+        provenance=PROVENANCE,
+        preference={"key": "preferred.shell", "value": "bash"},
+        allow_preference_replace=True,
+    )
+    assert confirmed_preference["generation"]["operation"]["replace_existing"] is True
+
+    first_skill_candidate = "candidate.skill.first"
+    first_skill_digest = "3" * 64
+    _accept_candidate(store, first_skill_candidate, first_skill_digest)
+    first_draft = _draft(tmp_path / "draft-a", "same-id")
+    _apply_promotion(
+        store,
+        plan_user_store_promotion(
+            store,
+            candidate_id=first_skill_candidate,
+            candidate_digest=first_skill_digest,
+            provenance=PROVENANCE,
+            skill_draft=first_draft,
+        ),
+    )
+    second_skill_candidate = "candidate.skill.second"
+    second_skill_digest = "4" * 64
+    _accept_candidate(store, second_skill_candidate, second_skill_digest)
+    second_draft = _draft(tmp_path / "draft-b", "same-id")
+    (second_draft / "scripts/run.py").write_text("print('revised')\n", encoding="utf-8")
+    with pytest.raises(ArchMarshalError) as skill_replacement:
+        plan_user_store_promotion(
+            store,
+            candidate_id=second_skill_candidate,
+            candidate_digest=second_skill_digest,
+            provenance=PROVENANCE,
+            skill_draft=second_draft,
+        )
+    assert skill_replacement.value.code == "user_store_skill_replace_requires_confirmation"
+    confirmed_skill = plan_user_store_promotion(
+        store,
+        candidate_id=second_skill_candidate,
+        candidate_digest=second_skill_digest,
+        provenance=PROVENANCE,
+        skill_draft=second_draft,
+        allow_skill_replace=True,
+    )
+    assert confirmed_skill["generation"]["operation"]["replace_existing"] is True

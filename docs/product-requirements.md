@@ -39,10 +39,10 @@ This document maps the core product needs to concrete ArchMarshal behavior.
 | Users need a lightweight view across projects. | `catalog` sorts project control planes by recorded creation date and supports AND-filtered tags without loading raw history. | `src/archmarshal/catalog.py`, `test_catalog_sorts_and_filters_projects_by_date_and_tags` |
 | Project closeout needs three evidence levels. | `quick` records outcome, `standard` adds ordered steps and key-script hashes, and `reproducible` adds environment/dependency fingerprints, script snapshots, exact commands, and a reference run script. Apply requires the exact reviewed plan digest. A final commit manifest hashes every session file. | `archmarshal end --level`, `src/archmarshal/session.py` |
 | Reproduction claims must be honest. | Closeout reports explicit evidence gaps, verifies copied script hashes, and states that commands were not executed or validated. | `reproduction_evidence_ready`, `execution_validated`, `test_reproducible_closeout_reports_missing_evidence` |
-| Cross-project learning must not bloat or silently mutate the global layer. | `learn` aggregates only compact v2 session manifests whose commit marker and every declared file hash verify, reports legacy v1 sessions as unverified, caps candidate lists, and never changes global configuration. Incomplete and hash-mismatched sessions are ignored. | `src/archmarshal/learning.py`, `test_learning_creates_review_only_candidates_from_repeated_sessions`, `test_learning_reports_legacy_unverified_sessions` |
+| Cross-project learning must not bloat or silently mutate the global layer. | `learn` aggregates only compact committed session manifests, reports legacy v1 sessions as unverified, caps candidate lists, and never changes global configuration. Publication requires the complete saved preview and exact digest; stale evidence is rejected. | `src/archmarshal/learning.py`, `test_learning_creates_review_only_candidates_from_repeated_sessions`, `test_learning_apply_requires_exact_saved_preview_and_rejects_stale_evidence` |
 | Historical use must refer to the Skill version actually used. | Closeout records package hash, routing subject, index HEAD, and review state for each used Skill. Learning excludes unversioned, unreviewed, and rejected usage and groups evidence by the session-pinned package hash rather than the current source. | `src/archmarshal/closeout.py`, `src/archmarshal/session.py`, `test_learning_binds_usage_to_historical_package_not_current_source` |
 | Candidate evidence must be reviewable and tamper-evident. | Learning writes date-organized candidate packs under an owned workspace and creates `COMMITTED.json` last. Review accepts only a verified pack under `.agent/inbox/learning/` and records compact provenance without absolute project paths. | `src/archmarshal/learning.py`, `src/archmarshal/promotion.py`, `test_learning_pack_is_commit_last_and_tamper_evident` |
-| Reusable user Skills and preferences need safe cross-project state. | An explicitly initialized user store publishes validated common-Skill copies, bounded preferences, candidate decisions, and immutable generations under an OS lock and expected-HEAD CAS. Apply requires the complete saved preview; forward rollback creates a new generation. Projects and drafts remain unchanged. | `src/archmarshal/user_store.py`, `src/archmarshal/promotion.py`, `tests/test_user_store.py`, `tests/test_product_v09.py` |
+| Reusable user Skills and preferences need safe cross-project state. | An explicitly initialized user store publishes validated common-Skill copies, bounded preferences, candidate decisions, and immutable generations under an OS lock and expected-HEAD CAS. Apply requires the complete saved preview; replacing an active Skill id or preference key needs explicit type-specific confirmation; forward rollback creates a new generation. Projects and drafts remain unchanged. | `src/archmarshal/user_store.py`, `src/archmarshal/promotion.py`, `tests/test_user_store.py`, `tests/test_product_v09.py` |
 
 ## Current Product Boundary
 
@@ -58,9 +58,12 @@ The safe adoption path is:
 4. Run inventory/lint/audit/plan against the overlay.
 5. Use append-only checkpoints and one of the three closeout levels.
 6. Aggregate compact session evidence into committed, review-only
-   skill/preference candidates.
-7. Record accept/reject/defer in an isolated user store; promote only from the
-   complete reviewed plan and an exact HEAD token.
+   skill/preference candidates using the complete saved learning preview.
+7. Record accept/reject/defer in an isolated user store; promote only when the
+   latest exact candidate/provenance decision is accepted, and require explicit
+   candidate/source lineage for common-Skill drafts. Replacements require an
+   additional type-specific confirmation. Apply uses the complete reviewed plan
+   and an exact HEAD token.
 8. Resolve verified user common Skills by task, or forward-roll back the store
    to an ancestor snapshot without touching any project.
 

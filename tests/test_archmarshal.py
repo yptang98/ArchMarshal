@@ -5,8 +5,11 @@ import os
 import shutil
 from pathlib import Path
 
+import pytest
 import yaml
 
+import archmarshal.adoption as adoption_module
+from archmarshal import __version__
 from archmarshal.adoption import adopt_workspace, plan_adoption
 from archmarshal.audit import audit_workspace
 from archmarshal.catalog import catalog_projects
@@ -48,6 +51,16 @@ def _apply_closeout(root: Path, **kwargs) -> dict[str, object]:  # type: ignore[
         apply=True,
         expected_plan=preview["plan_digest"],
         **kwargs,
+    )
+
+
+def _apply_learning(roots: list[Path]) -> dict[str, object]:
+    preview = learn_from_projects(roots)
+    return learn_from_projects(
+        roots,
+        reviewed_plan=preview["learning_plan"],
+        expected_plan=preview["plan_digest"],
+        apply=True,
     )
 
 
@@ -602,6 +615,40 @@ def test_start_workspace_previews_safe_adoption_for_unmanaged_project(tmp_path: 
     assert not (root / ".agent").exists()
 
 
+def test_start_workspace_preserves_existing_tags_and_blocks_relevant_drift(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "managed"
+    root.mkdir()
+    _apply_adoption(root, tags=["vision", "python"])
+
+    started = start_workspace(root)
+
+    assert started["skill_sync_preview"]["project_tags"] == ["python", "vision"]
+    assert started["adoption_preview"] is None
+
+    skill_dir = root / "skills" / "beta"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: beta\ndescription: Handle beta releases.\n---\n",
+        encoding="utf-8",
+    )
+    built = adoption_module._build_adoption(root, [], "managed")
+    beta = next(skill for skill in built["skills"] if skill["manifest"]["name"] == "beta")
+    overlay = root / beta["overlay_manifest"]
+    overlay.parent.mkdir(parents=True)
+    overlay.write_text(built["writes"][overlay], encoding="utf-8")
+
+    blocked = start_workspace(root, task="please handle beta releases")
+
+    assert blocked["project_ready"] is False
+    assert blocked["task_ready"] is False
+    assert any(
+        item["reason"] == "index_untracked" and item["task_relevant"]
+        for item in blocked["resolution"]["blocked_skills"]
+    )
+
+
 def test_end_workspace_wraps_closeout(tmp_path: Path) -> None:
     root = copy_example(tmp_path, "monorepo-project")
 
@@ -625,6 +672,18 @@ def test_cli_start_and_end_entrypoints(tmp_path: Path, capsys) -> None:
     assert end_main([str(root)]) == 0
     end_payload = json.loads(capsys.readouterr().out)
     assert end_payload["stage"] == "end"
+
+
+def test_all_cli_entrypoints_report_the_package_version(capsys) -> None:
+    for entrypoint, program in (
+        (main, "archmarshal"),
+        (start_main, "archmarshal-start"),
+        (end_main, "archmarshal-end"),
+    ):
+        with pytest.raises(SystemExit) as raised:
+            entrypoint(["--version"])
+        assert raised.value.code == 0
+        assert capsys.readouterr().out.strip() == f"{program} {__version__}"
 
 
 def test_cli_checkpoint_outputs_preservation_policy(tmp_path: Path, capsys) -> None:
@@ -845,7 +904,7 @@ def test_learning_creates_review_only_candidates_from_repeated_sessions(tmp_path
             used_skills=["skill.functional.doc-summary"],
         )
 
-    result = learn_from_projects([root], apply=True)
+    result = _apply_learning([root])
 
     assert result["mode"] == "candidate_pack_created"
     assert result["common_skill_candidates"][0]["skill_id"] == "skill.functional.doc-summary"

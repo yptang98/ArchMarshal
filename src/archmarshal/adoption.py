@@ -6,7 +6,7 @@ import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import yaml
 
@@ -157,6 +157,7 @@ def _adopt_workspace_locked(
         built["backup_files"],
         backup_dir / f"{built['timestamp']}-pre-adoption.zip",
         reason="ArchMarshal adoption before adding a non-destructive management overlay.",
+        scope=f"{built['backup_scope']}_workspace",
     )
     if held is not None:
         held.verify()
@@ -229,7 +230,13 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
     skills = _discover_skills(root)
     manage_index = not configured or overlay_enabled
     skill_index_plan = (
-        plan_skill_index(root, skills) if manage_index else disabled_skill_index_plan()
+        plan_skill_index(
+            root,
+            skills,
+            created_at=_skill_evidence_timestamp(root, skills),
+        )
+        if manage_index
+        else disabled_skill_index_plan()
     )
     indexed_review_required = any(
         change.get("kind") in {"modified", "removed", "restored"}
@@ -248,7 +255,16 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
     reserved_conflicts.extend(overlay_conflicts)
     transaction_active = transaction_status.get("state") != "none"
     review_required = indexed_review_required or legacy_review_required or transaction_active
-    normalized_tags = _normalize_tags(tags) or ["archmarshal"]
+    normalized_tags = _normalize_tags(tags)
+    if not normalized_tags and configured:
+        existing_workspace = load_yaml_safe(workspace_file)
+        workspace_data = existing_workspace.data if isinstance(existing_workspace.data, dict) else {}
+        workspace_tags = workspace_data.get("workspace", {}).get("tags", [])
+        if isinstance(workspace_tags, list):
+            normalized_tags = _normalize_tags(
+                [item for item in workspace_tags if isinstance(item, str)]
+            )
+    normalized_tags = normalized_tags or ["archmarshal"]
     writes: dict[Path, str] = {}
 
     if not workspace_file.exists():
@@ -348,9 +364,11 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
         for path, content in built["writes"].items()
     ]
     tracked_changes = {
-        str(change.get("source")): str(change.get("kind"))
+        str(change.get("source")): (
+            "new" if change.get("kind") == "added" else str(change.get("kind"))
+        )
         for change in built["skill_index_plan"].get("changes", [])
-        if change.get("kind") in {"modified", "restored"}
+        if change.get("kind") in {"added", "modified", "restored"}
     }
     legacy_review = built["skill_index_plan"].get("expected_head") is None
     operations.extend(
@@ -382,6 +400,7 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
                 },
             ]
         )
+    backup_records = _backup_source_records(root, built["backup_files"])
     return {
         "tool": "archmarshal",
         "stage": "sync" if built["configured"] else "adopt",
@@ -396,12 +415,21 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
         "transaction": built["transaction_status"],
         "skill_index": index_plan,
         "backup_scope": built["backup_scope"],
+        "backup_file_count": len(backup_records),
+        "backup_file_preview": backup_records[:100],
+        "backup_file_preview_truncated": len(backup_records) > 100,
         "project_tags": built["tags"],
         "discovered_skills": [
             {
+                "id": skill["manifest"]["id"],
+                "name": skill["manifest"]["name"],
                 "source": skill["source"],
                 "source_manifest": skill["source_manifest"],
                 "kind": skill["manifest"]["kind"],
+                "status": skill["manifest"]["status"],
+                "tags": skill["manifest"]["tags"],
+                "triggers": skill["manifest"]["triggers"],
+                "negative_triggers": skill["manifest"]["negative_triggers"],
                 "overlay_manifest": skill["overlay_manifest"],
                 "source_will_change": False,
                 "source_drift": skill["source_drift"],
@@ -449,6 +477,7 @@ def _adoption_plan_digest(built: dict[str, Any]) -> str:
                 built["writes"].items(), key=lambda item: item[0].as_posix()
             )
         ],
+        "backup_sources": _backup_source_records(root, built["backup_files"]),
         "skill_index": _logical_skill_plan(built["skill_index_plan"]),
     }
     canonical = json.dumps(
@@ -460,17 +489,59 @@ def _adoption_plan_digest(built: dict[str, Any]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+def _backup_source_records(root: Path, files: Iterable[Path]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for path in files:
+        resolved = path.resolve()
+        if not resolved.is_file():
+            continue
+        records.append(
+            {
+                "path": resolved.relative_to(root).as_posix(),
+                "bytes": resolved.stat().st_size,
+            }
+        )
+    return sorted(records, key=lambda item: item["path"].casefold())
+
+
 def _logical_skill_plan(plan: dict[str, Any]) -> dict[str, Any]:
     generation = plan.get("generation")
     return {
         "changed": bool(plan.get("changed")),
         "disabled": bool(plan.get("disabled")),
         "expected_head": plan.get("expected_head"),
+        "proposed_head": plan.get("digest"),
+        "object_path": (
+            plan.get("object_path").as_posix()
+            if isinstance(plan.get("object_path"), Path)
+            else plan.get("object_path")
+        ),
+        "generation": generation if isinstance(generation, dict) else None,
         "skills": generation.get("skills") if isinstance(generation, dict) else [],
         "changes": plan.get("changes") or [],
         "source_precondition_policy": plan.get("source_precondition_policy"),
         "source_preconditions": plan.get("source_preconditions") or [],
     }
+
+
+def _skill_evidence_timestamp(root: Path, skills: list[dict[str, Any]]) -> str:
+    candidates = [root]
+    head = root / ".agent" / "skill-overlays" / ".archmarshal" / "HEAD"
+    if head.is_file() and not is_link_or_reparse(head):
+        candidates.append(head)
+    for skill in skills:
+        source = root / str(skill.get("source") or "")
+        if source.resolve(strict=False) == root.resolve():
+            source_files = [source / "SKILL.md", source / "manifest.yaml"]
+        elif source.is_dir() and not is_link_or_reparse(source):
+            source_files = files_below_no_links(source, purpose="Skill timestamp evidence")
+        else:
+            source_files = []
+        candidates.extend(path for path in source_files if path.is_file())
+    newest = max(path.lstat().st_mtime_ns for path in candidates)
+    return datetime.fromtimestamp(newest / 1_000_000_000, timezone.utc).isoformat(
+        timespec="microseconds"
+    )
 
 
 def _discover_skills(root: Path) -> list[dict[str, Any]]:

@@ -4,15 +4,27 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "archmarshal"
-version = "0.9.0"
+version = "0.10.0"
 description = "A lightweight control plane for agent workspace skills, context modules, and project artifacts."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 license = "MIT"
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
 dependencies = [
   "PyYAML>=6.0",
   "jsonschema>=4.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/yptang98/ArchMarshal"
+Issues = "https://github.com/yptang98/ArchMarshal/issues"
 
 [project.optional-dependencies]
 dev = [

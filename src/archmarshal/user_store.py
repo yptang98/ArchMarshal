@@ -10,14 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, NamedTuple
 
-import yaml
-
 if os.name == "nt":
     import msvcrt
 else:
     import fcntl
 
 from .errors import ArchMarshalError
+from .io import load_yaml_safe
 from .safety import (
     create_bytes_exclusive,
     ensure_managed_path,
@@ -34,6 +33,7 @@ GENERATION_FORMAT = "archmarshal-user-store-generation-v1"
 PACKAGE_COMMIT_FORMAT = "archmarshal-user-skill-package-v1"
 PLAN_FORMAT = "archmarshal-user-store-plan-v1"
 LOCK_FORMAT = "archmarshal-user-store-lock-v1"
+STATUS_API_VERSION = "archmarshal-user-store-status-v2"
 
 OWNERSHIP_NAME = "ownership.json"
 STATE_NAME = ".archmarshal"
@@ -203,6 +203,7 @@ def user_store_status(user_store: Path | str) -> dict[str, Any]:
     root = _store_root(user_store)
     if not root.exists():
         return {
+            "api_version": STATUS_API_VERSION,
             "mode": "read_only",
             "state": "absent",
             "initialized": False,
@@ -214,6 +215,7 @@ def user_store_status(user_store: Path | str) -> dict[str, Any]:
         ownership = _read_ownership(root)
     except ArchMarshalError as exc:
         return {
+            "api_version": STATUS_API_VERSION,
             "mode": "read_only",
             "state": "invalid",
             "initialized": False,
@@ -225,6 +227,7 @@ def user_store_status(user_store: Path | str) -> dict[str, Any]:
     lock = _lock_status(root)
     if lock["state"] == "held":
         return {
+            "api_version": STATUS_API_VERSION,
             "mode": "read_only",
             "state": "publication_in_progress",
             "initialized": True,
@@ -237,18 +240,45 @@ def user_store_status(user_store: Path | str) -> dict[str, Any]:
     loaded = _load_store(root, allow_locked=False)
     generation = loaded.get("generation") or {}
     chain = loaded.get("chain") or []
+    history = [
+        {
+            "digest": item["digest"],
+            "parent": item["generation"].get("parent"),
+            "created_at": item["generation"].get("created_at"),
+            "operation": _plain_json(item["generation"].get("operation") or {}),
+            "active": index == 0,
+        }
+        for index, item in enumerate(chain)
+    ]
+    current_decisions_by_id: dict[str, dict[str, Any]] = {}
+    for decision in generation.get("candidate_decisions") or []:
+        candidate_id = decision.get("candidate_id")
+        if isinstance(candidate_id, str):
+            current_decisions_by_id[candidate_id] = {
+                "candidate_id": candidate_id,
+                "candidate_digest": decision.get("candidate_digest"),
+                "decision": decision.get("decision"),
+                "reason": decision.get("reason"),
+                "decided_at": decision.get("decided_at"),
+                "decision_digest": decision.get("digest"),
+            }
     return {
+        "api_version": STATUS_API_VERSION,
         "mode": "read_only",
-        "state": "healthy" if loaded["head"] else "uninitialized",
+        "state": "healthy" if loaded["head"] else "initialized_empty",
         "initialized": True,
         "root": str(root),
         "store_id": ownership["store_id"],
         "head": loaded["head"],
         "object_path": loaded["object_path"],
         "generation_count": len(chain),
+        "history": history,
         "active_common_skills": len(generation.get("common_skills") or []),
         "active_preferences": len(generation.get("preferences") or []),
         "candidate_decisions": len(generation.get("candidate_decisions") or []),
+        "current_candidate_decisions": [
+            current_decisions_by_id[key] for key in sorted(current_decisions_by_id)
+        ],
         "lock": lock,
         "immutable_objects": True,
         "source_mutation": False,
@@ -267,6 +297,7 @@ def read_user_store_active(user_store: Path | str) -> dict[str, Any]:
         skills.append(item)
     preferences = [_plain_json(item) for item in generation.get("preferences") or []]
     return {
+        "api_version": "archmarshal-user-store-active-v1",
         "mode": "read_only",
         "root": str(root),
         "head": loaded["head"],
@@ -345,6 +376,8 @@ def _plan_user_store_promotion(
     skill_draft: Path | str | None = None,
     preference: dict[str, Any] | None = None,
     reason: str = "",
+    allow_skill_replace: bool = False,
+    allow_preference_replace: bool = False,
     expected_head: str | None = None,
     created_at: str | None = None,
 ) -> dict[str, Any]:
@@ -358,31 +391,34 @@ def _plan_user_store_promotion(
     _check_planning_head(loaded["head"], expected_head)
     timestamp = created_at or _now()
     normalized_provenance = _normalize_provenance(provenance)
-    decision_record = _candidate_decision(
-        candidate_id,
-        candidate_digest,
-        "accepted",
-        normalized_provenance,
-        reason=reason,
-        decided_at=timestamp,
-    )
     parent = loaded.get("generation") or _empty_snapshot()
     decisions = [_plain_json(item) for item in parent["candidate_decisions"]]
-    if any(item["digest"] == decision_record["digest"] for item in decisions):
-        raise ArchMarshalError(
-            "user_store_decision_duplicate",
-            "The exact accepted candidate decision is already active.",
-        )
-    decisions.append(decision_record)
-    _validate_decision_budget(decisions)
-
     package: dict[str, Any] | None = None
     common_skills = [_plain_json(item) for item in parent["common_skills"]]
     preferences = [_plain_json(item) for item in parent["preferences"]]
     if skill_draft is not None:
         package = _plan_package(Path(skill_draft))
+        _validate_package_topology(root, package)
         manifest = package["manifest"]
         skill_record = _skill_record(manifest, package, normalized_provenance)
+        existing_skill = next(
+            (item for item in common_skills if item.get("id") == skill_record["id"]),
+            None,
+        )
+        replacing_skill = bool(
+            existing_skill is not None
+            and existing_skill.get("digest") != skill_record["digest"]
+        )
+        if replacing_skill and not allow_skill_replace:
+            raise ArchMarshalError(
+                "user_store_skill_replace_requires_confirmation",
+                "Promotion would replace the active record for this Skill id; explicit replacement confirmation is required.",
+                details={
+                    "skill_id": skill_record["id"],
+                    "active_digest": existing_skill.get("digest"),
+                    "proposed_digest": skill_record["digest"],
+                },
+            )
         common_skills = _replace_by_key(common_skills, skill_record, "id")
         if len(common_skills) > MAX_COMMON_SKILLS:
             raise ArchMarshalError(
@@ -390,20 +426,65 @@ def _plan_user_store_promotion(
                 "User store common Skill count exceeds its lightweight budget.",
                 details={"limit": MAX_COMMON_SKILLS},
             )
-        operation = {
-            "kind": "promotion_skill",
-            "record_digest": skill_record["digest"],
-            "decision_digest": decision_record["digest"],
-        }
+        operation_kind = "promotion_skill"
+        record_digest = skill_record["digest"]
     else:
         preference_record = _preference_record(preference or {}, normalized_provenance)
+        existing_preference = next(
+            (
+                item
+                for item in preferences
+                if str(item.get("key") or "").casefold()
+                == preference_record["key"].casefold()
+            ),
+            None,
+        )
+        replacing_preference = bool(
+            existing_preference is not None
+            and existing_preference.get("digest") != preference_record["digest"]
+        )
+        if replacing_preference and not allow_preference_replace:
+            raise ArchMarshalError(
+                "user_store_preference_replace_requires_confirmation",
+                "Promotion would replace the active value for this preference key; explicit replacement confirmation is required.",
+                details={
+                    "preference_key": preference_record["key"],
+                    "active_digest": existing_preference.get("digest"),
+                    "proposed_digest": preference_record["digest"],
+                },
+            )
         preferences = _replace_by_key(preferences, preference_record, "key")
         _validate_preference_budget(preferences)
-        operation = {
-            "kind": "promotion_preference",
-            "record_digest": preference_record["digest"],
-            "decision_digest": decision_record["digest"],
-        }
+        operation_kind = "promotion_preference"
+        record_digest = preference_record["digest"]
+    matching_decisions = [
+        item
+        for item in decisions
+        if item.get("candidate_id") == candidate_id
+        and item.get("candidate_digest") == candidate_digest
+        and item.get("provenance") == normalized_provenance
+    ]
+    approval = matching_decisions[-1] if matching_decisions else None
+    if approval is None or approval.get("decision") != "accepted":
+        raise ArchMarshalError(
+            "user_store_candidate_not_accepted",
+            "Promotion requires the latest review decision for this exact candidate and provenance to be accepted.",
+            details={
+                "candidate_id": candidate_id,
+                "candidate_digest": candidate_digest,
+                "latest_decision": approval.get("decision") if approval else None,
+            },
+        )
+    operation = {
+        "kind": operation_kind,
+        "record_digest": record_digest,
+        "decision_digest": approval["digest"],
+        "reason": _normalize_reason(reason),
+    }
+    if operation_kind == "promotion_skill":
+        operation["replace_existing"] = replacing_skill
+    elif operation_kind == "promotion_preference":
+        operation["replace_existing"] = replacing_preference
     generation = _generation(
         created_at=timestamp,
         parent=loaded["head"],
@@ -735,8 +816,16 @@ def _validate_plan(root: Path, plan: dict[str, Any], *, expected_kind: str) -> s
             "user_store_plan_invalid",
             "Skill promotion package presence does not match the generation operation.",
         )
+    if operation_kind in {"promotion_skill", "promotion_preference"} and not isinstance(
+        generation["operation"].get("replace_existing"), bool
+    ):
+        raise ArchMarshalError(
+            "user_store_plan_invalid",
+            "New promotion plans must record whether an active record is being replaced.",
+        )
     if package is not None:
         _validate_package_plan(package)
+        _validate_package_topology(root, package)
     expected_operations = _plan_operations(proposed_head, generation_bytes, package)
     expected_operations[-1]["expected"] = plan["expected_head"]
     if plan.get("operations") != expected_operations:
@@ -984,25 +1073,14 @@ def _load_draft_manifest(
                 "Skill draft requires regular manifest.yaml and SKILL.md files.",
                 details={"path": str(path)},
             )
-    try:
-        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+    loaded_manifest = load_yaml_safe(manifest_path)
+    if loaded_manifest.error:
         raise ArchMarshalError(
             "user_store_skill_draft_invalid",
             "Skill draft manifest is not valid UTF-8 YAML.",
-        ) from exc
-    try:
-        skill_text = skill_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        raise ArchMarshalError(
-            "user_store_skill_draft_invalid",
-            "Skill draft SKILL.md must be readable UTF-8 text.",
-        ) from exc
-    if not skill_text.strip():
-        raise ArchMarshalError(
-            "user_store_skill_draft_invalid",
-            "Skill draft SKILL.md must not be empty.",
+            details={"path": str(manifest_path), "error": loaded_manifest.error},
         )
+    manifest = loaded_manifest.data
     validation = validate_skill_package(
         draft_root,
         enforce_folder_name=enforce_folder_name,
@@ -1164,7 +1242,56 @@ def _verify_draft(package: dict[str, Any]) -> None:
         )
 
 
+def _validate_package_topology(root: Path, package: dict[str, Any]) -> None:
+    draft_root = Path(str(package.get("draft_root") or "")).resolve(strict=False)
+    root = root.resolve()
+    store_overlap = False
+    try:
+        draft_root.relative_to(root)
+    except ValueError:
+        try:
+            root.relative_to(draft_root)
+        except ValueError:
+            pass
+        else:
+            store_overlap = True
+    else:
+        store_overlap = True
+    if store_overlap:
+        raise ArchMarshalError(
+            "user_store_source_destination_overlap",
+            "Skill draft and the complete user-store ownership domain must be disjoint.",
+            details={"draft": str(draft_root), "user_store": str(root)},
+        )
+    destination = root / PurePosixPath(str(package.get("package_path") or ""))
+    destination = ensure_managed_path(
+        root,
+        destination,
+        purpose="User Skill immutable package topology",
+    )
+    overlaps = draft_root == destination
+    if not overlaps:
+        try:
+            draft_root.relative_to(destination)
+        except ValueError:
+            try:
+                destination.relative_to(draft_root)
+            except ValueError:
+                pass
+            else:
+                overlaps = True
+        else:
+            overlaps = True
+    if overlaps:
+        raise ArchMarshalError(
+            "user_store_source_destination_overlap",
+            "Skill draft and immutable package destination must be disjoint.",
+            details={"draft": str(draft_root), "destination": str(destination)},
+        )
+
+
 def _publish_package(root: Path, package: dict[str, Any]) -> None:
+    _validate_package_topology(root, package)
     _verify_draft(package)
     destination = root / PurePosixPath(package["package_path"])
     ensure_managed_path(root, destination, purpose="User Skill immutable package")
@@ -1620,10 +1747,24 @@ def _validate_operation(operation: Any) -> None:
             str(operation.get("decision_digest") or "")
         )
     elif kind in {"promotion_skill", "promotion_preference"}:
+        base_fields = {"kind", "record_digest", "decision_digest"}
+        allowed_fields = {frozenset(base_fields), frozenset({*base_fields, "reason"})}
+        allowed_fields.add(frozenset({*base_fields, "reason", "replace_existing"}))
         valid = (
-            set(operation) == {"kind", "record_digest", "decision_digest"}
+            frozenset(operation) in allowed_fields
             and _is_sha256(str(operation.get("record_digest") or ""))
             and _is_sha256(str(operation.get("decision_digest") or ""))
+            and (
+                "reason" not in operation
+                or (
+                    isinstance(operation.get("reason"), str)
+                    and len(operation["reason"]) <= MAX_REASON_LENGTH
+                )
+            )
+            and (
+                "replace_existing" not in operation
+                or isinstance(operation.get("replace_existing"), bool)
+            )
         )
     elif kind == "rollback":
         valid = (
@@ -1684,35 +1825,123 @@ def _validate_history_transitions(chain: list[dict[str, Any]]) -> None:
                 "user_store_history_invalid",
                 "Generation operation does not reference an included candidate decision.",
             )
-        expected_decisions.append(decision)
-        if child["candidate_decisions"] != expected_decisions:
-            raise ArchMarshalError(
-                "user_store_history_invalid",
-                "Candidate decisions are not an append-only transition.",
-            )
+        matching_decisions = [
+            record
+            for record in child["candidate_decisions"]
+            if record.get("candidate_id") == decision.get("candidate_id")
+            and record.get("candidate_digest") == decision.get("candidate_digest")
+            and record.get("provenance") == decision.get("provenance")
+        ]
+        latest_decision_valid = bool(
+            matching_decisions
+            and matching_decisions[-1].get("digest") == decision.get("digest")
+            and decision.get("decision") == "accepted"
+        )
+        parent_matching_decisions = [
+            record
+            for record in parent["candidate_decisions"]
+            if record.get("candidate_id") == decision.get("candidate_id")
+            and record.get("candidate_digest") == decision.get("candidate_digest")
+            and record.get("provenance") == decision.get("provenance")
+        ]
+        parent_latest_acceptance = bool(
+            parent_matching_decisions
+            and parent_matching_decisions[-1].get("digest") == decision.get("digest")
+            and decision.get("decision") == "accepted"
+        )
         if kind == "decision":
+            expected_decisions.append(decision)
+            decisions_valid = child["candidate_decisions"] == expected_decisions
             valid = (
-                child["common_skills"] == parent["common_skills"]
+                decisions_valid
+                and child["common_skills"] == parent["common_skills"]
                 and child["preferences"] == parent["preferences"]
             )
         elif kind == "promotion_skill":
+            legacy_decisions = [*expected_decisions, decision]
+            if "replace_existing" in operation:
+                decisions_valid = (
+                    parent_latest_acceptance
+                    and child["candidate_decisions"] == expected_decisions
+                )
+            else:
+                decisions_valid = (
+                    latest_decision_valid
+                    and child["candidate_decisions"]
+                    in (expected_decisions, legacy_decisions)
+                )
             record = next(
                 (item for item in child["common_skills"] if item["digest"] == operation["record_digest"]),
                 None,
             )
+            existing = (
+                next(
+                    (
+                        parent_record
+                        for parent_record in parent["common_skills"]
+                        if parent_record.get("id") == record.get("id")
+                    ),
+                    None,
+                )
+                if record is not None
+                else None
+            )
+            actual_replacement = bool(
+                existing is not None and existing.get("digest") != record.get("digest")
+            )
+            replacement_valid = (
+                "replace_existing" not in operation
+                or operation.get("replace_existing") is actual_replacement
+            )
             valid = (
-                record is not None
+                decisions_valid
+                and record is not None
+                and replacement_valid
                 and child["common_skills"]
                 == _replace_by_key(parent["common_skills"], record, "id")
                 and child["preferences"] == parent["preferences"]
             )
         else:
+            legacy_decisions = [*expected_decisions, decision]
+            if "replace_existing" in operation:
+                decisions_valid = (
+                    parent_latest_acceptance
+                    and child["candidate_decisions"] == expected_decisions
+                )
+            else:
+                decisions_valid = (
+                    latest_decision_valid
+                    and child["candidate_decisions"]
+                    in (expected_decisions, legacy_decisions)
+                )
             record = next(
                 (item for item in child["preferences"] if item["digest"] == operation["record_digest"]),
                 None,
             )
+            existing = (
+                next(
+                    (
+                        parent_record
+                        for parent_record in parent["preferences"]
+                        if str(parent_record.get("key") or "").casefold()
+                        == str(record.get("key") or "").casefold()
+                    ),
+                    None,
+                )
+                if record is not None
+                else None
+            )
+            actual_replacement = bool(
+                existing is not None and existing.get("digest") != record.get("digest")
+            )
+            replacement_valid = (
+                "replace_existing" not in operation
+                or operation.get("replace_existing") is actual_replacement
+            )
             valid = (
-                record is not None
+                decisions_valid
+                and record is not None
+                and replacement_valid
                 and child["preferences"]
                 == _replace_by_key(parent["preferences"], record, "key")
                 and child["common_skills"] == parent["common_skills"]

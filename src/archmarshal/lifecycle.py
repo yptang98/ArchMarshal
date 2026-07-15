@@ -8,7 +8,7 @@ from .closeout import closeout_workspace
 from .diagnostics import severity_counts
 from .inventory import collect_inventory
 from .lint import lint_workspace
-from .resolver import resolve_workspace
+from .resolver import resolve_workspace, skill_activation_block_reason
 
 
 def start_workspace(
@@ -16,22 +16,39 @@ def start_workspace(
     *,
     task: str | None = None,
     user_store: Path | str | None = None,
+    tags: list[str] | None = None,
+    backup_scope: str = "managed",
 ) -> dict[str, Any]:
     inventory = collect_inventory(root)
     diagnostics = lint_workspace(root, inventory=inventory)
     counts = severity_counts(diagnostics)
-    adoption_preview = plan_adoption(root)
+    adoption_preview = plan_adoption(root, tags=tags, backup_scope=backup_scope)
+    blocked_skill_count = sum(
+        skill_activation_block_reason(skill) is not None for skill in inventory.skills
+    )
+    sync_required = bool(
+        adoption_preview.get("configured")
+        and (
+            adoption_preview.get("blocked")
+            or adoption_preview.get("review_required")
+            or adoption_preview.get("skill_index", {}).get("changed")
+        )
+    )
+    governance_ready = counts["error"] == 0
     payload = {
         "tool": "archmarshal",
         "stage": "start",
         "root": str(inventory.root),
         "mode": "read_only",
-        "project_ready": counts["error"] == 0,
+        "governance_ready": governance_ready,
+        "project_ready": governance_ready and not sync_required and blocked_skill_count == 0,
+        "sync_required": sync_required,
+        "blocked_skill_count": blocked_skill_count,
         "diagnostic_summary": counts,
         "save_paths": inventory.save_paths,
         "naming": inventory.naming,
         "diagnostics": [diagnostic.to_dict() for diagnostic in diagnostics],
-        "adoption_preview": adoption_preview,
+        "adoption_preview": adoption_preview if not adoption_preview["configured"] else None,
         "skill_sync_preview": adoption_preview if adoption_preview["configured"] else None,
         "codex_contract": [
             "Use ArchMarshal checkpoint after context compression.",
@@ -49,7 +66,18 @@ def start_workspace(
         ],
     }
     if task:
-        payload["resolution"] = resolve_workspace(root, task, user_store=user_store)
+        resolution = resolve_workspace(
+            root,
+            task,
+            user_store=user_store,
+            adoption_preview=adoption_preview,
+        )
+        payload["resolution"] = resolution
+        payload["task_ready"] = bool(
+            payload["project_ready"]
+            and not any(item.get("task_relevant") for item in resolution["blocked_skills"])
+            and resolution["adoption_transaction"].get("state") == "none"
+        )
     elif user_store is not None:
         payload["notes"].append("A user store is loaded only when --task is supplied.")
     return payload

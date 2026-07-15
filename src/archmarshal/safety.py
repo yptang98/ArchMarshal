@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import os
@@ -12,6 +13,15 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 from .errors import ArchMarshalError
+
+if os.name == "nt":
+    from ctypes import wintypes
+
+    class _Win32FindStreamData(ctypes.Structure):
+        _fields_ = [
+            ("stream_size", ctypes.c_longlong),
+            ("stream_name", ctypes.c_wchar * 296),
+        ]
 
 EXCLUDED_BACKUP_PARTS = {
     ".git",
@@ -26,6 +36,7 @@ EXCLUDED_BACKUP_PARTS = {
 MAX_BACKUP_FILES = 100_000
 MAX_BACKUP_CONTENT_BYTES = 20 * 1024 * 1024 * 1024
 MAX_BACKUP_MANIFEST_BYTES = 32 * 1024 * 1024
+BACKUP_DISK_RESERVE_BYTES = 64 * 1024 * 1024
 MAX_SKILL_FILES = 10_000
 MAX_SKILL_CONTENT_BYTES = 1024 * 1024 * 1024
 MAX_DIRECTORY_SCAN_FILES = 100_000
@@ -37,6 +48,13 @@ WINDOWS_RESERVED_NAMES = {
     *{f"COM{index}" for index in range(1, 10)},
     *{f"LPT{index}" for index in range(1, 10)},
 }
+
+
+def workspace_root_id(root: Path | str) -> str:
+    root_path = Path(root).resolve(strict=False)
+    return hashlib.sha256(
+        f"archmarshal-workspace-v1\x00{root_path}".encode("utf-8")
+    ).hexdigest()[:32]
 
 
 def sha256_file(path: Path) -> str:
@@ -64,6 +82,67 @@ def is_link_or_reparse(path: Path) -> bool:
     return path.is_symlink() or bool(reparse_flag and attributes & reparse_flag)
 
 
+def _named_data_streams(path: Path) -> list[str]:
+    if os.name != "nt":
+        return []
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.FindFirstStreamW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.INT,
+        ctypes.POINTER(_Win32FindStreamData),
+        wintypes.DWORD,
+    ]
+    kernel32.FindFirstStreamW.restype = wintypes.HANDLE
+    kernel32.FindNextStreamW.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(_Win32FindStreamData),
+    ]
+    kernel32.FindNextStreamW.restype = wintypes.BOOL
+    kernel32.FindClose.argtypes = [wintypes.HANDLE]
+    kernel32.FindClose.restype = wintypes.BOOL
+    data = _Win32FindStreamData()
+    handle = kernel32.FindFirstStreamW(str(path), 0, ctypes.byref(data), 0)
+    invalid_handle = wintypes.HANDLE(-1).value
+    if handle == invalid_handle:
+        error = ctypes.get_last_error()
+        if error in {1, 38, 50}:  # unsupported filesystem or no streams
+            return []
+        raise ArchMarshalError(
+            "path_stream_inspection_failed",
+            "Windows data streams could not be inspected safely.",
+            details={"path": str(path), "winerror": error},
+        )
+    streams: list[str] = []
+    try:
+        while True:
+            name = str(data.stream_name)
+            if name and not name.startswith("::$"):
+                streams.append(name)
+            if kernel32.FindNextStreamW(handle, ctypes.byref(data)):
+                continue
+            error = ctypes.get_last_error()
+            if error != 38:
+                raise ArchMarshalError(
+                    "path_stream_inspection_failed",
+                    "Windows data stream enumeration failed before completion.",
+                    details={"path": str(path), "winerror": error},
+                )
+            break
+    finally:
+        kernel32.FindClose(handle)
+    return streams
+
+
+def _reject_named_data_streams(path: Path, *, purpose: str) -> None:
+    streams = _named_data_streams(path)
+    if streams:
+        raise ArchMarshalError(
+            "named_stream_unsupported",
+            f"{purpose} contains an NTFS named data stream that is not part of portable content.",
+            details={"path": str(path), "streams": streams[:20]},
+        )
+
+
 def fingerprint_directory(
     root: Path,
     *,
@@ -85,12 +164,17 @@ def fingerprint_directory(
         )
     records: list[dict[str, Any]] = []
     total_bytes = 0
-    for path in _walk_files_no_links(
-        directory,
-        reject_links=True,
-        purpose=purpose,
-        max_files=MAX_SKILL_FILES + 1,
-    ):
+    if entrypoint_only:
+        entrypoint = directory / "SKILL.md"
+        paths = [entrypoint] if entrypoint.exists() or is_link_or_reparse(entrypoint) else []
+    else:
+        paths = _walk_files_no_links(
+            directory,
+            reject_links=True,
+            purpose=purpose,
+            max_files=MAX_SKILL_FILES + 1,
+        )
+    for path in paths:
         if is_link_or_reparse(path):
             raise ArchMarshalError(
                 "fingerprint_symlink_unsupported",
@@ -103,35 +187,57 @@ def fingerprint_directory(
         relative = resolved.relative_to(directory).as_posix()
         if entrypoint_only and relative != "SKILL.md":
             continue
-        size_before = resolved.stat().st_size
         if len(records) >= MAX_SKILL_FILES:
             raise ArchMarshalError(
                 "fingerprint_limit_exceeded",
                 f"{purpose} exceeds the {MAX_SKILL_FILES}-file fingerprint limit.",
                 details={"path": str(directory)},
             )
-        if total_bytes + size_before > MAX_SKILL_CONTENT_BYTES:
-            raise ArchMarshalError(
-                "fingerprint_limit_exceeded",
-                f"{purpose} exceeds the {MAX_SKILL_CONTENT_BYTES}-byte fingerprint limit.",
-                details={"path": str(directory)},
-            )
         digest_builder = hashlib.sha256()
-        with resolved.open("rb") as source:
+        path_before = resolved.lstat()
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(resolved, flags)
+        with os.fdopen(descriptor, "rb") as source:
             before = os.fstat(source.fileno())
+            if total_bytes + before.st_size > MAX_SKILL_CONTENT_BYTES:
+                raise ArchMarshalError(
+                    "fingerprint_limit_exceeded",
+                    f"{purpose} exceeds the {MAX_SKILL_CONTENT_BYTES}-byte fingerprint limit.",
+                    details={"path": str(directory)},
+                )
+            byte_count = 0
             for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                if total_bytes + byte_count + len(chunk) > MAX_SKILL_CONTENT_BYTES:
+                    raise ArchMarshalError(
+                        "fingerprint_limit_exceeded",
+                        f"{purpose} exceeds the {MAX_SKILL_CONTENT_BYTES}-byte fingerprint limit.",
+                        details={"path": str(directory)},
+                    )
                 digest_builder.update(chunk)
+                byte_count += len(chunk)
             after = os.fstat(source.fileno())
-        size_after = after.st_size
-        if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
+        path_after = resolved.lstat()
+        identity_before = (path_before.st_dev, path_before.st_ino)
+        descriptor_identity = (before.st_dev, before.st_ino)
+        identity_after = (path_after.st_dev, path_after.st_ino)
+        if (
+            identity_before != descriptor_identity
+            or identity_after != descriptor_identity
+            or not stat.S_ISREG(before.st_mode)
+            or is_link_or_reparse(resolved)
+            or before.st_size != after.st_size
+            or before.st_mtime_ns != after.st_mtime_ns
+            or byte_count != after.st_size
+        ):
             raise ArchMarshalError(
                 "fingerprint_source_changed",
                 f"{purpose} changed while it was being fingerprinted.",
                 details={"path": relative},
             )
-        total_bytes += size_after
+        _reject_named_data_streams(resolved, purpose=purpose)
+        total_bytes += byte_count
         records.append(
-            {"path": relative, "bytes": size_after, "sha256": digest_builder.hexdigest()}
+            {"path": relative, "bytes": byte_count, "sha256": digest_builder.hexdigest()}
         )
 
     aggregate = hashlib.sha256()
@@ -191,6 +297,20 @@ def ensure_managed_path(root: Path, path: Path, *, purpose: str) -> Path:
                 details={"path": str(current), "resolved_path": str(current.resolve())},
             )
     return ensure_path_within(root, candidate, purpose=purpose)
+
+
+def ensure_unlinked_path(path: Path | str, *, purpose: str) -> Path:
+    """Reject every existing link/reparse component in an explicit lexical path."""
+    candidate = Path(path).expanduser()
+    candidate = candidate if candidate.is_absolute() else candidate.absolute()
+    for component in [*reversed(candidate.parents), candidate]:
+        if is_link_or_reparse(component):
+            raise ArchMarshalError(
+                "unsafe_path_link",
+                f"{purpose} crosses a symbolic link or junction.",
+                details={"path": str(component)},
+            )
+    return candidate
 
 
 def create_text_exclusive(path: Path, content: str) -> None:
@@ -296,6 +416,7 @@ def create_backup(
     destination: Path,
     *,
     reason: str,
+    scope: str = "selection",
 ) -> dict[str, Any]:
     """Create a verified zip snapshot before a managed write.
 
@@ -304,12 +425,24 @@ def create_backup(
     verification before the caller proceeds.
     """
     root = root.resolve()
+    if scope not in {"selection", "managed_workspace", "full_workspace"}:
+        raise ArchMarshalError(
+            "backup_scope_invalid",
+            "Backup scope must be selection, managed_workspace, or full_workspace.",
+        )
     ensure_managed_path(root, destination, purpose="Backup destination")
     destination = unique_path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if scope == "full_workspace":
+        full_files, directory_records, root_mode = _scan_full_backup(root)
+        backup_inputs: Iterable[Path] = full_files
+    else:
+        backup_inputs = files
+        directory_records = []
+        root_mode = None
     selected: dict[str, Path] = {}
     estimated_bytes = 0
-    for item in files:
+    for item in backup_inputs:
         if is_link_or_reparse(item):
             raise ArchMarshalError(
                 "backup_symlink_unsupported",
@@ -319,6 +452,7 @@ def create_backup(
         resolved = item.resolve()
         if not resolved.is_file():
             continue
+        _reject_named_data_streams(resolved, purpose="Backup source")
         try:
             relative = resolved.relative_to(root).as_posix()
         except ValueError as exc:
@@ -346,7 +480,7 @@ def create_backup(
         selected[relative] = resolved
 
     free_bytes = shutil.disk_usage(destination.parent).free
-    required_free = estimated_bytes + 64 * 1024 * 1024
+    required_free = estimated_bytes + BACKUP_DISK_RESERVE_BYTES
     if free_bytes < required_free:
         raise ArchMarshalError(
             "backup_space_insufficient",
@@ -357,6 +491,8 @@ def create_backup(
     temporary = destination.parent / f".am-backup-{uuid.uuid4().hex}.tmp"
     temporary_identity: tuple[int, int] | None = None
     records: list[dict[str, Any]] = []
+    actual_total_bytes = 0
+    next_space_check = 0
     try:
         descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
         temporary_identity = _descriptor_identity(descriptor)
@@ -367,22 +503,57 @@ def create_backup(
                 for relative, path in sorted(selected.items()):
                     digest = hashlib.sha256()
                     byte_count = 0
-                    with path.open("rb") as source:
+                    path_before = path.lstat()
+                    flags = (
+                        os.O_RDONLY
+                        | getattr(os, "O_BINARY", 0)
+                        | getattr(os, "O_NOFOLLOW", 0)
+                    )
+                    try:
+                        source_descriptor = os.open(path, flags)
+                    except OSError as exc:
+                        raise ArchMarshalError(
+                            "backup_source_changed",
+                            "A backup source could not be opened without following a replacement.",
+                            details={"path": relative},
+                        ) from exc
+                    with os.fdopen(source_descriptor, "rb") as source:
                         before = os.fstat(source.fileno())
                         with archive.open(f"files/{relative}", "w", force_zip64=True) as target:
                             for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                                projected_total = actual_total_bytes + byte_count + len(chunk)
+                                if projected_total > MAX_BACKUP_CONTENT_BYTES:
+                                    raise ArchMarshalError(
+                                        "backup_limit_exceeded",
+                                        "Backup sources exceeded the total content safety limit while reading.",
+                                        details={"path": relative},
+                                    )
+                                if projected_total >= next_space_check:
+                                    free_now = shutil.disk_usage(destination.parent).free
+                                    if free_now < BACKUP_DISK_RESERVE_BYTES + len(chunk):
+                                        raise ArchMarshalError(
+                                            "backup_space_insufficient",
+                                            "Free space fell below the backup safety reserve while sources were being streamed.",
+                                            details={
+                                                "required_reserve_bytes": BACKUP_DISK_RESERVE_BYTES,
+                                                "free_bytes": free_now,
+                                                "path": relative,
+                                            },
+                                        )
+                                    next_space_check = projected_total + 64 * 1024 * 1024
                                 target.write(chunk)
                                 digest.update(chunk)
                                 byte_count += len(chunk)
-                                if byte_count > MAX_BACKUP_CONTENT_BYTES:
-                                    raise ArchMarshalError(
-                                        "backup_limit_exceeded",
-                                        "A backup source exceeded the total content safety limit while reading.",
-                                        details={"path": relative},
-                                    )
                         after = os.fstat(source.fileno())
+                    path_after = path.lstat()
                     if (
-                        before.st_size != after.st_size
+                        (path_before.st_dev, path_before.st_ino)
+                        != (before.st_dev, before.st_ino)
+                        or (path_after.st_dev, path_after.st_ino)
+                        != (before.st_dev, before.st_ino)
+                        or not stat.S_ISREG(before.st_mode)
+                        or is_link_or_reparse(path)
+                        or before.st_size != after.st_size
                         or before.st_mtime_ns != after.st_mtime_ns
                         or byte_count != after.st_size
                     ):
@@ -391,17 +562,47 @@ def create_backup(
                             "A source file changed while the backup was being created.",
                             details={"path": relative},
                         )
+                    _reject_named_data_streams(path, purpose="Backup source")
                     records.append(
-                        {"path": relative, "bytes": byte_count, "sha256": digest.hexdigest()}
+                        {
+                            "path": relative,
+                            "bytes": byte_count,
+                            "sha256": digest.hexdigest(),
+                            "mode": stat.S_IMODE(before.st_mode) & 0o777,
+                        }
                     )
+                    actual_total_bytes += byte_count
+                if scope == "full_workspace":
+                    rescanned_files, rescanned_directories, rescanned_root_mode = (
+                        _scan_full_backup(root)
+                    )
+                    if (
+                        {path.relative_to(root).as_posix() for path in rescanned_files}
+                        != {record["path"] for record in records}
+                        or rescanned_directories != directory_records
+                        or rescanned_root_mode != root_mode
+                    ):
+                        raise ArchMarshalError(
+                            "backup_source_changed",
+                            "Full-workspace contents changed while the backup was being created.",
+                        )
                 manifest = {
                     "format": "archmarshal-backup-v1",
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "reason": reason,
+                    "scope": scope,
                     "project_root": str(root),
                     "file_count": len(records),
                     "files": records,
                 }
+                if scope == "full_workspace":
+                    manifest.update(
+                        {
+                            "root_mode": root_mode,
+                            "directory_count": len(directory_records),
+                            "directories": directory_records,
+                        }
+                    )
                 archive.writestr(
                     "ARCHMARSHAL-BACKUP.json",
                     json.dumps(manifest, indent=2, sort_keys=True),
@@ -420,6 +621,8 @@ def create_backup(
         "path": destination.relative_to(root).as_posix(),
         "file_count": verification["file_count"],
         "content_bytes": verification["content_bytes"],
+        "file_preview": records[:100],
+        "file_preview_truncated": len(records) > 100,
         "bytes": destination.stat().st_size,
         "sha256": sha256_file(destination),
         "verified": True,
@@ -428,10 +631,10 @@ def create_backup(
 
 def verify_backup(path: Path | str) -> dict[str, Any]:
     archive_path = Path(path).expanduser()
-    if not archive_path.is_file():
+    if not archive_path.is_file() or is_link_or_reparse(archive_path):
         raise ArchMarshalError(
             "backup_not_found",
-            f"Backup archive does not exist: {archive_path}",
+            f"Backup archive does not exist as a regular unlinked file: {archive_path}",
         )
     try:
         with zipfile.ZipFile(archive_path, "r") as archive:
@@ -466,6 +669,12 @@ def verify_backup(path: Path | str) -> dict[str, Any]:
                     "Backup manifest has an unsupported format.",
                 )
             records = manifest.get("files")
+            scope = manifest.get("scope", "selection")
+            if scope not in {"selection", "managed_workspace", "full_workspace"}:
+                raise ArchMarshalError(
+                    "backup_manifest_invalid",
+                    "Backup manifest declares an unsupported scope.",
+                )
             if not isinstance(records, list) or manifest.get("file_count") != len(records):
                 raise ArchMarshalError(
                     "backup_manifest_invalid",
@@ -476,6 +685,25 @@ def verify_backup(path: Path | str) -> dict[str, Any]:
                     "backup_limit_exceeded",
                     f"Backup declares more than {MAX_BACKUP_FILES} files.",
                 )
+            directory_records: list[dict[str, Any]] = []
+            if scope == "full_workspace":
+                directory_value = manifest.get("directories")
+                root_mode_value = manifest.get("root_mode")
+                if (
+                    not isinstance(directory_value, list)
+                    or manifest.get("directory_count") != len(directory_value)
+                    or not _is_portable_mode(root_mode_value)
+                ):
+                    raise ArchMarshalError(
+                        "backup_manifest_invalid",
+                        "Full-workspace backup directory metadata is missing or invalid.",
+                    )
+                if len(records) + len(directory_value) > MAX_BACKUP_FILES:
+                    raise ArchMarshalError(
+                        "backup_limit_exceeded",
+                        f"Backup declares more than {MAX_BACKUP_FILES} filesystem entries.",
+                )
+                directory_records = directory_value
             seen: set[str] = set()
             portable_seen: set[str] = set()
             total_bytes = 0
@@ -485,6 +713,14 @@ def verify_backup(path: Path | str) -> dict[str, Any]:
                         "backup_manifest_invalid", "Backup manifest contains a non-object file record."
                     )
                 relative = _safe_backup_relative(str(record.get("path", "")))
+                if scope == "full_workspace" and _excluded_backup_relative(
+                    Path(*PurePosixPath(relative).parts)
+                ):
+                    raise ArchMarshalError(
+                        "backup_manifest_invalid",
+                        "Full-workspace backup declares a path reserved for exclusion.",
+                        details={"path": relative},
+                    )
                 if relative in seen:
                     raise ArchMarshalError(
                         "backup_manifest_invalid",
@@ -511,6 +747,7 @@ def verify_backup(path: Path | str) -> dict[str, Any]:
                     ) from exc
                 expected_bytes = record.get("bytes")
                 expected_hash = record.get("sha256")
+                expected_mode = record.get("mode")
                 if not isinstance(expected_bytes, int) or expected_bytes < 0:
                     raise ArchMarshalError(
                         "backup_manifest_invalid",
@@ -526,6 +763,14 @@ def verify_backup(path: Path | str) -> dict[str, Any]:
                     raise ArchMarshalError(
                         "backup_manifest_invalid",
                         "Backup file hash must be a SHA-256 hex digest.",
+                        details={"path": relative},
+                    )
+                if (scope == "full_workspace" or expected_mode is not None) and not (
+                    _is_portable_mode(expected_mode)
+                ):
+                    raise ArchMarshalError(
+                        "backup_manifest_invalid",
+                        "Backup file mode must contain only portable permission bits.",
                         details={"path": relative},
                     )
                 digest = hashlib.sha256()
@@ -556,6 +801,54 @@ def verify_backup(path: Path | str) -> dict[str, Any]:
                         "backup_limit_exceeded",
                         f"Backup expands beyond the {MAX_BACKUP_CONTENT_BYTES}-byte safety limit.",
                     )
+            directory_seen: set[str] = set()
+            for record in directory_records:
+                if (
+                    not isinstance(record, dict)
+                    or set(record) != {"path", "mode"}
+                    or not isinstance(record.get("path"), str)
+                    or not _is_portable_mode(record.get("mode"))
+                ):
+                    raise ArchMarshalError(
+                        "backup_manifest_invalid",
+                        "Full-workspace backup contains invalid directory metadata.",
+                    )
+                relative = _safe_backup_relative(record["path"])
+                if _excluded_backup_relative(Path(*PurePosixPath(relative).parts)):
+                    raise ArchMarshalError(
+                        "backup_manifest_invalid",
+                        "Full-workspace backup declares an excluded directory.",
+                        details={"path": relative},
+                    )
+                portable_key = relative.casefold()
+                if relative in directory_seen or portable_key in portable_seen:
+                    raise ArchMarshalError(
+                        "backup_manifest_invalid",
+                        "Backup directory paths are duplicated or collide portably.",
+                        details={"path": relative},
+                    )
+                directory_seen.add(relative)
+                portable_seen.add(portable_key)
+            for relative in directory_seen:
+                parent_relative = PurePosixPath(relative).parent.as_posix()
+                if parent_relative != "." and parent_relative not in directory_seen:
+                    raise ArchMarshalError(
+                        "backup_manifest_invalid",
+                        "Backup directory metadata omits an ancestor directory.",
+                        details={"path": relative, "missing_parent": parent_relative},
+                    )
+            for relative in seen:
+                parent_relative = PurePosixPath(relative).parent.as_posix()
+                if (
+                    scope == "full_workspace"
+                    and parent_relative != "."
+                    and parent_relative not in directory_seen
+                ):
+                    raise ArchMarshalError(
+                        "backup_manifest_invalid",
+                        "Full-workspace backup omits a file parent directory.",
+                        details={"path": relative, "missing_parent": parent_relative},
+                    )
             allowed = {"ARCHMARSHAL-BACKUP.json", *{f"files/{item}" for item in seen}}
             extras = set(names) - allowed
             if extras:
@@ -584,10 +877,28 @@ def restore_backup(
     destination: Path | str,
     *,
     apply: bool = False,
+    expected_plan: str | None = None,
+    rebind_workspace: bool = False,
 ) -> dict[str, Any]:
     verification = verify_backup(path)
     archive_path = Path(path).expanduser().resolve()
-    target_root = Path(destination).expanduser()
+    target_root = ensure_unlinked_path(destination, purpose="Restore destination")
+    source_root_value = verification["manifest"].get("project_root")
+    if isinstance(source_root_value, str) and Path(source_root_value).is_absolute():
+        source_root = Path(source_root_value).resolve(strict=False)
+        try:
+            target_root.resolve(strict=False).relative_to(source_root)
+        except ValueError:
+            pass
+        else:
+            raise ArchMarshalError(
+                "restore_destination_overlaps_source",
+                "Restore destination must not be the source project or a directory inside it.",
+                details={
+                    "source_root": str(source_root),
+                    "destination": str(target_root),
+                },
+            )
     parent = target_root.parent
     if not parent.exists() or not parent.is_dir():
         raise ArchMarshalError(
@@ -602,16 +913,67 @@ def restore_backup(
             details={"destination": str(target_root)},
         )
     records = verification["manifest"]["files"]
+    directory_records = verification["manifest"].get("directories") or []
+    root_mode = verification["manifest"].get("root_mode")
+    rebind_plan = (
+        _plan_restored_workspace_rebind(verification, archive_path, target_root)
+        if rebind_workspace
+        else None
+    )
+    parent_metadata = parent.stat()
+    parent_identity = (parent_metadata.st_dev, parent_metadata.st_ino)
+    restore_plan = {
+        "format": "archmarshal-backup-restore-plan-v1",
+        "archive": str(archive_path),
+        "archive_bytes": verification["archive_bytes"],
+        "archive_sha256": verification["sha256"],
+        "manifest_sha256": hashlib.sha256(
+            json.dumps(
+                verification["manifest"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        "destination": str(target_root),
+        "file_count": len(records),
+        "content_bytes": verification["content_bytes"],
+        "file_preview": records[:100],
+        "file_preview_truncated": len(records) > 100,
+        "overwrite": False,
+        "workspace_rebind": rebind_plan,
+    }
+    plan_digest = hashlib.sha256(
+        json.dumps(
+            restore_plan,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     payload = {
         "tool": "archmarshal",
         "stage": "backup_restore",
         "mode": "propose_only",
         "archive": str(archive_path),
+        "archive_sha256": verification["sha256"],
         "destination": str(target_root.resolve(strict=False)),
         "verified": True,
         "file_count": len(records),
         "content_bytes": verification["content_bytes"],
+        "file_preview": records[:100],
+        "file_preview_truncated": len(records) > 100,
         "overwrite": False,
+        "workspace_rebind": {
+            "requested": rebind_workspace,
+            "performed": False,
+            "source_root": rebind_plan.get("source_root") if rebind_plan else None,
+            "new_workspace_id": rebind_plan.get("new_workspace_id")
+            if rebind_plan
+            else None,
+        },
+        "plan_digest": plan_digest,
+        "apply_precondition": "--expect-plan <plan_digest> --apply",
         "notes": [
             "Restore always targets a new directory and never modifies the source project.",
             "File contents are re-hashed while extracting.",
@@ -620,41 +982,405 @@ def restore_backup(
     }
     if not apply:
         return payload
+    if expected_plan is None:
+        payload["mode"] = "review_required"
+        payload["notes"].append(
+            "Restore apply requires --expect-plan from this exact preview; nothing was created."
+        )
+        return payload
+    if expected_plan != plan_digest:
+        payload["mode"] = "blocked"
+        payload["expected_plan"] = expected_plan
+        payload["actual_plan"] = plan_digest
+        payload["notes"].append(
+            "The archive bytes, manifest, or destination changed after review; nothing was created."
+        )
+        return payload
 
-    try:
-        target_root.mkdir(exist_ok=False)
-        resolved_target = target_root.resolve()
-        with zipfile.ZipFile(archive_path, "r") as archive:
-            for record in records:
-                relative = _safe_backup_relative(str(record["path"]))
-                target = target_root.joinpath(*PurePosixPath(relative).parts)
-                ensure_path_within(resolved_target, target, purpose="Restore target")
-                target.parent.mkdir(parents=True, exist_ok=True)
-                digest = hashlib.sha256()
-                byte_count = 0
-                with archive.open(f"files/{relative}", "r") as source, target.open("xb") as output:
-                    for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                        output.write(chunk)
-                        digest.update(chunk)
-                        byte_count += len(chunk)
-                    output.flush()
-                    os.fsync(output.fileno())
-                if byte_count != record["bytes"] or digest.hexdigest() != record["sha256"]:
-                    raise ArchMarshalError(
-                        "restore_integrity_failed",
-                        "Restored file does not match the backup manifest.",
-                        details={"path": relative},
+    archive_path_metadata = archive_path.lstat()
+    with archive_path.open("rb") as archive_handle:
+        archive_descriptor_metadata = os.fstat(archive_handle.fileno())
+        archive_path_after = archive_path.lstat()
+        descriptor_identity = (
+            archive_descriptor_metadata.st_dev,
+            archive_descriptor_metadata.st_ino,
+        )
+        if (
+            (archive_path_metadata.st_dev, archive_path_metadata.st_ino)
+            != descriptor_identity
+            or (archive_path_after.st_dev, archive_path_after.st_ino) != descriptor_identity
+            or is_link_or_reparse(archive_path)
+        ):
+            raise ArchMarshalError(
+                "restore_archive_changed",
+                "Backup archive identity changed after review; restore was stopped.",
+            )
+        archive_digest = hashlib.sha256()
+        archive_bytes = 0
+        for chunk in iter(lambda: archive_handle.read(1024 * 1024), b""):
+            archive_digest.update(chunk)
+            archive_bytes += len(chunk)
+        if (
+            archive_bytes != verification["archive_bytes"]
+            or archive_digest.hexdigest() != verification["sha256"]
+        ):
+            raise ArchMarshalError(
+                "restore_archive_changed",
+                "Backup archive bytes changed after verification; restore was stopped.",
+            )
+        archive_handle.seek(0)
+        extraction_root = parent / f".amr-{uuid.uuid4().hex[:8]}"
+        try:
+            extraction_root.mkdir(mode=0o700, exist_ok=False)
+            parent_after = parent.stat()
+            target_metadata = extraction_root.lstat()
+            if (
+                (parent_after.st_dev, parent_after.st_ino) != parent_identity
+                or is_link_or_reparse(parent)
+                or is_link_or_reparse(extraction_root)
+                or not extraction_root.is_dir()
+            ):
+                raise ArchMarshalError(
+                    "restore_destination_replaced",
+                    "Private restore staging identity changed during creation; extraction was stopped.",
+                    details={"staging": str(extraction_root)},
+                )
+            target_identity = (target_metadata.st_dev, target_metadata.st_ino)
+            resolved_target = extraction_root.resolve()
+            for directory_record in sorted(
+                directory_records,
+                key=lambda item: (
+                    len(PurePosixPath(item["path"]).parts),
+                    item["path"].casefold(),
+                ),
+            ):
+                relative = _safe_backup_relative(directory_record["path"])
+                directory_target = extraction_root.joinpath(
+                    *PurePosixPath(relative).parts
+                )
+                ensure_path_within(
+                    resolved_target,
+                    directory_target,
+                    purpose="Restore directory",
+                )
+                ensure_managed_path(
+                    resolved_target,
+                    directory_target.parent,
+                    purpose="Restore directory parent",
+                )
+                directory_target.mkdir(mode=0o700, exist_ok=False)
+            with zipfile.ZipFile(archive_handle, "r") as archive:
+                for record in records:
+                    current_target_metadata = extraction_root.lstat()
+                    if (
+                        (current_target_metadata.st_dev, current_target_metadata.st_ino)
+                        != target_identity
+                        or is_link_or_reparse(extraction_root)
+                    ):
+                        raise ArchMarshalError(
+                            "restore_destination_replaced",
+                            "Private restore staging was replaced during extraction; writing was stopped.",
+                            details={"staging": str(extraction_root)},
+                        )
+                    relative = _safe_backup_relative(str(record["path"]))
+                    target = extraction_root.joinpath(*PurePosixPath(relative).parts)
+                    ensure_path_within(resolved_target, target, purpose="Restore target")
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    ensure_managed_path(
+                        resolved_target,
+                        target.parent,
+                        purpose="Restore target parent",
                     )
-    except BaseException:
-        # Never recursively delete a visible destination after failure.  A
-        # concurrent process may have added or replaced content there, and a
-        # path-based rmtree cannot prove ownership.  The incomplete new
-        # directory is intentionally preserved for explicit review.
-        raise
+                    digest = hashlib.sha256()
+                    byte_count = 0
+                    with archive.open(f"files/{relative}", "r") as source, target.open(
+                        "xb"
+                    ) as output:
+                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                            output.write(chunk)
+                            digest.update(chunk)
+                            byte_count += len(chunk)
+                        output.flush()
+                        os.fsync(output.fileno())
+                    mode = record.get("mode")
+                    if isinstance(mode, int) and not isinstance(mode, bool):
+                        os.chmod(target, mode)
+                    if byte_count != record["bytes"] or digest.hexdigest() != record["sha256"]:
+                        raise ArchMarshalError(
+                            "restore_integrity_failed",
+                            "Restored file does not match the backup manifest.",
+                            details={"path": relative},
+                        )
+            if rebind_plan is not None:
+                rebind_result = _apply_restored_workspace_rebind(extraction_root, rebind_plan)
+                payload["workspace_rebind"].update(rebind_result)
+            for directory_record in sorted(
+                directory_records,
+                key=lambda item: (
+                    -len(PurePosixPath(item["path"]).parts),
+                    item["path"].casefold(),
+                ),
+            ):
+                directory_target = extraction_root.joinpath(
+                    *PurePosixPath(directory_record["path"]).parts
+                )
+                os.chmod(directory_target, directory_record["mode"])
+                if os.name != "nt" and (
+                    stat.S_IMODE(directory_target.lstat().st_mode) & 0o777
+                ) != directory_record["mode"]:
+                    raise ArchMarshalError(
+                        "restore_mode_failed",
+                        "A restored directory mode could not be reproduced safely.",
+                        details={"path": directory_record["path"]},
+                    )
+            if _is_portable_mode(root_mode):
+                os.chmod(extraction_root, root_mode)
+                if os.name != "nt" and (
+                    stat.S_IMODE(extraction_root.lstat().st_mode) & 0o777
+                ) != root_mode:
+                    raise ArchMarshalError(
+                        "restore_mode_failed",
+                        "The restored root directory mode could not be reproduced safely.",
+                    )
+            if target_root.exists() or is_link_or_reparse(target_root):
+                raise ArchMarshalError(
+                    "restore_destination_exists",
+                    "Restore destination appeared before publication; private staging was preserved.",
+                    details={"destination": str(target_root), "staging": str(extraction_root)},
+                )
+            _publish_directory_exclusive(extraction_root, target_root)
+            fsync_directory(parent)
+        except BaseException as exc:
+            if isinstance(exc, ArchMarshalError) and exc.code == "restore_destination_exists":
+                raise
+            raise ArchMarshalError(
+                "restore_incomplete",
+                "Restore stopped before publication; incomplete private staging was preserved for review.",
+                details={"staging": str(extraction_root), "destination": str(target_root)},
+            ) from exc
 
     payload["mode"] = "restored"
     payload["created"] = str(target_root.resolve())
     return payload
+
+
+def _publish_directory_exclusive(source: Path, destination: Path) -> None:
+    """Atomically publish a directory without replacing a concurrent destination."""
+    if os.name == "nt":
+        try:
+            os.rename(source, destination)
+        except FileExistsError as exc:
+            raise ArchMarshalError(
+                "restore_destination_exists",
+                "Restore destination appeared before atomic publication.",
+                details={"destination": str(destination), "staging": str(source)},
+            ) from exc
+        return
+    library = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(library, "renameat2", None)
+    if renameat2 is None:
+        raise ArchMarshalError(
+            "restore_atomic_publish_unsupported",
+            "This platform cannot atomically publish a restore without replacement.",
+            details={"staging": str(source)},
+        )
+    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        -100,
+        os.fsencode(source),
+        -100,
+        os.fsencode(destination),
+        1,
+    )
+    if result == 0:
+        return
+    error = ctypes.get_errno()
+    if error in {17, 39}:
+        raise ArchMarshalError(
+            "restore_destination_exists",
+            "Restore destination appeared before atomic publication.",
+            details={"destination": str(destination), "staging": str(source)},
+        )
+    raise ArchMarshalError(
+        "restore_atomic_publish_failed",
+        "Private restore staging could not be atomically published.",
+        details={"destination": str(destination), "staging": str(source), "errno": error},
+    )
+
+
+def _plan_restored_workspace_rebind(
+    verification: dict[str, Any],
+    archive_path: Path,
+    target_root: Path,
+) -> dict[str, Any]:
+    relative = ".agent/ownership.json"
+    records = verification["manifest"].get("files") or []
+    matches = [record for record in records if record.get("path") == relative]
+    source_root = verification["manifest"].get("project_root")
+    record_paths = {
+        str(record.get("path")) for record in records if isinstance(record, dict)
+    }
+    required_control_files = {
+        ".agent/ownership.json",
+        ".agent/workspace.yaml",
+        ".agent/INDEX.md",
+        ".agent/registry.yaml",
+    }
+    if (
+        verification["manifest"].get("scope") != "full_workspace"
+        or not records
+        or any(
+            not isinstance(record.get("mode"), int)
+            or isinstance(record.get("mode"), bool)
+            for record in records
+        )
+        or not required_control_files.issubset(record_paths)
+        or len(matches) != 1
+        or not isinstance(source_root, str)
+        or not Path(source_root).is_absolute()
+    ):
+        raise ArchMarshalError(
+            "restore_rebind_unavailable",
+            "Workspace rebind requires a complete full-workspace backup with the minimum ArchMarshal control plane.",
+        )
+    with zipfile.ZipFile(archive_path, "r") as archive:
+        try:
+            marker_bytes = archive.read(f"files/{relative}")
+            marker = json.loads(marker_bytes.decode("utf-8"))
+        except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ArchMarshalError(
+                "restore_rebind_unavailable",
+                "The backed-up workspace ownership marker is invalid.",
+            ) from exc
+    expected_fields = {
+        "format",
+        "workspace_id",
+        "managed_root",
+        "skill_index",
+        "source_mutation",
+    }
+    if (
+        not isinstance(marker, dict)
+        or set(marker) != expected_fields
+        or marker.get("format") != "archmarshal-workspace-ownership-v1"
+        or marker.get("workspace_id") != workspace_root_id(source_root)
+        or marker.get("managed_root") != "."
+        or marker.get("skill_index") not in {"required", "disabled"}
+        or marker.get("source_mutation") is not False
+        or hashlib.sha256(marker_bytes).hexdigest() != matches[0].get("sha256")
+    ):
+        raise ArchMarshalError(
+            "restore_rebind_unavailable",
+            "The backed-up ownership marker does not exactly match the backup source root.",
+        )
+    new_marker = {**marker, "workspace_id": workspace_root_id(target_root)}
+    if marker["skill_index"] == "required":
+        head_path = ".agent/skill-overlays/.archmarshal/HEAD"
+        if head_path not in record_paths:
+            raise ArchMarshalError(
+                "restore_rebind_unavailable",
+                "Indexed workspace rebind requires the active Skill index HEAD.",
+            )
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            try:
+                head = archive.read(f"files/{head_path}").decode("ascii").strip()
+            except (KeyError, UnicodeDecodeError) as exc:
+                raise ArchMarshalError(
+                    "restore_rebind_unavailable",
+                    "The backed-up Skill index HEAD is invalid.",
+                ) from exc
+        object_path = f".agent/skill-overlays/.archmarshal/objects/sha256/{head}.json"
+        if not _is_sha256(head) or object_path not in record_paths:
+            raise ArchMarshalError(
+                "restore_rebind_unavailable",
+                "The full backup does not contain the active Skill index generation.",
+            )
+    new_bytes = (
+        json.dumps(new_marker, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    return {
+        "format": "archmarshal-restored-workspace-rebind-v1",
+        "source_root": str(Path(source_root).resolve(strict=False)),
+        "source_workspace_id": marker["workspace_id"],
+        "new_workspace_id": new_marker["workspace_id"],
+        "ownership_path": relative,
+        "old_sha256": matches[0]["sha256"],
+        "new_sha256": hashlib.sha256(new_bytes).hexdigest(),
+        "new_marker": new_marker,
+        "backup_path": (
+            f".agent/backups/ownership-rebind-{verification['sha256'][:12]}.zip"
+        ),
+        "source_mutation": False,
+    }
+
+
+def _apply_restored_workspace_rebind(
+    target_root: Path,
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    marker = target_root / str(plan["ownership_path"])
+    ensure_managed_path(target_root, marker, purpose="Restored ownership marker")
+    if (
+        not marker.is_file()
+        or is_link_or_reparse(marker)
+        or sha256_file(marker) != plan["old_sha256"]
+    ):
+        raise ArchMarshalError(
+            "restore_rebind_source_changed",
+            "Restored ownership marker changed before rebind; the original marker was preserved.",
+        )
+    new_bytes = (
+        json.dumps(plan["new_marker"], ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    if hashlib.sha256(new_bytes).hexdigest() != plan["new_sha256"]:
+        raise ArchMarshalError(
+            "restore_rebind_plan_invalid",
+            "Workspace rebind marker bytes do not match the reviewed restore plan.",
+        )
+    backup = create_backup(
+        target_root,
+        [marker],
+        target_root / str(plan["backup_path"]),
+        reason="Preserve the restored root-bound ownership marker before explicit rebind.",
+    )
+    before = marker.lstat()
+    before_identity = (before.st_dev, before.st_ino)
+    temporary = marker.parent / f".am-ownership-rebind-{uuid.uuid4().hex}.tmp"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    temporary_identity = _descriptor_identity(descriptor)
+    replaced = False
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(new_bytes)
+            handle.flush()
+            os.fsync(handle.fileno())
+        after = marker.lstat()
+        if (
+            (after.st_dev, after.st_ino) != before_identity
+            or is_link_or_reparse(marker)
+            or sha256_file(marker) != plan["old_sha256"]
+        ):
+            raise ArchMarshalError(
+                "restore_rebind_source_changed",
+                "Restored ownership marker changed after backup; the rebind was stopped.",
+            )
+        os.replace(temporary, marker)
+        replaced = True
+        fsync_directory(marker.parent)
+    finally:
+        if not replaced:
+            _unlink_created_path(temporary, temporary_identity)
+    if sha256_file(marker) != plan["new_sha256"]:
+        raise ArchMarshalError(
+            "restore_rebind_commit_failed",
+            "Rebound workspace ownership marker did not verify after publication.",
+        )
+    return {
+        "performed": True,
+        "backup": backup,
+        "source_files_modified": False,
+    }
 
 
 def _safe_backup_relative(value: str) -> str:
@@ -681,20 +1407,113 @@ def _is_sha256(value: str) -> bool:
     return len(value) == 64 and all(char in "0123456789abcdef" for char in value)
 
 
+def _is_portable_mode(value: Any) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 <= value <= 0o777
+    )
+
+
 def files_for_full_backup(root: Path) -> list[Path]:
+    return _scan_full_backup(root)[0]
+
+
+def _scan_full_backup(root: Path) -> tuple[list[Path], list[dict[str, Any]], int]:
+    """Scan an exact portable full-workspace snapshot without following links."""
     root = root.resolve()
-    return [
-        path
-        for path in _walk_files_no_links(
-            root,
-            reject_links=False,
-            purpose="Project backup",
-            max_files=MAX_BACKUP_FILES,
+    if not root.is_dir() or is_link_or_reparse(root):
+        raise ArchMarshalError(
+            "backup_source_invalid",
+            "Full-workspace backup root must be a real directory.",
+            details={"path": str(root)},
         )
-        if path.is_file()
-        and not any(part in EXCLUDED_BACKUP_PARTS for part in path.relative_to(root).parts)
-        and not path.relative_to(root).as_posix().startswith(".agent/backups/")
-    ]
+    _reject_named_data_streams(root, purpose="Project backup root")
+    root_mode = stat.S_IMODE(root.lstat().st_mode) & 0o777
+    files: list[Path] = []
+    directories_found: list[dict[str, Any]] = []
+
+    def fail_scan(error: OSError) -> None:
+        raise ArchMarshalError(
+            "directory_scan_failed",
+            "Project backup could not be scanned completely.",
+            details={"path": str(getattr(error, "filename", None) or root)},
+        ) from error
+
+    for current, directories, filenames in os.walk(
+        root,
+        topdown=True,
+        onerror=fail_scan,
+        followlinks=False,
+    ):
+        current_path = Path(current)
+        kept: list[str] = []
+        for name in sorted(directories, key=str.casefold):
+            candidate = current_path / name
+            relative = candidate.relative_to(root)
+            relative_posix = relative.as_posix()
+            if _excluded_backup_relative(relative):
+                continue
+            if is_link_or_reparse(candidate):
+                raise ArchMarshalError(
+                    "backup_symlink_unsupported",
+                    "Full-workspace backup contains a linked directory; it cannot be called complete safely.",
+                    details={"path": str(candidate)},
+                )
+            metadata = candidate.lstat()
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise ArchMarshalError(
+                    "backup_source_unsupported",
+                    "Full-workspace backup contains a non-directory traversal entry.",
+                    details={"path": str(candidate)},
+                )
+            _reject_named_data_streams(candidate, purpose="Project backup directory")
+            if len(files) + len(directories_found) >= MAX_BACKUP_FILES:
+                raise ArchMarshalError(
+                    "backup_limit_exceeded",
+                    f"Backup exceeds the {MAX_BACKUP_FILES}-entry safety limit.",
+                )
+            directories_found.append(
+                {
+                    "path": relative_posix,
+                    "mode": stat.S_IMODE(metadata.st_mode) & 0o777,
+                }
+            )
+            kept.append(name)
+        directories[:] = kept
+        for name in sorted(filenames, key=str.casefold):
+            candidate = current_path / name
+            relative = candidate.relative_to(root)
+            if _excluded_backup_relative(relative):
+                continue
+            if is_link_or_reparse(candidate):
+                raise ArchMarshalError(
+                    "backup_symlink_unsupported",
+                    "Full-workspace backup contains a linked file; it cannot be called complete safely.",
+                    details={"path": str(candidate)},
+                )
+            metadata = candidate.lstat()
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ArchMarshalError(
+                    "backup_source_unsupported",
+                    "Full-workspace backup contains a non-regular file.",
+                    details={"path": str(candidate)},
+                )
+            _reject_named_data_streams(candidate, purpose="Project backup file")
+            if len(files) + len(directories_found) >= MAX_BACKUP_FILES:
+                raise ArchMarshalError(
+                    "backup_limit_exceeded",
+                    f"Backup exceeds the {MAX_BACKUP_FILES}-entry safety limit.",
+                )
+            files.append(candidate)
+    return files, directories_found, root_mode
+
+
+def _excluded_backup_relative(relative: Path) -> bool:
+    parts = relative.parts
+    return any(part in EXCLUDED_BACKUP_PARTS for part in parts) or (
+        len(parts) >= 2 and parts[0] == ".agent" and parts[1] == "backups"
+    )
 
 
 def files_below_no_links(
@@ -763,6 +1582,7 @@ def _walk_files_no_links(
                         details={"path": str(candidate)},
                     )
                 continue
+            _reject_named_data_streams(candidate, purpose=purpose)
             if len(files) >= max_files:
                 raise ArchMarshalError(
                     "directory_scan_limit_exceeded",
@@ -779,6 +1599,7 @@ __all__ = [
     "create_text_exclusive",
     "ensure_path_within",
     "ensure_managed_path",
+    "ensure_unlinked_path",
     "fingerprint_directory",
     "files_below_no_links",
     "files_for_full_backup",
@@ -788,4 +1609,5 @@ __all__ = [
     "restore_backup",
     "unique_path",
     "verify_backup",
+    "workspace_root_id",
 ]

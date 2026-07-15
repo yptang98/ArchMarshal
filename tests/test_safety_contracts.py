@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,7 @@ import yaml
 
 import archmarshal.adoption as adoption_module
 import archmarshal.adoption_tx as adoption_tx_module
+import archmarshal.io as io_module
 import archmarshal.safety as safety_module
 import archmarshal.session as session_module
 from archmarshal.adoption import adopt_workspace, plan_adoption
@@ -21,13 +23,17 @@ from archmarshal.adoption_tx import (
 )
 from archmarshal.cli import main, start_main
 from archmarshal.errors import ArchMarshalError
+from archmarshal.io import read_bytes_safe
 from archmarshal.learning import learn_from_projects
 from archmarshal.lint import lint_workspace
+from archmarshal.ownership import valid_ownership_marker
 from archmarshal.resolver import resolve_workspace
 from archmarshal.safety import (
     create_backup,
     create_text_exclusive,
     files_below_no_links,
+    files_for_full_backup,
+    fingerprint_directory,
     restore_backup,
     verify_backup,
 )
@@ -474,7 +480,12 @@ def test_backup_round_trip_requires_new_destination(tmp_path: Path) -> None:
     created = create_backup(root, [source], archive, reason="test")
     verified = verify_backup(archive)
     preview = restore_backup(archive, tmp_path / "restored")
-    restored = restore_backup(archive, tmp_path / "restored", apply=True)
+    restored = restore_backup(
+        archive,
+        tmp_path / "restored",
+        apply=True,
+        expected_plan=preview["plan_digest"],
+    )
 
     assert created["verified"] is True
     assert verified["file_count"] == 1
@@ -483,6 +494,428 @@ def test_backup_round_trip_requires_new_destination(tmp_path: Path) -> None:
     assert (tmp_path / "restored" / "notes.txt").read_text(encoding="utf-8") == "important\n"
     with pytest.raises(ArchMarshalError, match="must not already exist"):
         restore_backup(archive, tmp_path / "restored", apply=True)
+
+
+def test_backup_restore_rejects_destination_inside_source_project(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    source = root / "notes.txt"
+    source.write_text("important\n", encoding="utf-8")
+    archive = root / "backup.zip"
+    create_backup(root, [source], archive, reason="source overlap")
+    target = root / "restored-copy"
+
+    with pytest.raises(ArchMarshalError) as raised:
+        restore_backup(archive, target)
+
+    assert raised.value.code == "restore_destination_overlaps_source"
+    assert not target.exists()
+    assert source.read_text(encoding="utf-8") == "important\n"
+
+
+def test_full_backup_scope_is_internally_scanned_and_preserves_file_mode(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    control = root / ".agent" / "ownership.json"
+    control.parent.mkdir()
+    control.write_text("{}\n", encoding="utf-8")
+    source = root / "scripts" / "run.sh"
+    source.parent.mkdir()
+    source.write_text("#!/bin/sh\necho ok\n", encoding="utf-8")
+    private = root / "private"
+    private.mkdir()
+    private_file = private / "visible-only-through-parent.txt"
+    private_file.write_text("private\n", encoding="utf-8")
+    empty = private / "empty"
+    empty.mkdir()
+    if os.name != "nt":
+        root.chmod(0o751)
+        source.chmod(0o755)
+        private.chmod(0o700)
+        empty.chmod(0o710)
+    archive = root / ".agent" / "backups" / "full.zip"
+
+    create_backup(
+        root,
+        [control],
+        archive,
+        reason="caller cannot fake full scope",
+        scope="full_workspace",
+    )
+    verified = verify_backup(archive)
+    records = {item["path"]: item for item in verified["manifest"]["files"]}
+    directories = {
+        item["path"]: item for item in verified["manifest"]["directories"]
+    }
+    assert "scripts/run.sh" in records
+    assert records["scripts/run.sh"]["mode"] == (source.stat().st_mode & 0o777)
+    assert "private/empty" in directories
+    assert directories["private"]["mode"] == (private.stat().st_mode & 0o777)
+    assert verified["manifest"]["root_mode"] == (root.stat().st_mode & 0o777)
+
+    restored = tmp_path / "restored"
+    preview = restore_backup(archive, restored)
+    restore_backup(
+        archive,
+        restored,
+        expected_plan=preview["plan_digest"],
+        apply=True,
+    )
+    assert (restored / "private" / "empty").is_dir()
+    assert (restored / "private" / "visible-only-through-parent.txt").read_text(
+        encoding="utf-8"
+    ) == "private\n"
+    if os.name != "nt":
+        assert (restored / "scripts" / "run.sh").stat().st_mode & 0o111
+        assert restored.stat().st_mode & 0o777 == 0o751
+        assert (restored / "private").stat().st_mode & 0o777 == 0o700
+        assert (restored / "private" / "empty").stat().st_mode & 0o777 == 0o710
+
+
+def test_full_backup_fails_closed_when_workspace_contains_a_link(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    source = root / "source.txt"
+    source.write_text("source\n", encoding="utf-8")
+    linked = root / "linked.txt"
+    try:
+        linked.symlink_to(source)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is unavailable")
+
+    with pytest.raises(ArchMarshalError) as raised:
+        create_backup(
+            root,
+            [source],
+            root / ".agent" / "backups" / "full.zip",
+            reason="links cannot be silently omitted",
+            scope="full_workspace",
+        )
+    assert raised.value.code == "backup_symlink_unsupported"
+
+
+def test_atomic_restore_publish_never_replaces_an_existing_directory(tmp_path: Path) -> None:
+    staging = tmp_path / "staging"
+    destination = tmp_path / "destination"
+    staging.mkdir()
+    destination.mkdir()
+    (staging / "new.txt").write_text("new\n", encoding="utf-8")
+    (destination / "user.txt").write_text("user\n", encoding="utf-8")
+
+    with pytest.raises(ArchMarshalError) as raised:
+        safety_module._publish_directory_exclusive(staging, destination)
+    assert raised.value.code == "restore_destination_exists"
+    assert (destination / "user.txt").read_text(encoding="utf-8") == "user\n"
+    assert (staging / "new.txt").read_text(encoding="utf-8") == "new\n"
+
+
+def test_stable_byte_reader_is_bounded_and_reports_exact_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "plan.json"
+    path.write_bytes(b"1234")
+
+    too_large = read_bytes_safe(path, max_bytes=3, label="Plan")
+    assert too_large.error == "Plan exceeds the 3-byte safety limit"
+    loaded = read_bytes_safe(path, max_bytes=4, label="Plan")
+    assert loaded.error is None
+    assert loaded.byte_count == 4
+    assert loaded.sha256 == hashlib.sha256(b"1234").hexdigest()
+    missing = read_bytes_safe(tmp_path / "missing", max_bytes=4, label="Plan")
+    assert missing.error
+
+
+def test_yaml_loader_and_graph_reject_non_json_scalars(tmp_path: Path) -> None:
+    valid = tmp_path / "valid.yaml"
+    valid.write_text("answer: 42\n", encoding="utf-8")
+    assert io_module.load_yaml(valid) == {"answer": 42}
+    with pytest.raises(ValueError):
+        io_module.load_yaml(tmp_path / "missing.yaml")
+    io_module._validate_yaml_graph(1.5)
+    io_module._validate_yaml_graph(["list-item"])
+
+    for value in (float("inf"), ("tuple",), {1: "non-string-key"}):
+        with pytest.raises(ValueError):
+            io_module._validate_yaml_graph(value)
+
+
+def test_restore_can_explicitly_rebind_verified_workspace_without_touching_source(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "owned-project"
+    root.mkdir()
+    _apply_adoption(root, tags=["safe-restore"])
+    source_marker = root / ".agent" / "ownership.json"
+    source_marker_before = source_marker.read_bytes()
+    archive = root / ".agent" / "backups" / "full.zip"
+    create_backup(
+        root,
+        files_for_full_backup(root),
+        archive,
+        reason="full workspace restore test",
+        scope="full_workspace",
+    )
+
+    exact_target = tmp_path / "exact-copy"
+    exact_preview = restore_backup(archive, exact_target)
+    restore_backup(
+        archive,
+        exact_target,
+        apply=True,
+        expected_plan=exact_preview["plan_digest"],
+    )
+    assert valid_ownership_marker(exact_target / ".agent" / "ownership.json") is False
+
+    rebound_target = tmp_path / "rebound-copy"
+    preview = restore_backup(archive, rebound_target, rebind_workspace=True)
+    restored = restore_backup(
+        archive,
+        rebound_target,
+        apply=True,
+        expected_plan=preview["plan_digest"],
+        rebind_workspace=True,
+    )
+
+    assert restored["mode"] == "restored"
+    assert restored["workspace_rebind"]["performed"] is True
+    assert restored["workspace_rebind"]["source_files_modified"] is False
+    assert valid_ownership_marker(rebound_target / ".agent" / "ownership.json") is True
+    assert source_marker.read_bytes() == source_marker_before
+    rebind_backup = rebound_target / restored["workspace_rebind"]["backup"]["path"]
+    assert verify_backup(rebind_backup)["file_count"] == 1
+
+
+def test_restore_rebind_rejects_non_workspace_backup_without_creating_target(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "ordinary-project"
+    root.mkdir()
+    notes = root / "notes.txt"
+    notes.write_text("ordinary\n", encoding="utf-8")
+    archive = root / "backup.zip"
+    create_backup(root, [notes], archive, reason="not a managed workspace")
+    target = tmp_path / "must-not-exist"
+
+    with pytest.raises(ArchMarshalError) as raised:
+        restore_backup(archive, target, rebind_workspace=True)
+
+    assert raised.value.code == "restore_rebind_unavailable"
+    assert not target.exists()
+
+
+def test_restore_rebind_rejects_marker_only_backup_without_control_plane(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "owned-project"
+    root.mkdir()
+    _apply_adoption(root)
+    marker = root / ".agent" / "ownership.json"
+    selection = root / ".agent" / "backups" / "selection.zip"
+    create_backup(
+        root,
+        [marker],
+        selection,
+        reason="incomplete workspace",
+    )
+    with zipfile.ZipFile(selection, "r") as source:
+        manifest = json.loads(source.read("ARCHMARSHAL-BACKUP.json"))
+        marker_bytes = source.read("files/.agent/ownership.json")
+    manifest["scope"] = "full_workspace"
+    archive = root / ".agent" / "backups" / "marker-only.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as target_zip:
+        target_zip.writestr("files/.agent/ownership.json", marker_bytes)
+        target_zip.writestr("ARCHMARSHAL-BACKUP.json", json.dumps(manifest))
+    target = tmp_path / "must-not-be-owned"
+
+    with pytest.raises(ArchMarshalError) as raised:
+        restore_backup(archive, target, rebind_workspace=True)
+
+    assert raised.value.code == "backup_manifest_invalid"
+    assert not target.exists()
+
+
+def test_backup_enforces_actual_cumulative_size_after_source_growth(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    first = root / "first.txt"
+    second = root / "second.txt"
+    first.write_bytes(b"a" * 4)
+    second.write_bytes(b"b" * 4)
+    archive = root / "backup.zip"
+    original_disk_usage = safety_module.shutil.disk_usage
+    grown = False
+
+    def grow_sources(path: Path):  # type: ignore[no-untyped-def]
+        nonlocal grown
+        if not grown:
+            first.write_bytes(b"a" * 6)
+            second.write_bytes(b"b" * 6)
+            grown = True
+        return original_disk_usage(path)
+
+    monkeypatch.setattr(safety_module, "MAX_BACKUP_CONTENT_BYTES", 10)
+    monkeypatch.setattr(safety_module.shutil, "disk_usage", grow_sources)
+
+    with pytest.raises(ArchMarshalError) as raised:
+        create_backup(root, [first, second], archive, reason="growth limit")
+
+    assert raised.value.code == "backup_limit_exceeded"
+    assert raised.value.details["path"] == "second.txt"
+    assert not archive.exists()
+    assert not list(root.glob(".am-backup-*.tmp"))
+
+
+def test_backup_blocks_source_replacement_between_path_check_and_open(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    source = root / "source.txt"
+    replacement = root / "replacement.txt"
+    source.write_text("reviewed\n", encoding="utf-8")
+    replacement.write_text("replacement\n", encoding="utf-8")
+    archive = root / "backup.zip"
+    real_open = safety_module.os.open
+    swapped = False
+
+    def swap_before_open(path, flags, mode=0o777):  # type: ignore[no-untyped-def]
+        nonlocal swapped
+        if Path(path) == source and not swapped:
+            swapped = True
+            os.replace(replacement, source)
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(safety_module.os, "open", swap_before_open)
+
+    with pytest.raises(ArchMarshalError) as raised:
+        create_backup(root, [source], archive, reason="source identity race")
+
+    assert raised.value.code == "backup_source_changed"
+    assert not archive.exists()
+    assert not list(root.glob(".am-backup-*.tmp"))
+
+
+def test_backup_restore_plan_blocks_archive_replacement(tmp_path: Path) -> None:
+    root_a = tmp_path / "project-a"
+    root_b = tmp_path / "project-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    source_a = root_a / "notes.txt"
+    source_b = root_b / "notes.txt"
+    source_a.write_text("reviewed A\n", encoding="utf-8")
+    source_b.write_text("swapped B\n", encoding="utf-8")
+    archive_a = root_a / "a.zip"
+    archive_b = root_b / "b.zip"
+    create_backup(root_a, [source_a], archive_a, reason="reviewed")
+    create_backup(root_b, [source_b], archive_b, reason="replacement")
+    destination = tmp_path / "restored"
+    preview = restore_backup(archive_a, destination)
+    os.replace(archive_b, archive_a)
+
+    result = restore_backup(
+        archive_a,
+        destination,
+        apply=True,
+        expected_plan=preview["plan_digest"],
+    )
+
+    assert result["mode"] == "blocked"
+    assert result["actual_plan"] != preview["plan_digest"]
+    assert not destination.exists()
+
+
+def test_backup_restore_rejects_linked_destination_parent(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    source = root / "notes.txt"
+    source.write_text("important\n", encoding="utf-8")
+    archive = root / "backup.zip"
+    create_backup(root, [source], archive, reason="linked restore parent")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    alias = tmp_path / "alias"
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(alias), str(outside)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            pytest.skip("Native Windows junction creation is unavailable")
+    else:
+        alias.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ArchMarshalError) as raised:
+        restore_backup(archive, alias / "restored", apply=True)
+
+    assert raised.value.code == "unsafe_path_link"
+    assert not (outside / "restored").exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="NTFS named streams are Windows-specific")
+def test_skill_fingerprint_and_backup_reject_ntfs_named_streams(tmp_path: Path) -> None:
+    root = tmp_path / "skill"
+    root.mkdir()
+    skill = root / "SKILL.md"
+    skill.write_text("---\nname: skill\ndescription: Named stream test.\n---\n", encoding="utf-8")
+    stream = Path(f"{skill}:payload")
+    try:
+        stream.write_text("hidden behavior\n", encoding="utf-8")
+    except OSError:
+        pytest.skip("The temporary filesystem does not support NTFS named streams")
+
+    with pytest.raises(ArchMarshalError) as fingerprint_error:
+        fingerprint_directory(root, purpose="Skill package")
+    with pytest.raises(ArchMarshalError) as backup_error:
+        create_backup(root, [skill], root / "backup.zip", reason="named stream")
+
+    assert fingerprint_error.value.code == "named_stream_unsupported"
+    assert backup_error.value.code == "named_stream_unsupported"
+
+
+def test_fingerprint_enforces_streaming_limit_after_path_swap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "skill"
+    root.mkdir()
+    source = root / "SKILL.md"
+    source.write_bytes(b"tiny")
+    original_open = safety_module.os.open
+    swapped = False
+
+    def replace_before_open(path, flags, *args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal swapped
+        if Path(path) == source and not swapped:
+            swapped = True
+            source.write_bytes(b"x" * 20)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(safety_module, "MAX_SKILL_CONTENT_BYTES", 10)
+    monkeypatch.setattr(safety_module.os, "open", replace_before_open)
+
+    with pytest.raises(ArchMarshalError) as raised:
+        fingerprint_directory(root, purpose="Skill package")
+
+    assert raised.value.code == "fingerprint_limit_exceeded"
+
+
+def test_entrypoint_only_fingerprint_does_not_scan_unrelated_project_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "SKILL.md").write_text("entrypoint\n", encoding="utf-8")
+    for index in range(5):
+        (root / f"unrelated-{index}.txt").write_text("data\n", encoding="utf-8")
+    monkeypatch.setattr(safety_module, "MAX_SKILL_FILES", 2)
+
+    result = fingerprint_directory(root, purpose="Root Skill", entrypoint_only=True)
+
+    assert result["file_count"] == 1
+    assert result["files"][0]["path"] == "SKILL.md"
 
 
 def test_backup_cli_verify_and_restore_contract(capsys, tmp_path: Path) -> None:
@@ -503,7 +936,19 @@ def test_backup_cli_verify_and_restore_contract(capsys, tmp_path: Path) -> None:
     preview = json.loads(capsys.readouterr().out)
     assert preview["mode"] == "propose_only"
 
-    assert main(["backup-restore", str(archive), str(destination), "--apply"]) == 0
+    assert (
+        main(
+            [
+                "backup-restore",
+                str(archive),
+                str(destination),
+                "--expect-plan",
+                preview["plan_digest"],
+                "--apply",
+            ]
+        )
+        == 0
+    )
     restored = json.loads(capsys.readouterr().out)
     assert restored["mode"] == "restored"
 
@@ -606,19 +1051,35 @@ def test_failed_restore_preserves_concurrent_foreign_file(
     create_backup(root, [first, second], archive, reason="restore race test")
     destination = tmp_path / "restored"
     original_open = Path.open
+    staging_paths: list[Path] = []
 
     def fail_second_output(path: Path, mode: str = "r", *args, **kwargs):  # type: ignore[no-untyped-def]
-        if path.name == "second.txt" and mode == "xb" and destination in path.parents:
-            (destination / "foreign.txt").write_text("foreign\n", encoding="utf-8")
+        staging = next(
+            (parent for parent in path.parents if parent.name.startswith(".amr-")),
+            None,
+        )
+        if path.name == "second.txt" and mode == "xb" and staging is not None:
+            staging_paths.append(staging)
+            (staging / "foreign.txt").write_text("foreign\n", encoding="utf-8")
             raise OSError("simulated restore failure")
         return original_open(path, mode, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", fail_second_output)
-    with pytest.raises(OSError, match="simulated restore failure"):
-        restore_backup(archive, destination, apply=True)
+    preview = restore_backup(archive, destination)
+    with pytest.raises(ArchMarshalError) as raised:
+        restore_backup(
+            archive,
+            destination,
+            apply=True,
+            expected_plan=preview["plan_digest"],
+        )
 
-    assert (destination / "foreign.txt").read_text(encoding="utf-8") == "foreign\n"
-    assert (destination / "first.txt").read_text(encoding="utf-8") == "first\n"
+    assert raised.value.code == "restore_incomplete"
+    staging = Path(raised.value.details["staging"])
+    assert staging == staging_paths[0]
+    assert (staging / "foreign.txt").read_text(encoding="utf-8") == "foreign\n"
+    assert (staging / "first.txt").read_text(encoding="utf-8") == "first\n"
+    assert not destination.exists()
 
 
 def test_directory_scan_permission_error_is_never_treated_as_absence(
@@ -730,10 +1191,19 @@ def test_managed_project_discovers_new_skill_create_only(tmp_path: Path) -> None
     before = (new_skill / "SKILL.md").read_bytes()
 
     preview = plan_adoption(root)
+    unresolved = resolve_workspace(root, preview["discovered_skills"][0]["name"])
     applied = _apply_adoption(root)
 
     assert preview["stage"] == "sync"
     assert len(preview["discovered_skills"]) == 1
+    assert unresolved["suggested_skills"] == []
+    assert unresolved["skill_sync"]["required"] is True
+    assert any(
+        item["path"] == preview["discovered_skills"][0]["source"]
+        and item["reason"] == "index_untracked"
+        and item["task_relevant"]
+        for item in unresolved["blocked_skills"]
+    )
     assert applied["mode"] == "overlay_synced"
     assert (new_skill / "SKILL.md").read_bytes() == before
     overlay = root / applied["discovered_skills"][0]["overlay_manifest"]
@@ -788,6 +1258,13 @@ def test_cli_start_apply_and_quick_end_apply(capsys, tmp_path: Path) -> None:
     started = json.loads(capsys.readouterr().out)
     assert started["adoption"]["mode"] == "overlay_applied"
     assert started["mode"] == "overlay_applied"
+    assert started["mutation"] == {
+        "requested": True,
+        "performed": True,
+        "scope": "archmarshal_control_plane_only",
+        "source_files_modified": False,
+    }
+    assert all("read-only" not in note for note in started["notes"])
     assert "安全" in started["adoption"]["project_tags"]
 
     closeout_preview = record_closeout(root, level="quick", summary="完成")
@@ -809,6 +1286,60 @@ def test_cli_start_apply_and_quick_end_apply(capsys, tmp_path: Path) -> None:
     )
     ended = json.loads(capsys.readouterr().out)
     assert ended["mode"] == "append_only_applied"
+
+
+def test_cli_start_preview_replays_tags_and_full_backup_scope(capsys, tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+
+    assert (
+        main(
+            [
+                "start",
+                str(root),
+                "--tag",
+                "research",
+                "--backup-scope",
+                "full",
+            ]
+        )
+        == 0
+    )
+    preview = json.loads(capsys.readouterr().out)
+    adoption = preview["adoption_preview"]
+    assert adoption["project_tags"] == ["research"]
+    assert adoption["backup_scope"] == "full"
+    repeated = plan_adoption(root, tags=["research"], backup_scope="full")
+    assert repeated["plan_digest"] == adoption["plan_digest"]
+    assert (
+        repeated["skill_index"]["proposed_head"]
+        == adoption["skill_index"]["proposed_head"]
+    )
+
+    assert (
+        main(
+            [
+                "start",
+                str(root),
+                "--tag",
+                "research",
+                "--backup-scope",
+                "full",
+                "--expect-plan",
+                adoption["plan_digest"],
+                "--apply",
+            ]
+        )
+        == 0
+    )
+    applied = json.loads(capsys.readouterr().out)
+    assert applied["adoption"]["mode"] == "overlay_applied"
+    assert applied["adoption"]["backup_scope"] == "full"
+    assert applied["adoption"]["project_tags"] == ["research"]
+    assert (
+        applied["adoption"]["skill_index_commit"]["head"]
+        == adoption["skill_index"]["proposed_head"]
+    )
 
 
 def test_cli_start_sync_and_dedicated_entrypoint_apply(capsys, tmp_path: Path) -> None:
@@ -833,6 +1364,36 @@ def test_cli_start_sync_and_dedicated_entrypoint_apply(capsys, tmp_path: Path) -
     )
     dedicated = json.loads(capsys.readouterr().out)
     assert dedicated["mode"] == "overlay_applied"
+
+
+def test_cli_learning_replays_complete_saved_preview(capsys, tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    _apply_adoption(root)
+
+    assert main(["learn", str(root), "--pretty"]) == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["api_version"] == "archmarshal-cli-v1"
+    plan_file = tmp_path / "learning-plan.json"
+    plan_file.write_text(json.dumps(preview), encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "learn",
+                str(root),
+                "--plan-file",
+                str(plan_file),
+                "--expect-plan",
+                preview["plan_digest"],
+                "--apply",
+            ]
+        )
+        == 0
+    )
+    applied = json.loads(capsys.readouterr().out)
+    assert applied["mode"] == "candidate_pack_created"
+    assert (root / applied["created"] / "COMMITTED.json").is_file()
 
 
 def test_cli_skill_index_status_and_reviewed_rollback(capsys, tmp_path: Path) -> None:

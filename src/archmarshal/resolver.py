@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .adoption import plan_adoption
 from .adoption_tx import adoption_transaction_status
 from .inventory import collect_inventory
 from .skill_index import skill_review_subject_digest
@@ -16,6 +17,7 @@ def resolve_workspace(
     task: str,
     *,
     user_store: Path | str | None = None,
+    adoption_preview: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     transaction_before = adoption_transaction_status(root)
     inventory = collect_inventory(root)
@@ -31,8 +33,25 @@ def resolve_workspace(
         else transaction_before
     )
     user_state = read_user_store_active(user_store) if user_store is not None else None
+    sync_preview = adoption_preview or plan_adoption(root)
     workspace_matches = [] if transaction_incomplete else _match_skills(inventory.skills, task_text)
     user_matches = _match_user_store_skills(user_state, task_text) if user_state else []
+    suggested_skills, skill_conflicts = _select_skill_matches(
+        workspace_matches, user_matches
+    )
+    blocked_skills = _blocked_skills(
+        inventory.skills,
+        task_text=task_text,
+        override_reason="adoption_transaction_incomplete"
+        if transaction_incomplete
+        else None,
+    )
+    blocked_skills = _merge_sync_blocked_skills(
+        blocked_skills,
+        sync_preview,
+        task_text=task_text,
+        transaction_incomplete=transaction_incomplete,
+    )
     return {
         "tool": "archmarshal",
         "root": str(inventory.root),
@@ -40,16 +59,10 @@ def resolve_workspace(
         "required_policy_skills": (
             [] if transaction_incomplete else _required_policy_skills(inventory.skills)
         ),
-        "suggested_skills": sorted(
-            [*workspace_matches, *user_matches],
-            key=lambda item: (-item["score"], str(item["id"]), str(item.get("origin"))),
-        ),
-        "blocked_skills": _blocked_skills(
-            inventory.skills,
-            override_reason="adoption_transaction_incomplete"
-            if transaction_incomplete
-            else None,
-        ),
+        "suggested_skills": suggested_skills,
+        "skill_conflicts": skill_conflicts,
+        "blocked_skills": blocked_skills,
+        "skill_sync": _skill_sync_status(sync_preview),
         "adoption_transaction": transaction,
         "suggested_context_modules": _match_context_modules(inventory.context_modules, task_text),
         "suggested_memory_records": _match_memory_records(inventory.memory_records, task_text),
@@ -73,6 +86,7 @@ def resolve_workspace(
             "Resolution is advisory and read-only.",
             "Active highest-priority global skills are returned separately as required policy.",
             "Missing, unsafe, or drifted skill sources are blocked until reviewed and synchronized.",
+            "A workspace Skill deterministically shadows a user-store Skill with the same id; conflicts remain explicit for review.",
             "Historical artifact paths remain explicit-only unless a selected context module references them.",
         ],
     }
@@ -123,6 +137,7 @@ def _match_skills(skills: list[dict[str, Any]], task_text: str) -> list[dict[str
                 "origin": "workspace",
                 "trigger_matches": trigger_matches,
                 "tag_matches": tag_matches,
+                "implementation_sha256": skill.get("_current_package_sha256"),
             }
         )
     return sorted(matches, key=lambda item: (-item["score"], str(item["id"])))
@@ -147,7 +162,135 @@ def _match_user_store_skills(
     for item in matches:
         item["origin"] = "user_store"
         item["user_store_head"] = user_state.get("head")
+        item["implementation_sha256"] = next(
+            (
+                record.get("package_sha256")
+                for record in user_state.get("common_skills") or []
+                if isinstance(record, dict) and record.get("id") == item.get("id")
+            ),
+            None,
+        )
     return matches
+
+
+def _select_skill_matches(
+    workspace_matches: list[dict[str, Any]],
+    user_matches: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in [*workspace_matches, *user_matches]:
+        grouped.setdefault(str(item.get("id")), []).append(item)
+    selected: list[dict[str, Any]] = []
+    conflicts: list[dict[str, Any]] = []
+    for skill_id, matches in grouped.items():
+        ranked = sorted(
+            matches,
+            key=lambda item: (
+                0 if item.get("origin") == "workspace" else 1,
+                -int(item.get("score") or 0),
+                str(item.get("path") or ""),
+            ),
+        )
+        winner = ranked[0]
+        selected.append(winner)
+        if len(ranked) == 1:
+            continue
+        identities = {
+            item.get("implementation_sha256")
+            for item in ranked
+            if isinstance(item.get("implementation_sha256"), str)
+        }
+        conflicts.append(
+            {
+                "id": skill_id,
+                "resolution": "workspace_precedence",
+                "selected": _conflict_subject(winner),
+                "suppressed": [_conflict_subject(item) for item in ranked[1:]],
+                "requires_review": len(identities) != 1 or any(
+                    not item.get("implementation_sha256") for item in ranked
+                ),
+            }
+        )
+    return (
+        sorted(selected, key=lambda item: (-item["score"], str(item["id"]))),
+        sorted(conflicts, key=lambda item: item["id"]),
+    )
+
+
+def _conflict_subject(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "origin": item.get("origin"),
+        "path": item.get("path"),
+        "implementation_sha256": item.get("implementation_sha256"),
+    }
+
+
+def _merge_sync_blocked_skills(
+    blocked: list[dict[str, Any]],
+    preview: dict[str, Any],
+    *,
+    task_text: str,
+    transaction_incomplete: bool,
+) -> list[dict[str, Any]]:
+    existing_paths = {str(item.get("path")) for item in blocked}
+    merged = [*blocked]
+    should_surface = not preview.get("configured") or preview.get("overlay_enabled")
+    if not should_surface:
+        return merged
+    for skill in preview.get("discovered_skills") or []:
+        if not isinstance(skill, dict):
+            continue
+        state = str(skill.get("tracking_state") or skill.get("source_drift") or "")
+        source = str(skill.get("source") or "")
+        if not source or source in existing_paths or state in {"indexed", "unchanged"}:
+            continue
+        reason = (
+            "adoption_transaction_incomplete"
+            if transaction_incomplete
+            else "workspace_unmanaged"
+            if not preview.get("configured")
+            else "index_untracked"
+            if state == "new"
+            else f"source_{state}"
+        )
+        merged.append(
+            {
+                "id": skill.get("id"),
+                "name": skill.get("name"),
+                "path": source,
+                "metadata_path": skill.get("overlay_manifest"),
+                "reason": reason,
+                "source_drift": skill.get("source_drift"),
+                "tracking_state": state,
+                "task_relevant": _skill_matches_task_signals(skill, task_text),
+            }
+        )
+        existing_paths.add(source)
+    return sorted(merged, key=lambda item: (str(item.get("id")), str(item.get("path"))))
+
+
+def _skill_sync_status(preview: dict[str, Any]) -> dict[str, Any]:
+    changes = [
+        {
+            "id": skill.get("id"),
+            "source": skill.get("source"),
+            "tracking_state": skill.get("tracking_state"),
+        }
+        for skill in preview.get("discovered_skills") or []
+        if isinstance(skill, dict)
+        and str(skill.get("tracking_state") or "") not in {"indexed", "unchanged"}
+    ]
+    required = bool(
+        preview.get("blocked")
+        or preview.get("review_required")
+        or (preview.get("overlay_enabled") and changes)
+    )
+    return {
+        "required": required,
+        "configured": bool(preview.get("configured")),
+        "plan_digest": preview.get("plan_digest"),
+        "changes": changes,
+    }
 
 
 def _required_policy_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -177,6 +320,7 @@ def _required_policy_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]
 def _blocked_skills(
     skills: list[dict[str, Any]],
     *,
+    task_text: str = "",
     override_reason: str | None = None,
 ) -> list[dict[str, Any]]:
     blocked: list[dict[str, Any]] = []
@@ -193,9 +337,29 @@ def _blocked_skills(
                 or skill.get("_manifest_path"),
                 "reason": reason,
                 "source_drift": skill.get("_source_drift"),
+                "task_relevant": _skill_matches_task_signals(skill, task_text),
             }
         )
     return sorted(blocked, key=lambda item: str(item["id"]))
+
+
+def _skill_matches_task_signals(skill: dict[str, Any], task_text: str) -> bool:
+    if not task_text.strip():
+        return False
+    if any(
+        _contains(task_text, str(item)) for item in skill.get("negative_triggers") or []
+    ):
+        return False
+    signals = [
+        *(skill.get("triggers") or []),
+        *(skill.get("tags") or []),
+        skill.get("name"),
+        skill.get("id"),
+    ]
+    return any(
+        isinstance(signal, str) and signal.strip() and _contains(task_text, signal)
+        for signal in signals
+    )
 
 
 def skill_activation_block_reason(skill: dict[str, Any]) -> str | None:

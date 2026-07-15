@@ -1,21 +1,17 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 
 from .errors import ArchMarshalError, require_workspace_root
-from .safety import is_link_or_reparse
+from .safety import is_link_or_reparse, workspace_root_id
 
 OWNERSHIP_FORMAT = "archmarshal-workspace-ownership-v1"
 MAX_OWNERSHIP_BYTES = 64 * 1024
 
 
 def workspace_id(root: Path | str) -> str:
-    root_path = Path(root).resolve()
-    return hashlib.sha256(
-        f"archmarshal-workspace-v1\x00{root_path}".encode("utf-8")
-    ).hexdigest()[:32]
+    return workspace_root_id(root)
 
 
 def valid_ownership_marker(path: Path) -> bool:

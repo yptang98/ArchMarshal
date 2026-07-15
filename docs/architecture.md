@@ -257,11 +257,15 @@ ArchMarshal operations should mature in this order:
    recoverable transaction.
 9. `end --level ... --expect-plan ... --apply`: append and commit a new quick,
    standard, or reproducible session record.
-10. `learn --apply`: append a bounded, review-only learning candidate pack.
+10. `learn --plan-file ... --expect-plan ... --apply`: append a bounded,
+    review-only learning candidate pack only when roots, evidence, bytes, and
+    target still match the complete saved preview.
 11. `candidate-review`: append an accept/reject/defer decision to the isolated
     user store from a verified committed candidate.
-12. `candidate-promote`: copy an explicitly reviewed common-Skill draft or
-    preference candidate into a new immutable user-store generation.
+12. `candidate-promote`: after an exact accepted decision, copy a common-Skill
+    draft with explicit candidate/source lineage, or the exact preference
+    candidate, into a new immutable user-store generation. Replacing an active
+    id/key requires explicit type-specific confirmation.
 13. `user-store-rollback`: publish a new generation from a verified ancestor
     snapshot without deleting newer history.
 

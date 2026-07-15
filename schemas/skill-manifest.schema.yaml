@@ -138,6 +138,27 @@ properties:
         type: array
         items:
           type: string
+  promotion:
+    type: object
+    additionalProperties: false
+    required:
+      - candidate_id
+      - candidate_digest
+      - source_skill_id
+      - source_implementation_sha256
+    properties:
+      candidate_id:
+        type: string
+        pattern: "^candidate\\.skill\\.[a-f0-9]{24}$"
+      candidate_digest:
+        type: string
+        pattern: "^[a-f0-9]{64}$"
+      source_skill_id:
+        type: string
+        pattern: "^skill\\.[a-z0-9_.-]+$"
+      source_implementation_sha256:
+        type: string
+        pattern: "^[a-f0-9]{64}$"
   source:
     type: object
     additionalProperties: false

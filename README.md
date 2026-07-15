@@ -65,12 +65,13 @@ ArchMarshal is a Python CLI that Codex or a human can invoke inside a project.
 ### 1. Install
 
 ```bash
-python -m pip install "git+https://github.com/yptang98/ArchMarshal.git"
-archmarshal --help
+python -m pip install "git+https://github.com/yptang98/ArchMarshal.git@<reviewed-full-commit-sha>"
+archmarshal --version
 ```
 
 This repository is not currently a one-click Codex Skill package; the command
-above installs the actual CLI from GitHub.
+above installs the actual CLI from an explicitly reviewed commit. Avoid an
+unpinned `main` install when reproducibility matters.
 
 ### 2. Start
 
@@ -198,7 +199,9 @@ present; ArchMarshal does not execute the commands or prove the result.
 After multiple sessions, extract lightweight, review-only candidates:
 
 ```bash
-archmarshal learn . --include-root ../another-project --apply --pretty
+archmarshal learn . --include-root ../another-project --pretty > learning-plan.json
+archmarshal learn . --include-root ../another-project \
+  --plan-file learning-plan.json --expect-plan <plan_digest> --apply --pretty
 ```
 
 To reuse reviewed candidates across projects, initialize a dedicated user store
@@ -209,6 +212,16 @@ only a copied digest:
 archmarshal user-store-init ~/.archmarshal/user-store --pretty > init-plan.json
 archmarshal user-store-init ~/.archmarshal/user-store \
   --plan-file init-plan.json --expect-plan <plan_digest> --apply --pretty
+
+archmarshal candidate-review . --pack .agent/inbox/learning/<pack> \
+  --candidate <candidate-id> --decision accept \
+  --reason "approved candidate evidence" \
+  --user-store ~/.archmarshal/user-store --pretty > acceptance-plan.json
+archmarshal candidate-review . --pack .agent/inbox/learning/<pack> \
+  --candidate <candidate-id> --decision accept \
+  --reason "approved candidate evidence" \
+  --user-store ~/.archmarshal/user-store --plan-file acceptance-plan.json \
+  --expect-head <head-or-none> --expect-plan <plan_digest> --apply --pretty
 
 archmarshal candidate-promote . --pack .agent/inbox/learning/<pack> \
   --candidate <candidate-id> --user-store ~/.archmarshal/user-store \
@@ -224,11 +237,30 @@ archmarshal resolve . --task "prepare release" \
   --user-store ~/.archmarshal/user-store --pretty
 ```
 
-Save preview JSON as UTF-8. Preference candidates omit `--draft`. A project,
-candidate pack, and Skill draft remain unchanged; only immutable files and the
-internal `HEAD` inside the explicitly initialized user store can change. Use
-`candidate-review` for accept/reject/defer decisions and
+Save preview JSON as UTF-8, UTF-8 BOM, or BOM-marked UTF-16 JSON. Preference
+candidates omit `--draft`. Promotion is blocked unless the latest decision for
+the exact candidate digest and provenance is `accepted`. A common-Skill draft
+must also declare this exact lineage in `manifest.yaml`:
+
+Replacing an active record with the same Skill id or preference key requires
+`--replace-existing-skill` or `--replace-existing-preference` in both preview
+and apply. Without that explicit confirmation, ArchMarshal preserves the active
+record and refuses to create a replacement plan.
+
+```yaml
+promotion:
+  candidate_id: candidate.skill.<24-hex>
+  candidate_digest: <candidate-digest-from-preview>
+  source_skill_id: skill.<source-id>
+  source_implementation_sha256: <source-package-sha256-from-candidate>
+```
+
+A project, candidate pack, and Skill draft remain unchanged; only immutable
+files and the internal `HEAD` inside the explicitly initialized user store can
+change. Use `candidate-review` for accept/reject/defer decisions and
 `user-store-rollback --to <ancestor>` for a preview-first forward rollback.
+`user-store-status` lists the immutable generation digests that can be selected
+as rollback ancestors.
 
 Browse projects without loading their raw history:
 
@@ -239,6 +271,7 @@ archmarshal catalog . --include-root ../another-project --tag research --pretty
 That is the main workflow: install, `archmarshal-start`, normal project
 instructions, `archmarshal-end`.
 See [Getting Started](docs/getting-started.md) for the minimal prompts.
+Maintainers should also follow the immutable [Release Process](docs/release-process.md).
 
 Summaries are indexes, not replacements. Raw reports, plans, checkpoints, and
 history should remain preserved with explicit-only read policies.
@@ -349,15 +382,23 @@ archmarshal adoption-recover path/to/existing-project \
 archmarshal end path/to/project --level quick --summary "Phase complete" --pretty
 archmarshal end path/to/project --level quick --summary "Phase complete" \
   --expect-plan <plan_digest> --apply --pretty
-archmarshal learn path/to/project --apply --pretty
+archmarshal learn path/to/project --pretty > learning-plan.json
+archmarshal learn path/to/project --plan-file learning-plan.json \
+  --expect-plan <plan_digest> --apply --pretty
 archmarshal backup-verify path/to/backup.zip --pretty
-archmarshal backup-restore path/to/backup.zip path/to/new-directory --apply --pretty
+archmarshal backup-restore path/to/backup.zip path/to/new-directory --pretty
+archmarshal backup-restore path/to/backup.zip path/to/new-directory \
+  --expect-plan <plan_digest> --apply --pretty
+archmarshal backup-restore path/to/backup.zip path/to/new-managed-copy \
+  --rebind-workspace --pretty
+# Rebind accepts only a backup created by adoption/start with --backup-scope full.
+# Repeat with --rebind-workspace, the exact --expect-plan, and --apply.
 archmarshal skill-index-rollback path/to/project --to <ancestor-sha256> --pretty
 archmarshal skill-index-rollback path/to/project --to <ancestor-sha256> \
   --expect-head <preview-head> --expect-plan <plan_digest> --apply --pretty
 archmarshal user-store-status path/to/user-store --pretty
 archmarshal candidate-review path/to/project --pack <committed-pack> \
-  --candidate <candidate-id> --decision defer --user-store <store> --pretty
+  --candidate <candidate-id> --decision accept --user-store <store> --pretty
 ```
 
 The compatibility wrapper still works:
@@ -377,8 +418,8 @@ delete, force, or automatic promotion path for human-owned project or skill file
 
 - Inventory, lint, audit, and plan are read-only by default.
 - Adoption and closeout require both explicit `--apply` and the exact reviewed
-  `--expect-plan`; learning remains preview-first with explicit `--apply`.
-- Adoption backs up managed metadata and complete non-root skill packages before writing; root skills remain entrypoint-only. `--backup-scope full` creates a bounded project-content snapshot excluding VCS, dependencies, virtual environments, and prior backups.
+  `--expect-plan`; learning additionally requires the complete saved preview.
+- Adoption backs up managed metadata and complete non-root skill packages before writing; root skills remain entrypoint-only. `--backup-scope full` creates a bounded project-content snapshot excluding VCS, dependencies, virtual environments, and prior backups, and preserves portable root/directory/file modes plus empty directories.
 - Existing skill sources are immutable to ArchMarshal; overlay manifests live under `.agent/skill-overlays/`.
 - Skill sync uses immutable content-addressed objects, an exclusive `HEAD.lock`, and an expected-`HEAD` compare-and-swap; stale or concurrent plans fail without changing the active generation.
 - `HEAD.lock` uses an OS-lifetime lock. Released v2 transaction metadata is recovered only after expected/proposed/current HEAD validation and is recorded under the internal recovery audit directory; legacy or malformed locks remain blocked.

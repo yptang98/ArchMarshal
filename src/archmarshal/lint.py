@@ -5,9 +5,10 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from .adoption import ownership_skill_index_mode, valid_ownership_marker
+from .adoption import ownership_skill_index_mode, plan_adoption, valid_ownership_marker
 from .adoption_tx import adoption_transaction_status
 from .diagnostics import Diagnostic
+from .errors import ArchMarshalError
 from .inventory import WorkspaceInventory, collect_inventory
 from .io import list_files, load_yaml_safe, read_text
 from .schema_validation import validate_schema
@@ -49,6 +50,44 @@ def lint_workspace(
     diagnostics.extend(_lint_memory_stores(inventory.root, inventory.to_dict()))
     diagnostics.extend(_lint_memory_records(inventory.root, inventory.to_dict()))
     diagnostics.extend(_lint_skills(inventory.root, inventory.to_dict()))
+    diagnostics.extend(_lint_pending_skill_sync(inventory.root))
+    return diagnostics
+
+
+def _lint_pending_skill_sync(root: Path) -> list[Diagnostic]:
+    ownership_path = root / ".agent" / "ownership.json"
+    if not valid_ownership_marker(ownership_path):
+        return []
+    try:
+        preview = plan_adoption(root)
+    except (ArchMarshalError, OSError, ValueError):
+        return []
+    diagnostics: list[Diagnostic] = []
+    for change in preview.get("skill_index", {}).get("changes") or []:
+        if not isinstance(change, dict):
+            continue
+        kind = change.get("kind")
+        source = str(change.get("source") or ".agent/skill-overlays")
+        if kind == "added":
+            diagnostics.append(
+                Diagnostic(
+                    "skill.source_unindexed",
+                    "info",
+                    "A Skill source exists but is not yet recorded in the immutable Skill index.",
+                    source,
+                    "Review archmarshal start or adopt preview, then apply its exact plan to index the Skill.",
+                )
+            )
+        elif kind == "restored":
+            diagnostics.append(
+                Diagnostic(
+                    "skill.source_restored_review_required",
+                    "warning",
+                    "A previously removed Skill source has reappeared and remains inactive until reviewed.",
+                    source,
+                    "Inspect the restored source and explicitly review/synchronize the exact plan.",
+                )
+            )
     return diagnostics
 
 
