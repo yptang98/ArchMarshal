@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.13.0 - 2026-07-15
+
+### Codex-native plugin product
+
+- Make the Codex plugin the primary user experience. Add a validated
+  repository marketplace, `archmarshal` plugin manifest, and
+  `manage-agent-workspace` Skill with UI metadata, natural-language routing,
+  progressive workflow/safety references, and no placeholder content.
+- Add a fail-closed plugin wrapper that uses the same checkout during
+  development or locates the matching engine in Codex's configured full Git
+  marketplace snapshot after installation. Plugin and engine versions must
+  match exactly; no dependency is installed or upgraded automatically.
+- Keep the Python CLI as the deterministic transaction engine and automation
+  interface rather than presenting it as a separate primary product. The Skill
+  drives health checks, preview review, backup scope, exact plan/HEAD replay,
+  post-apply verification, closeout depth, and candidate learning directly from
+  user intent in Codex.
+
+### Candidate-to-draft workflow
+
+- Add `candidate-draft`, a preview-first, exact-plan scaffold for an accepted
+  common-Skill candidate. The plan binds the committed learning pack bytes,
+  canonical candidate and provenance, exact accepted decision and user-store
+  HEAD, absent disjoint destination, and every proposed output byte.
+- Publish only a new review envelope, with `REVIEW.md` outside the nested Skill
+  package and `COMMITTED.json` last. The nested package contains
+  `SKILL.md.draft`, not `SKILL.md`, so an unfinished scaffold cannot be
+  discovered as a Skill merely because a host scans the destination. Human
+  completion, explicit rename and activation, and a separate promotion
+  preview/apply remain mandatory.
+- Preserve source project, learning pack, and user store byte-for-byte. A link,
+  collision, stale plan/HEAD/decision, or changed evidence stops before
+  publication; interrupted partial output remains inspectable and is never
+  overwritten or deleted on retry.
+
+### Read-only product health
+
+- Add `archmarshal doctor`, a deterministic, bounded, strictly read-only report
+  for ownership binding, packaged control-plane schemas, adoption
+  transactions, Skill-index and user-store chains, closeout commits, current
+  v2 package content/topology/mode integrity, and absent, corrupt, legacy,
+  orphan, or partial state. Retention suggestions never perform an automatic
+  action.
+- Add a versioned durable-format registry with owner, readable/writable
+  versions, legacy/migration state, and boundedness, including candidate-draft
+  plan, saved preview, binding, and final commit formats.
+- Report filesystem safety capabilities without overstating the current
+  backend: static link/reparse rejection and stable reads are implemented, but
+  handle-relative components and hostile concurrent ancestor-rebinding
+  protection remain false under the cooperative-only write threat model.
+
+### Scale and release evidence
+
+- Add a bounded temporary-fixture benchmark for 10,000-file inventory,
+  100-Skill adoption preview, and 50-project catalog reads. It hashes fixture
+  bytes, modes, and mtimes before and after and fails if a benchmarked read path
+  mutates the fixture.
+- Document the filesystem capability contract, handle-relative backend
+  migration order, deterministic security tests, measured Windows reference
+  timings, and the remaining stable-release gates.
+
 ## 0.12.0 - 2026-07-15
 
 ### Safe project and Skill initialization

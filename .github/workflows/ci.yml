@@ -41,6 +41,13 @@ jobs:
           --module src/archmarshal/skill_review.py=85,61
           --module src/archmarshal/session.py=85,75
           --module src/archmarshal/user_store.py=84,70
+          --module src/archmarshal/candidate_draft.py=80,60
+          --module src/archmarshal/doctor.py=95,90
+          --module src/archmarshal/_doctor_core.py=75,65
+          --module src/archmarshal/_doctor_workspace.py=80,68
+          --module src/archmarshal/_doctor_immutable.py=78,64
+          --module src/archmarshal/_doctor_sessions.py=80,65
+          --module src/archmarshal/formats.py=95,88
       - name: CLI smoke test
         run: archmarshal lint examples/simple-project --pretty
 
@@ -61,7 +68,7 @@ jobs:
       - name: Install build tools
         run: python -m pip install build twine ruff
       - name: Static checks
-        run: ruff check src tests scripts
+        run: ruff check src tests scripts plugins
       - name: Verify version contract
         run: python scripts/check_version_contract.py
       - name: Build wheel and sdist

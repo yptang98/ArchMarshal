@@ -378,6 +378,23 @@ source project's `.agent/inbox/learning/`. The candidate digest and compact
 session evidence are recorded as provenance. `accept`, `reject`, and `defer`
 publish immutable decision generations; they do not edit the pack or project.
 
+An accepted common-Skill candidate can be scaffolded with `candidate-draft`.
+Preview binds the exact pack payload and commit bytes, canonical candidate and
+provenance, accepted decision, user-store HEAD, absent real destination, and
+every proposed output byte. Apply requires the complete saved preview, exact
+plan digest, and exact HEAD again. The destination must be disjoint from the
+source project and store; a collision or linked component stops before it is
+created. The envelope contains `REVIEW.md`, a nested package manifest, and
+`SKILL.md.draft`. It contains no `SKILL.md`, scripts, inferred commands, or
+permissions, so unfinished output is not a discoverable Skill. A final
+`COMMITTED.json` is published last. Interruption leaves visible partial output
+that is preserved and never overwritten or automatically deleted.
+
+The reviewer completes the nested draft, declares only necessary permissions,
+sets the manifest status to `active`, and explicitly renames `SKILL.md.draft`
+to `SKILL.md`. Promotion remains a separate preview/apply operation and hashes
+the human-edited package; the scaffold commit attests only to its baseline.
+
 Promotion is separately previewed. A common Skill requires an explicit draft
 that passes the Codex Skill package contract and the ArchMarshal common-project
 manifest rules. The preview binds every draft file hash and its exact real
@@ -398,6 +415,15 @@ non-regular entries, unreadable owner modes, changed descriptors, and
 unexpected partial-package entries stop publication without repairing or
 overwriting the path. A committed v1 package continues through its separate v1
 verifier and is never rewritten merely to upgrade its format.
+
+`archmarshal doctor` is a separate bounded, deterministic read path. It checks
+ownership binding, packaged control-plane schemas, adoption transactions,
+reachable immutable generations, session commits, user-package integrity,
+recognized durable formats, and orphan or partial state. It follows no links,
+performs no repair or migration, and marks every retention suggestion
+`automatic_action: false`. Its filesystem capability section explicitly
+reports the current path backend as cooperative-only; see
+`docs/filesystem-safety.md` for the handle-relative release gate.
 
 An active Skill id or preference key is never silently replaced. Replacement
 needs the matching `--replace-existing-skill` or

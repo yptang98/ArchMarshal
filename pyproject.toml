@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "archmarshal"
-version = "0.12.0"
-description = "A lightweight control plane for agent workspace skills, context modules, and project artifacts."
+version = "0.13.0"
+description = "A Codex-native management plugin and safety engine for project, Skill, memory, and artifact lifecycles."
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 license = "MIT"

@@ -33,7 +33,7 @@ def review_learning_candidate(
     reviewed_plan: dict[str, Any] | None = None,
     apply: bool = False,
 ) -> dict[str, Any]:
-    candidate, candidate_digest, provenance, pack_info = _candidate_context(
+    candidate, candidate_digest, provenance, pack_info = verified_learning_candidate_context(
         root, pack, candidate_id
     )
     normalized_decision = {
@@ -103,7 +103,7 @@ def promote_learning_candidate(
     replace_existing_preference: bool = False,
     apply: bool = False,
 ) -> dict[str, Any]:
-    candidate, candidate_digest, provenance, pack_info = _candidate_context(
+    candidate, candidate_digest, provenance, pack_info = verified_learning_candidate_context(
         root, pack, candidate_id
     )
     candidate_type = candidate.get("candidate_type")
@@ -235,11 +235,12 @@ def load_reviewed_plan(path: Path | str) -> dict[str, Any]:
     return payload
 
 
-def _candidate_context(
+def verified_learning_candidate_context(
     root: Path | str,
     pack: Path | str,
     candidate_id: str,
 ) -> tuple[dict[str, Any], str, list[dict[str, str]], dict[str, Any]]:
+    """Return a verified committed candidate and its normalized promotion provenance."""
     root_path = require_owned_workspace(root, operation="Learning candidate review")
     pack_path = Path(pack)
     pack_path = pack_path if pack_path.is_absolute() else root_path / pack_path
@@ -398,9 +399,7 @@ def _verify_plan_candidate(
     referenced = [
         item for item in matches if operation.get("decision_digest") == item.get("digest")
     ]
-    if len(referenced) != 1 or (
-        prior_acceptance and operation.get("reason") != reason.strip()
-    ):
+    if len(referenced) != 1 or (prior_acceptance and operation.get("reason") != reason.strip()):
         raise ArchMarshalError(
             "reviewed_plan_candidate_mismatch",
             "Saved plan operation does not reference the exact candidate decision.",
@@ -493,9 +492,7 @@ def _verify_promotion_payload(
 
 def _canonical_digest(value: object) -> str:
     return hashlib.sha256(
-        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
-            "utf-8"
-        )
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
 
 
@@ -503,4 +500,5 @@ __all__ = [
     "load_reviewed_plan",
     "promote_learning_candidate",
     "review_learning_candidate",
+    "verified_learning_candidate_context",
 ]

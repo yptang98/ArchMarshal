@@ -36,6 +36,21 @@ def _main_impl(argv: list[str] | None = None) -> int:
     _add_root_command(subparsers, "inventory", "Scan workspace structure without modifying files.")
     _add_root_command(subparsers, "audit", "Summarize governance risks.")
     _add_root_command(subparsers, "plan", "Generate read-only remediation actions.")
+    doctor_parser = _add_root_command(
+        subparsers,
+        "doctor",
+        "Inspect bounded ArchMarshal workspace and user-store health without writing.",
+    )
+    doctor_parser.add_argument(
+        "--user-store",
+        help="Optional user Skill store root to inspect in the same read-only report.",
+    )
+    doctor_parser.add_argument(
+        "--history-limit",
+        type=int,
+        default=20,
+        help="Maximum active generations, transactions, and sessions to inspect (1-100).",
+    )
     adopt_parser = _add_root_command(
         subparsers,
         "adopt",
@@ -259,6 +274,12 @@ def _main_impl(argv: list[str] | None = None) -> int:
     candidate_review_parser.add_argument(
         "--decision", required=True, choices=("accept", "reject", "defer")
     )
+    candidate_draft_parser = _add_root_command(
+        subparsers,
+        "candidate-draft",
+        "Create a reviewed, disabled Skill draft envelope from an accepted candidate.",
+    )
+    _add_candidate_draft_arguments(candidate_draft_parser)
     candidate_promote_parser = _add_root_command(
         subparsers,
         "candidate-promote",
@@ -429,6 +450,16 @@ def _main_impl(argv: list[str] | None = None) -> int:
             payload = _user_store_plan_envelope(plan, "user_store_rollback")
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
+    if args.command == "doctor":
+        from .doctor import doctor_workspace
+
+        payload = doctor_workspace(
+            args.root,
+            user_store=args.user_store,
+            history_limit=args.history_limit,
+        )
+        _print_json(payload, args.pretty)
+        return 2 if payload.get("state") == "error" else 0
     root = require_workspace_root(args.root)
 
     if args.command == "inventory":
@@ -535,6 +566,27 @@ def _main_impl(argv: list[str] | None = None) -> int:
             expected_head_token=args.expect_head,
             expected_plan=args.expect_plan,
             reviewed_plan=_optional_reviewed_plan(args.plan_file),
+            apply=args.apply,
+        )
+        _print_json(payload, args.pretty)
+        return _payload_exit_code(payload)
+    if args.command == "candidate-draft":
+        from .candidate_draft import (
+            candidate_to_skill_draft,
+            load_candidate_draft_preview,
+        )
+
+        payload = candidate_to_skill_draft(
+            root,
+            args.pack,
+            args.candidate,
+            args.user_store,
+            args.destination,
+            reviewed_preview=(
+                load_candidate_draft_preview(args.plan_file) if args.plan_file else None
+            ),
+            expected_head_token=args.expect_head,
+            expected_plan=args.expect_plan,
             apply=args.apply,
         )
         _print_json(payload, args.pretty)
@@ -877,6 +929,35 @@ def _add_candidate_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--expect-head",
         help="Exact user-store HEAD from preview, or 'none'; required with --apply.",
+    )
+    parser.add_argument(
+        "--expect-plan", help="Exact plan digest from the saved preview; required with --apply."
+    )
+
+
+def _add_candidate_draft_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--pack",
+        required=True,
+        help="Committed pack directory under the owned project's .agent/inbox/learning/.",
+    )
+    parser.add_argument("--candidate", required=True, help="Exact common-Skill candidate id.")
+    parser.add_argument("--user-store", required=True, help="Owned user Skill store root.")
+    parser.add_argument(
+        "--destination",
+        required=True,
+        help="Absent draft-envelope path under an existing real parent directory.",
+    )
+    parser.add_argument(
+        "--apply", action="store_true", help="Create only the exact saved draft preview."
+    )
+    parser.add_argument(
+        "--plan-file",
+        help="Complete saved candidate-draft preview JSON; required with --apply.",
+    )
+    parser.add_argument(
+        "--expect-head",
+        help="Exact accepted user-store HEAD from preview; required with --apply.",
     )
     parser.add_argument(
         "--expect-plan", help="Exact plan digest from the saved preview; required with --apply."

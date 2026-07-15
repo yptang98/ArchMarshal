@@ -1,13 +1,21 @@
 # Getting Started
 
-Use ArchMarshal as a Python CLI that Codex or a human invokes in the project.
+Use ArchMarshal as a Codex management plugin. Ask for project and Skill
+governance in natural language; the plugin invokes the reviewed Python safety
+engine internally. Command blocks below document the automation contract for
+maintainers and CI.
 
 ## 1. Install
 
 ```bash
-python -m pip install "git+https://github.com/yptang98/ArchMarshal.git@<reviewed-full-commit-sha>"
-archmarshal --help
+codex plugin marketplace add yptang98/ArchMarshal --ref <reviewed-full-commit-sha>
+codex plugin add archmarshal@personal
 ```
+
+Start a new Codex task, then ask: `Use ArchMarshal to safely organize this
+project and its Skills; inspect and preview first.` The plugin uses the matching
+engine in the configured full marketplace snapshot and fails closed on a
+version mismatch.
 
 ## 2. Initialize or adopt
 
@@ -170,10 +178,20 @@ archmarshal candidate-review . --pack <committed-pack> \
 # Repeat candidate-review with the saved --plan-file, exact --expect-head,
 # exact --expect-plan, and --apply.
 
-# The reviewed draft manifest must declare promotion.candidate_id,
+# Scaffold an accepted common-Skill candidate into a new, disjoint envelope.
+archmarshal candidate-draft . --pack <committed-pack> \
+  --candidate <id> --user-store <store> \
+  --destination ../archmarshal-drafts/<envelope> \
+  --pretty > candidate-draft-plan.json
+# Repeat candidate-draft with the complete saved --plan-file, exact
+# --expect-head, exact --expect-plan, and --apply.
+# Complete REVIEW.md, edit the nested SKILL.md.draft, set manifest status to
+# active, and rename SKILL.md.draft to SKILL.md only after review.
+
+# The reviewed nested manifest declares promotion.candidate_id,
 # candidate_digest, source_skill_id, and source_implementation_sha256 exactly.
 archmarshal candidate-promote . --pack <committed-pack> \
-  --candidate <id> --draft <reviewed-skill-draft> \
+  --candidate <id> --draft ../archmarshal-drafts/<envelope>/<skill-name> \
   --user-store <store> --pretty > promotion-plan.json
 # Repeat candidate-promote with the saved --plan-file, exact --expect-head,
 # exact --expect-plan, and --apply.
@@ -187,6 +205,16 @@ Rejected, deferred, or unreviewed candidates cannot be promoted.
 Replacing an active record with the same Skill id or preference key also
 requires `--replace-existing-skill` or `--replace-existing-preference` in both
 preview and apply.
+
+Inspect bounded health without changing either root:
+
+```text
+archmarshal doctor . --user-store <store> --history-limit 20 --pretty
+```
+
+An absent root is reported rather than created. Findings and retention
+suggestions are deterministic; the doctor never migrates, deletes, repairs, or
+normalizes content.
 
 New common-Skill copies use package format v2. The content address covers file
 bytes, permission and executable modes, all subdirectory modes, and empty

@@ -30,6 +30,11 @@ execute project or user Skill code; ArchMarshal treats those packages as data.
 | `1` | Lint found policy violations under the selected strictness. | JSON diagnostics on stdout. |
 | `2` | Review is still required, a safe precondition blocked the operation, input usage is invalid, or an expected operational error occurred. | JSON on stdout for reviewed workflow states; JSON on stderr for errors. |
 
+`doctor` writes its report to stdout. `healthy`, `warning`, and `absent` states
+return `0`; an `error` state returns `2` while retaining the complete report on
+stdout. The command accepts an absent root so automation can diagnose setup
+without causing directory creation.
+
 Invalid arguments use `error.code = "cli_usage_error"` and include a compact
 `error.details.usage` string. Library callers of `main`, `start_main`, and
 `end_main` receive integer `2` for invalid arguments; they are not terminated
@@ -39,3 +44,5 @@ zero-status `SystemExit` behavior.
 Consumers must branch on `mode`, `error.code`, and documented stage-specific
 fields. They must not infer permission to write from exit code `0`; all
 mutation-capable workflows still require their explicit reviewed-plan tokens.
+`candidate-draft --apply` requires the complete saved preview plus its exact
+plan and user-store HEAD tokens; a plan fragment is never sufficient.

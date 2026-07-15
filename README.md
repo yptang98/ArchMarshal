@@ -28,6 +28,8 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 
 ## What ArchMarshal Does
 
+- Runs as a **Codex-native management plugin**: users ask in natural language,
+  while the Python engine enforces exact plans, backups, and immutable state.
 - Keeps **global skills** tiny and highest-priority.
 - Lets **functional skills** grow richly with tags, triggers, and negative triggers.
 - Makes **common project skills** reproducible by keeping scripts, templates, references, and dependency files inside the skill path.
@@ -46,11 +48,18 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 - Records **quick**, **standard**, or **reproducible** closeouts in append-only, date-organized directories.
 - Catalogs multiple projects by recorded creation date and AND-filtered tags.
 - Extracts review-only common-skill and user-preference candidates from compact session manifests.
+- Converts an accepted common-Skill candidate into a create-only review
+  envelope whose nested package contains `SKILL.md.draft`, never an
+  auto-discoverable `SKILL.md`.
 - Promotes reviewed candidates into an isolated, bounded user Skill store with
   immutable packages that preserve executable modes and empty directories,
   expected-HEAD publication, provenance, and forward rollback.
 - Loads built-in CLI domains on demand while keeping user Skill code strictly
   data-only until a host deliberately chooses to execute it.
+- Provides a bounded, deterministic, strictly read-only `doctor` report for
+  ownership, control-plane schemas, transactions, immutable generations,
+  sessions, packages, formats, orphan/partial state, and filesystem capability
+  truth.
 - Provides Codex-facing `archmarshal-start` and `archmarshal-end` entrypoints; mutation-capable flows remain preview-first and create-only.
 
 ## Design Goals
@@ -65,23 +74,49 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 
 ## Quick Start
 
-ArchMarshal is a Python CLI that Codex or a human can invoke inside a project.
+ArchMarshal is a Codex-native management plugin. Users describe the outcome in
+natural language; the plugin inspects the project, selects the safe lifecycle,
+reviews exact plans, and invokes its deterministic Python engine internally.
+The CLI remains available for CI, automation, and reproducible debugging, but
+it is not the primary product experience.
 
-### 1. Install
+### 1. Install the Codex plugin
 
 ```bash
-python -m pip install "git+https://github.com/yptang98/ArchMarshal.git@<reviewed-full-commit-sha>"
-archmarshal --version
+codex plugin marketplace add yptang98/ArchMarshal --ref <reviewed-full-commit-sha>
+codex plugin add archmarshal@personal
 ```
 
-This repository is not currently a one-click Codex Skill package; the command
-above installs the actual CLI from an explicitly reviewed commit. Avoid an
-unpinned `main` install when reproducibility matters.
+Start a new Codex task after installation so it loads the plugin Skill. The
+plugin locates the matching engine inside the configured full Git marketplace
+snapshot and refuses a version mismatch before mutation. Avoid an unpinned
+`main` marketplace when reproducibility matters, and do not use a sparse
+checkout that omits the repository `src/` directory.
 
-### 2. Initialize a new project or adopt an existing one
+### 2. Use ArchMarshal directly in Codex
+
+Examples:
+
+```text
+用 ArchMarshal 安全接管这个已有项目和它的 Skills，先只诊断和预览。
+用 ArchMarshal 开始管理这个新项目，标签是 research、python。
+项目结束了，用 ArchMarshal 做认真整理，保留关键步骤和脚本哈希。
+用 ArchMarshal 从最近项目中抽象一个可复用 Skill，但不要自动激活。
+检查 ArchMarshal 健康状态，不要修改任何文件。
+```
+
+Codex runs the plugin workflow itself. It summarizes proposed paths, backup
+scope, activation state, exact plan/HEAD tokens, and collisions before an
+apply-capable change. Existing project and Skill files are never treated as
+normalization targets.
+
+### 3. What the plugin does for initialization and adoption
 
 For a new project, preview the complete control plane and project Skill
 scaffold first:
+
+The following commands document the underlying automation contract. The plugin
+normally invokes them for the user.
 
 ```bash
 archmarshal init . --tag research --tag python --pretty
@@ -248,13 +283,27 @@ archmarshal candidate-review . --pack .agent/inbox/learning/<pack> \
   --user-store ~/.archmarshal/user-store --plan-file acceptance-plan.json \
   --expect-head <head-or-none> --expect-plan <plan_digest> --apply --pretty
 
+archmarshal candidate-draft . --pack .agent/inbox/learning/<pack> \
+  --candidate <candidate-id> --user-store ~/.archmarshal/user-store \
+  --destination ../archmarshal-drafts/<draft-envelope> \
+  --pretty > candidate-draft-plan.json
+archmarshal candidate-draft . --pack .agent/inbox/learning/<pack> \
+  --candidate <candidate-id> --user-store ~/.archmarshal/user-store \
+  --destination ../archmarshal-drafts/<draft-envelope> \
+  --plan-file candidate-draft-plan.json --expect-head <exact-head> \
+  --expect-plan <plan_digest> --apply --pretty
+# Complete REVIEW.md, edit <draft-envelope>/<skill-name>/SKILL.md.draft,
+# set manifest status to active, then rename SKILL.md.draft to SKILL.md.
+
 archmarshal candidate-promote . --pack .agent/inbox/learning/<pack> \
   --candidate <candidate-id> --user-store ~/.archmarshal/user-store \
-  --draft ../reviewed-skill-draft --reason "reviewed reusable workflow" \
+  --draft ../archmarshal-drafts/<draft-envelope>/<skill-name> \
+  --reason "reviewed reusable workflow" \
   --pretty > promotion-plan.json
 archmarshal candidate-promote . --pack .agent/inbox/learning/<pack> \
   --candidate <candidate-id> --user-store ~/.archmarshal/user-store \
-  --draft ../reviewed-skill-draft --reason "reviewed reusable workflow" \
+  --draft ../archmarshal-drafts/<draft-envelope>/<skill-name> \
+  --reason "reviewed reusable workflow" \
   --plan-file promotion-plan.json --expect-head <head-or-none> \
   --expect-plan <plan_digest> --apply --pretty
 
@@ -265,7 +314,11 @@ archmarshal resolve . --task "prepare release" \
 Save preview JSON as UTF-8, UTF-8 BOM, or BOM-marked UTF-16 JSON. Preference
 candidates omit `--draft`. Promotion is blocked unless the latest decision for
 the exact candidate digest and provenance is `accepted`. A common-Skill draft
-must also declare this exact lineage in `manifest.yaml`:
+may be written manually or scaffolded with `candidate-draft`; it must declare
+this exact lineage in `manifest.yaml`. The scaffold destination must be absent,
+outside both the source project and user store, and under an existing real
+parent. Its commit marker records only the original baseline. Human edits are
+expected and are re-hashed by the separate promotion preview.
 
 Replacing an active record with the same Skill id or preference key requires
 `--replace-existing-skill` or `--replace-existing-preference` in both preview
@@ -422,8 +475,12 @@ archmarshal skill-index-rollback path/to/project --to <ancestor-sha256> --pretty
 archmarshal skill-index-rollback path/to/project --to <ancestor-sha256> \
   --expect-head <preview-head> --expect-plan <plan_digest> --apply --pretty
 archmarshal user-store-status path/to/user-store --pretty
+archmarshal doctor path/to/project --user-store path/to/user-store --pretty
 archmarshal candidate-review path/to/project --pack <committed-pack> \
   --candidate <candidate-id> --decision accept --user-store <store> --pretty
+archmarshal candidate-draft path/to/project --pack <committed-pack> \
+  --candidate <candidate-id> --user-store <store> \
+  --destination path/to/absent-draft-envelope --pretty
 ```
 
 The compatibility wrapper still works:
@@ -454,6 +511,14 @@ delete, force, or automatic promotion path for human-owned project or skill file
 - Imported/adopted Skills also remain quarantined until validation and an exact
   `skill-review` approval; package or routing drift makes that approval stale.
 - Directory scans do not follow symlinks, junctions, or Windows reparse points and enforce file/package bounds.
+- Candidate draft scaffolding creates only an absent, disjoint envelope,
+  publishes `COMMITTED.json` last, preserves partial output after interruption,
+  and emits `SKILL.md.draft` so an external host cannot discover the unfinished
+  scaffold as a Skill.
+- `doctor` is strictly read-only and retention suggestions always set
+  `automatic_action: false`. Its capability report explicitly states that the
+  current backend is not handle-relative and does not claim protection from a
+  same-permission process replacing ancestor directories during a write.
 - Reserved control-file conflicts block the whole adoption before managed files are written.
 - Closeout uses unique append-only directories, verifies copied script hashes,
   and writes `COMMITTED.json` last; incomplete or hash-mismatched sessions are
@@ -511,6 +576,7 @@ delete, force, or automatic promotion path for human-owned project or skill file
 - [x] Lint rule list
 - [x] Audit report sample
 - [x] Executable CLI package
+- [x] Validated Codex plugin, repository marketplace, and natural-language management Skill
 - [x] Codex-facing `archmarshal-start` and `archmarshal-end` entrypoints
 - [x] Governance lint rules
 - [x] Fail-soft YAML parsing for workspace, registry, skill manifests, and context modules
@@ -545,15 +611,20 @@ delete, force, or automatic promotion path for human-owned project or skill file
 - [x] Commit-last, tamper-evident learning packs
 - [x] Isolated immutable user Skill/preference store with forward rollback
 - [x] Explicit candidate decision and promotion workflow
+- [x] Accepted-candidate to non-activating, create-only Skill draft envelope
 - [x] User-store-aware task resolution and project start
 - [x] User Skill package v2 with mode and empty-directory preservation
 - [x] Lazy built-in CLI module loading for fast help/version bootstrap
+- [x] Bounded read-only doctor and durable format registry
+- [x] Reproducible 10,000-file / 100-Skill / multi-project scale benchmark
 
 ## Research Notes
 
 - [Agent Memory and Skill Organization Landscape](docs/agent-memory-landscape-2026.md): design direction for memory stores, memory records, retrieval budgets, and closeout-driven promotion.
 - [Product Readiness](docs/product-readiness.md): honest capability matrix, safety gates, and remaining work before a stable release.
 - [CLI Contract](docs/cli-contract.md): versioned JSON envelopes, streams, and exit codes for automation.
+- [Filesystem Safety Contract](docs/filesystem-safety.md): current threat model, capability truth, and handle-relative backend migration gates.
+- [Performance Baselines](docs/performance.md): bounded read-only benchmark method, reference results, and scaling work.
 
 ## Development
 
