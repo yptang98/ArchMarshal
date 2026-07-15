@@ -1,7 +1,8 @@
 # ArchMarshal Codex Workflow Reference
 
-Use the plugin wrapper at `../../scripts/invoke_archmarshal.py`; all paths below
-are arguments, not instructions for the user to type.
+Use the plugin launcher at `../../scripts/run_archmarshal.py`; it selects the
+active Python or a validated commit-scoped runtime and then calls the locked
+wrapper. All paths below are arguments, not instructions for the user to type.
 
 ## Read-only intake
 

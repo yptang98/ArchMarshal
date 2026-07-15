@@ -10,9 +10,17 @@ into ArchMarshal operations; do not make the user assemble CLI commands.
 
 ## Resolve the engine
 
-Use `../../scripts/invoke_archmarshal.py`, resolved relative to this Skill's
-directory. Run it with the active Python interpreter and pass ArchMarshal
-arguments as separate tokens. The wrapper uses this repository's `src/` when
+Use `../../scripts/run_archmarshal.py`, resolved relative to this Skill's
+directory. Run this stdlib-only launcher with the active Python interpreter and
+pass ArchMarshal arguments as separate tokens. It uses the active interpreter
+by default. When the installer created a validated, commit-scoped isolated
+runtime, it reads only
+`$CODEX_HOME/runtimes/archmarshal/current.json`, requires
+`archmarshal-runtime-v1`, the matching engine version, a full commit SHA, and an
+interpreter below that commit's runtime directory, then invokes the locked
+wrapper with it. An invalid or stale runtime pointer is a stop condition.
+
+The wrapper uses this repository's `src/` when
 available, otherwise the uniquely named configured ArchMarshal Git marketplace
 snapshot. It verifies the engine version, API, exact file list, and source-tree
 hash against `engine.lock.json` before import. It never falls back to an ambient
@@ -22,8 +30,9 @@ If the wrapper reports `archmarshal_engine_unavailable` or
 any `archmarshal_engine_*mismatch`, `archmarshal_engine_*invalid`, or
 `archmarshal_engine_lock_verification_failed` error, stop before mutation and
 explain the required reviewed, pinned installation. Use `--bootstrap-status`
-for a dependency-free identity check. Never install or upgrade dependencies
-automatically.
+for a dependency-free identity check. During project work, never install or
+upgrade dependencies automatically. A missing runtime must be repaired only by
+the separately authorized installation prompt, outside every project root.
 
 ## Route the request
 

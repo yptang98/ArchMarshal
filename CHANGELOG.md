@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.14.1 - 2026-07-16
+
+### Prompt-first installation documentation
+
+- Replace the unusable reviewed-SHA placeholder in the primary user journey
+  with a complete Codex prompt that resolves and verifies an immutable commit,
+  handles first install or guarded update, protects local checkouts, backs up
+  Codex-managed ArchMarshal state, and verifies bootstrap plus a read-only
+  dependency smoke test without touching the current project.
+- Refocus the README and getting-started guide on the Codex-native plugin
+  experience. Move raw CLI detail behind maintainer documentation, correct the
+  duplicated quick-start numbering and misleading UI/global-state boundaries,
+  and explicitly distinguish documented CostMarshal compatibility from a
+  future first-class bridge.
+
+### Isolated plugin runtime selection
+
+- Add a stdlib-only plugin launcher that defaults to the active Python but can
+  consume a bounded, version- and commit-scoped runtime pointer below
+  `CODEX_HOME`. The launcher rejects linked, stale, malformed, out-of-root, or
+  missing interpreters, invokes Python in isolated mode, and never provisions
+  dependencies during project work.
+- Teach the Codex Skill to use this launcher so the installation prompt can
+  repair missing dependencies in an isolated runtime without changing system
+  Python or any project. Engine source identity remains locked to the installed
+  marketplace and never falls back to the package installed in that runtime.
+
 ## 0.14.0 - 2026-07-15
 
 ### Codex plugin identity and distribution
