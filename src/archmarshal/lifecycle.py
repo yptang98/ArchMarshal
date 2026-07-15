@@ -8,14 +8,20 @@ from .closeout import closeout_workspace
 from .diagnostics import severity_counts
 from .inventory import collect_inventory
 from .lint import lint_workspace
+from .resolver import resolve_workspace
 
 
-def start_workspace(root: Path | str) -> dict[str, Any]:
+def start_workspace(
+    root: Path | str,
+    *,
+    task: str | None = None,
+    user_store: Path | str | None = None,
+) -> dict[str, Any]:
     inventory = collect_inventory(root)
     diagnostics = lint_workspace(root, inventory=inventory)
     counts = severity_counts(diagnostics)
     adoption_preview = plan_adoption(root)
-    return {
+    payload = {
         "tool": "archmarshal",
         "stage": "start",
         "root": str(inventory.root),
@@ -42,6 +48,11 @@ def start_workspace(root: Path | str) -> dict[str, Any]:
             "For an overlay-managed project, skill_sync_preview reports new or changed source skills without rewriting them.",
         ],
     }
+    if task:
+        payload["resolution"] = resolve_workspace(root, task, user_store=user_store)
+    elif user_store is not None:
+        payload["notes"].append("A user store is loaded only when --task is supplied.")
+    return payload
 
 
 def end_workspace(root: Path | str, used_skills: list[str] | None = None) -> dict[str, Any]:

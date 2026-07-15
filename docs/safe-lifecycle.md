@@ -27,6 +27,12 @@ rearrange the project itself.
     deleting paths.
 14. Closeout writes a hash manifest last. Incomplete or hash-mismatched sessions
     are preserved but excluded from learning.
+15. Closeout and learning apply only inside a root-bound, ArchMarshal-owned
+    workspace and hold one lifetime mutation lock.
+16. Adopted Skills are inactive until their exact package and routing revision
+    are approved. Global/highest policy requires a separate confirmation.
+17. Candidate promotion writes only to an explicitly initialized user store.
+    Apply requires the complete saved plan, exact plan digest, and exact HEAD.
 
 These constraints intentionally make ArchMarshal less aggressive than a general
 project formatter. A blocked or explicitly recoverable adoption is preferable
@@ -280,3 +286,59 @@ evidence. A future explicit migration may re-commit them after review.
 The command never edits global skills or user configuration automatically. This
 keeps the global layer small while still allowing deliberate improvement from
 cross-project evidence.
+
+## Reviewed User Skill Store
+
+The user store is a separate ownership domain, not a hidden rewrite of a project
+or a global Skill directory:
+
+```text
+<explicit-user-store>/
+|-- ownership.json
+|-- .archmarshal/
+|   |-- HEAD
+|   |-- HEAD.lock
+|   `-- objects/sha256/<generation>.json
+`-- packages/sha256/<package>/
+    |-- SKILL.md
+    |-- manifest.yaml
+    `-- COMMITTED.json
+```
+
+Initialization accepts only an absent or empty real directory whose parent
+already exists. `ownership.json` binds the canonical root, so copying or moving
+the marker cannot claim another location. A non-empty unowned directory is
+never adopted as a store. Every existing lexical path component is checked for
+links/junctions before canonicalization. If external content appears during
+initialization, ArchMarshal removes only its unchanged marker and leaves the
+external content untouched.
+
+Candidate review first verifies the committed learning pack under the owned
+source project's `.agent/inbox/learning/`. The candidate digest and compact
+session evidence are recorded as provenance. `accept`, `reject`, and `defer`
+publish immutable decision generations; they do not edit the pack or project.
+
+Promotion is separately previewed. A common Skill requires an explicit draft
+that passes the Codex Skill package contract and the ArchMarshal common-project
+manifest rules. The preview binds every draft file hash and its exact real
+directory; apply rechecks the directory before, during, and after a commit-last
+copy. Preferences are capped and reject known secrets and absolute paths. Apply
+requires all three reviewed inputs:
+
+1. the complete saved JSON preview (`--plan-file`);
+2. its exact `--expect-plan` digest; and
+3. its exact `--expect-head`, using `none` only when the preview says so.
+
+The store publishes a package commit marker before the generation object and
+advances only its internal `HEAD` under an OS lock and compare-and-swap. An
+interrupted committed package remains an inactive orphan until a matching plan
+finishes; it is never selected merely because it exists.
+Private copy temporaries live in a store staging directory outside immutable
+packages, so a hard interruption cannot turn an otherwise resumable package
+into a package with undeclared files.
+
+Rollback is forward-only. `user-store-rollback` copies an ancestor snapshot
+into a new generation whose parent is the current HEAD. Old generations and
+packages remain verifiable, while projects immediately stop resolving content
+that is absent from the new active snapshot. No project or Skill draft is
+restored, deleted, or rewritten.

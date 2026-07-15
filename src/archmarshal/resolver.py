@@ -5,11 +5,18 @@ from typing import Any
 
 from .adoption_tx import adoption_transaction_status
 from .inventory import collect_inventory
+from .skill_index import skill_review_subject_digest
+from .user_store import read_user_store_active
 
 HISTORICAL_KEYS = ["reports", "history", "archive", "cache"]
 
 
-def resolve_workspace(root: Path | str, task: str) -> dict[str, Any]:
+def resolve_workspace(
+    root: Path | str,
+    task: str,
+    *,
+    user_store: Path | str | None = None,
+) -> dict[str, Any]:
     transaction_before = adoption_transaction_status(root)
     inventory = collect_inventory(root)
     transaction_after = adoption_transaction_status(root)
@@ -23,6 +30,9 @@ def resolve_workspace(root: Path | str, task: str) -> dict[str, Any]:
         if transaction_after.get("state") != "none"
         else transaction_before
     )
+    user_state = read_user_store_active(user_store) if user_store is not None else None
+    workspace_matches = [] if transaction_incomplete else _match_skills(inventory.skills, task_text)
+    user_matches = _match_user_store_skills(user_state, task_text) if user_state else []
     return {
         "tool": "archmarshal",
         "root": str(inventory.root),
@@ -30,7 +40,10 @@ def resolve_workspace(root: Path | str, task: str) -> dict[str, Any]:
         "required_policy_skills": (
             [] if transaction_incomplete else _required_policy_skills(inventory.skills)
         ),
-        "suggested_skills": [] if transaction_incomplete else _match_skills(inventory.skills, task_text),
+        "suggested_skills": sorted(
+            [*workspace_matches, *user_matches],
+            key=lambda item: (-item["score"], str(item["id"]), str(item.get("origin"))),
+        ),
         "blocked_skills": _blocked_skills(
             inventory.skills,
             override_reason="adoption_transaction_incomplete"
@@ -40,6 +53,16 @@ def resolve_workspace(root: Path | str, task: str) -> dict[str, Any]:
         "adoption_transaction": transaction,
         "suggested_context_modules": _match_context_modules(inventory.context_modules, task_text),
         "suggested_memory_records": _match_memory_records(inventory.memory_records, task_text),
+        "user_store": (
+            {
+                "root": user_state["root"],
+                "head": user_state["head"],
+                "preference_count": len(user_state["preferences"]),
+            }
+            if user_state
+            else None
+        ),
+        "user_preferences": user_state["preferences"] if user_state else [],
         "memory_budget": {
             "max_records": 5,
             "max_tokens": 6000,
@@ -68,7 +91,7 @@ def _match_skills(skills: list[dict[str, Any]], task_text: str) -> list[dict[str
     for skill in skills:
         if (
             skill.get("status") not in {"active", "experimental"}
-            or _skill_activation_block_reason(skill) is not None
+            or skill_activation_block_reason(skill) is not None
         ):
             continue
         negative_matches = [
@@ -97,11 +120,34 @@ def _match_skills(skills: list[dict[str, Any]], task_text: str) -> list[dict[str
                 "path": skill.get("_skill_dir"),
                 "metadata_path": skill.get("_overlay_manifest_path") or skill.get("_manifest_path"),
                 "source_managed": _source_managed(skill),
+                "origin": "workspace",
                 "trigger_matches": trigger_matches,
                 "tag_matches": tag_matches,
             }
         )
     return sorted(matches, key=lambda item: (-item["score"], str(item["id"])))
+
+
+def _match_user_store_skills(
+    user_state: dict[str, Any],
+    task_text: str,
+) -> list[dict[str, Any]]:
+    virtual: list[dict[str, Any]] = []
+    for record in user_state.get("common_skills") or []:
+        if not isinstance(record, dict) or not isinstance(record.get("manifest"), dict):
+            continue
+        skill = dict(record["manifest"])
+        skill["_skill_dir"] = record.get("package_dir")
+        skill["_manifest_path"] = f"{record.get('package_dir')}/manifest.yaml"
+        skill["_has_skill_md"] = True
+        skill["_source_drift"] = "unchanged"
+        skill["_user_package_sha256"] = record.get("package_sha256")
+        virtual.append(skill)
+    matches = _match_skills(virtual, task_text)
+    for item in matches:
+        item["origin"] = "user_store"
+        item["user_store_head"] = user_state.get("head")
+    return matches
 
 
 def _required_policy_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -111,7 +157,7 @@ def _required_policy_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]
             skill.get("kind") != "global_skill"
             or skill.get("priority") != "highest"
             or skill.get("status") != "active"
-            or _skill_activation_block_reason(skill) is not None
+            or skill_activation_block_reason(skill) is not None
         ):
             continue
         required.append(
@@ -135,7 +181,7 @@ def _blocked_skills(
 ) -> list[dict[str, Any]]:
     blocked: list[dict[str, Any]] = []
     for skill in skills:
-        reason = override_reason or _skill_activation_block_reason(skill)
+        reason = override_reason or skill_activation_block_reason(skill)
         if reason is None:
             continue
         blocked.append(
@@ -152,11 +198,9 @@ def _blocked_skills(
     return sorted(blocked, key=lambda item: str(item["id"]))
 
 
-def _skill_activation_block_reason(skill: dict[str, Any]) -> str | None:
+def skill_activation_block_reason(skill: dict[str, Any]) -> str | None:
     if skill.get("_index_state") == "untracked":
         return "index_untracked"
-    if skill.get("review_state") == "needs_review":
-        return "metadata_needs_review"
     status = skill.get("status")
     if status not in {"active", "experimental"}:
         return f"status_{status or 'unknown'}"
@@ -167,6 +211,30 @@ def _skill_activation_block_reason(skill: dict[str, Any]) -> str | None:
     drift = skill.get("_source_drift")
     if drift and drift != "unchanged":
         return f"source_{drift}"
+    source = skill.get("source")
+    source_managed = bool(source.get("managed", True)) if isinstance(source, dict) else True
+    if not source_managed:
+        review_state = skill.get("review_state")
+        review = skill.get("review")
+        if review_state == "rejected":
+            return "metadata_rejected"
+        if review_state != "approved" or not isinstance(review, dict):
+            return "metadata_needs_review"
+        if review.get("decision") != "approved":
+            return "metadata_review_invalid"
+        try:
+            current_subject = skill_review_subject_digest(skill)
+        except (TypeError, ValueError):
+            return "metadata_review_invalid"
+        if review.get("subject_digest") != current_subject:
+            return "metadata_review_stale"
+        elevated = (
+            skill.get("kind") == "global_skill"
+            or skill.get("scope") == "global"
+            or skill.get("priority") == "highest"
+        )
+        if elevated and review.get("allow_global_policy") is not True:
+            return "global_policy_not_approved"
     return None
 
 

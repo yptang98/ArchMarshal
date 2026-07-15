@@ -829,6 +829,52 @@ def _lint_skills(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
     for skill in data["skills"]:
         skill_dir = str(skill.get("_skill_dir", ""))
         manifest_path = str(skill.get("_manifest_path", ""))
+        source_metadata = skill.get("source")
+        source_managed = (
+            bool(source_metadata.get("managed", True))
+            if isinstance(source_metadata, dict)
+            else True
+        )
+        if not source_managed:
+            validation = skill.get("validation")
+            validation_errors = (
+                validation.get("errors")
+                if isinstance(validation, dict) and isinstance(validation.get("errors"), list)
+                else []
+            )
+            for issue in validation_errors[:20]:
+                if not isinstance(issue, dict):
+                    continue
+                diagnostics.append(
+                    Diagnostic(
+                        str(issue.get("code") or "skill.package_invalid"),
+                        "error",
+                        str(issue.get("message") or "Skill package validation failed."),
+                        skill_dir,
+                        "Repair the human-owned Skill explicitly, then review the new exact package digest.",
+                    )
+                )
+            review_state = skill.get("review_state")
+            if review_state not in {"approved", "rejected"}:
+                diagnostics.append(
+                    Diagnostic(
+                        "skill.review_required",
+                        "warning",
+                        "Existing-project Skill metadata is quarantined until its exact package and routing digest are reviewed.",
+                        manifest_path,
+                        "Run archmarshal skill-review in preview mode, then apply the exact reviewed plan.",
+                    )
+                )
+            elif review_state == "rejected":
+                diagnostics.append(
+                    Diagnostic(
+                        "skill.review_rejected",
+                        "info",
+                        "This exact Skill package and routing revision was rejected and remains inactive.",
+                        manifest_path,
+                        "Review a later package revision if the source changes.",
+                    )
+                )
         if skill.get("_missing_manifest"):
             diagnostics.append(
                 Diagnostic(

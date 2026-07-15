@@ -24,6 +24,7 @@ from .safety import (
     is_link_or_reparse,
     sha256_file,
 )
+from .workspace_lock import workspace_mutation_lock
 
 FORMAT = "archmarshal-skill-index-v1"
 STATE_RELATIVE = Path(".agent/skill-overlays/.archmarshal")
@@ -102,6 +103,11 @@ def plan_skill_index(
             "state": "active",
             "manifest": _plain_manifest(manifest),
         }
+        if previous_records.get(source):
+            current_records[source]["manifest"] = _carry_review_decision(
+                previous_records[source].get("manifest"),
+                current_records[source]["manifest"],
+            )
         current_source_keys.add(source_key)
 
     records: list[dict[str, Any]] = []
@@ -173,6 +179,44 @@ def disabled_skill_index_plan() -> dict[str, Any]:
         "object_path": None,
         "disabled": True,
     }
+
+
+def skill_review_subject_digest(manifest: dict[str, Any]) -> str:
+    """Bind a review to exact package and routing metadata, excluding the decision itself."""
+    subject = _plain_manifest(
+        {key: value for key, value in manifest.items() if not str(key).startswith("_")}
+    )
+    subject.pop("review", None)
+    subject.pop("review_state", None)
+    return hashlib.sha256(
+        json.dumps(
+            subject,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _carry_review_decision(
+    previous: object,
+    current: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(previous, dict):
+        return current
+    review = previous.get("review")
+    if not isinstance(review, dict):
+        return current
+    decision = review.get("decision")
+    if decision not in {"approved", "rejected"}:
+        return current
+    subject_digest = skill_review_subject_digest(current)
+    if review.get("subject_digest") != subject_digest:
+        return current
+    carried = _plain_manifest(current)
+    carried["review_state"] = decision
+    carried["review"] = _plain_manifest(review)
+    return carried
 
 
 def commit_skill_index(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
@@ -621,34 +665,50 @@ def rollback_skill_index(
             "Skill rollback target, reason, or source preconditions differ from the reviewed plan.",
             details={"expected_plan": expected_plan, "actual_plan": plan_digest},
         )
-    backup_dir = root_path / ".agent" / "backups"
-    ensure_managed_path(root_path, backup_dir, purpose="Skill rollback backup directory")
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    backup_files = [
-        root_path / STATE_RELATIVE / HEAD_NAME,
-        root_path / _relative_object_path(str(plan["expected_head"])),
-        root_path / _relative_object_path(target),
-    ]
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    backup = create_backup(
-        root_path,
-        backup_files,
-        backup_dir / f"{timestamp}-pre-skill-index-rollback.zip",
-        reason="ArchMarshal skill index rollback before publishing a new audited generation.",
-    )
-    revalidated = plan_skill_index_rollback(
-        root_path,
-        target,
-        expected_head=expected_head,
-        reason=reason,
-        created_at=plan["generation"]["created_at"],
-    )
-    if revalidated["digest"] != plan["digest"]:
-        raise ArchMarshalError(
-            "skill_index_stale_plan",
-            "Rollback plan changed after backup; HEAD was not updated.",
+    with workspace_mutation_lock(root_path, operation="skill_index_rollback") as held:
+        revalidated = plan_skill_index_rollback(
+            root_path,
+            target,
+            expected_head=expected_head,
+            reason=reason,
+            created_at=plan["generation"]["created_at"],
         )
-    commit = commit_skill_index(root_path, revalidated)
+        if revalidated["digest"] != plan["digest"]:
+            raise ArchMarshalError(
+                "skill_index_stale_plan",
+                "Rollback plan changed before backup; HEAD was not updated.",
+            )
+        held.verify()
+        backup_dir = root_path / ".agent" / "backups"
+        ensure_managed_path(root_path, backup_dir, purpose="Skill rollback backup directory")
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup_files = [
+            root_path / STATE_RELATIVE / HEAD_NAME,
+            root_path / _relative_object_path(str(plan["expected_head"])),
+            root_path / _relative_object_path(target),
+        ]
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        backup = create_backup(
+            root_path,
+            backup_files,
+            backup_dir / f"{timestamp}-pre-skill-index-rollback.zip",
+            reason="ArchMarshal skill index rollback before publishing a new audited generation.",
+        )
+        held.verify()
+        revalidated = plan_skill_index_rollback(
+            root_path,
+            target,
+            expected_head=expected_head,
+            reason=reason,
+            created_at=plan["generation"]["created_at"],
+        )
+        if revalidated["digest"] != plan["digest"]:
+            raise ArchMarshalError(
+                "skill_index_stale_plan",
+                "Rollback plan changed after backup; HEAD was not updated.",
+            )
+        commit = commit_skill_index(root_path, revalidated)
+        held.verify()
     payload["mode"] = "rolled_back"
     payload["backup"] = backup
     payload["commit"] = commit
@@ -1557,4 +1617,5 @@ __all__ = [
     "rollback_skill_index",
     "skill_index_status",
     "skill_index_summary",
+    "skill_review_subject_digest",
 ]

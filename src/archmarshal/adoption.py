@@ -13,6 +13,7 @@ import yaml
 from .adoption_tx import adoption_transaction_status, apply_adoption_transaction
 from .errors import ArchMarshalError, require_workspace_root
 from .io import load_yaml_safe
+from .ownership import ownership_skill_index_mode, valid_ownership_marker, workspace_id
 from .safety import (
     create_backup,
     ensure_managed_path,
@@ -28,6 +29,8 @@ from .skill_index import (
     plan_skill_index,
     public_skill_index_plan,
 )
+from .skill_validation import validate_skill_package
+from .workspace_lock import WorkspaceMutationLock, workspace_mutation_lock
 
 SKILL_ROOT_CANDIDATES = (
     ".agents",
@@ -76,6 +79,35 @@ def adopt_workspace(
     expected_plan: str | None = None,
 ) -> dict[str, Any]:
     root_path = require_workspace_root(root)
+    if apply:
+        with workspace_mutation_lock(root_path, operation="adoption") as held:
+            return _adopt_workspace_locked(
+                root_path,
+                apply=True,
+                tags=tags,
+                backup_scope=backup_scope,
+                expected_plan=expected_plan,
+                held=held,
+            )
+    return _adopt_workspace_locked(
+        root_path,
+        apply=False,
+        tags=tags,
+        backup_scope=backup_scope,
+        expected_plan=expected_plan,
+        held=None,
+    )
+
+
+def _adopt_workspace_locked(
+    root_path: Path,
+    *,
+    apply: bool,
+    tags: list[str] | None,
+    backup_scope: str,
+    expected_plan: str | None,
+    held: WorkspaceMutationLock | None,
+) -> dict[str, Any]:
     built = _build_adoption(root_path, tags or [], backup_scope)
     if not apply:
         return _public_plan(built, applied=False)
@@ -116,6 +148,9 @@ def adopt_workspace(
             payload["notes"].append("A target appeared after planning; no managed files were written.")
             return payload
 
+    if held is not None:
+        held.verify()
+
     backup_dir = root_path / ".agent" / "backups"
     backup = create_backup(
         root_path,
@@ -123,6 +158,8 @@ def adopt_workspace(
         backup_dir / f"{built['timestamp']}-pre-adoption.zip",
         reason="ArchMarshal adoption before adding a non-destructive management overlay.",
     )
+    if held is not None:
+        held.verify()
 
     revalidated = (
         disabled_skill_index_plan()
@@ -140,6 +177,8 @@ def adopt_workspace(
             "skill_index_stale_plan",
             "Skill sources or HEAD changed after backup; no adoption targets were published.",
         )
+    if held is not None:
+        held.verify()
     transaction = apply_adoption_transaction(
         root_path,
         plan_digest=plan_digest,
@@ -150,6 +189,8 @@ def adopt_workspace(
         skill_index_plan=revalidated,
         backup=backup,
     )
+    if held is not None:
+        held.verify()
 
     payload = _public_plan(built, applied=True)
     payload["mode"] = "overlay_synced" if built["configured"] else "overlay_applied"
@@ -489,6 +530,10 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
             purpose="Skill package",
             entrypoint_only=source_dir.resolve() == root,
         )
+        validation = validate_skill_package(
+            source_dir,
+            enforce_folder_name=source_dir.resolve() != root,
+        )
         source_drift = _overlay_drift(
             root / overlay_manifest,
             entrypoint_hash=source_hash,
@@ -499,7 +544,11 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
             "name": display_name,
             "kind": kind,
             "version": declared.get("version") or "0.1.0",
-            "status": "disabled" if import_errors else declared.get("status") or "active",
+            "status": (
+                "disabled"
+                if import_errors or not validation["valid"]
+                else declared.get("status") or "active"
+            ),
             "priority": declared.get("priority")
             or ("highest" if kind == "global_skill" else "normal"),
             "scope": scope,
@@ -508,9 +557,8 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
             "triggers": declared.get("triggers") or [display_name.replace("-", " ")],
             "negative_triggers": declared.get("negative_triggers")
             or [f"tasks unrelated to {display_name.replace('-', ' ')}"],
-            "review_state": "needs_review"
-            if import_errors
-            else ("imported" if declared else "inferred"),
+            "review_state": "needs_review",
+            "validation": validation,
             "metadata_provenance": {
                 "source_manifest": source_manifest.relative_to(root).as_posix()
                 if source_manifest.exists()
@@ -530,6 +578,8 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
                     - set(declared)
                 ),
                 "errors": import_errors,
+                "review_required": True,
+                "source_trust": "untrusted_existing_project",
             },
             "source": {
                 "skill_dir": source,
@@ -756,9 +806,7 @@ def _workspace_yaml(
 
 
 def _workspace_id(root: Path) -> str:
-    return hashlib.sha256(
-        f"archmarshal-workspace-v1\x00{root.resolve()}".encode("utf-8")
-    ).hexdigest()[:32]
+    return workspace_id(root)
 
 
 def _ownership_json(root: Path, *, index_required: bool) -> str:
@@ -966,30 +1014,6 @@ def _is_archmarshal_workspace(path: Path) -> bool:
         and item.get("path") == ".agent/INDEX.md"
         for item in artifacts
     )
-
-
-def valid_ownership_marker(path: Path) -> bool:
-    if not path.is_file() or is_link_or_reparse(path) or path.stat().st_size > 64 * 1024:
-        return False
-    try:
-        marker = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return False
-    return (
-        isinstance(marker, dict)
-        and marker.get("format") == "archmarshal-workspace-ownership-v1"
-        and marker.get("managed_root") == "."
-        and marker.get("skill_index") in {"required", "disabled"}
-        and marker.get("source_mutation") is False
-        and marker.get("workspace_id") == _workspace_id(path.parent.parent)
-    )
-
-
-def ownership_skill_index_mode(path: Path) -> str | None:
-    if not valid_ownership_marker(path):
-        return None
-    marker = json.loads(path.read_text(encoding="utf-8"))
-    return str(marker["skill_index"])
 
 
 def _workspace_uses_overlays(path: Path) -> bool:

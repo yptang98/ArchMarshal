@@ -20,10 +20,23 @@ from .learning import learn_from_projects
 from .lifecycle import end_workspace, start_workspace
 from .lint import lint_workspace
 from .planner import plan_workspace
+from .promotion import (
+    load_reviewed_plan,
+    promote_learning_candidate,
+    review_learning_candidate,
+)
 from .resolver import resolve_workspace
 from .safety import restore_backup, verify_backup
 from .session import CLOSEOUT_LEVELS, record_closeout
 from .skill_index import rollback_skill_index, skill_index_status
+from .skill_review import review_workspace_skill
+from .user_store import (
+    apply_user_store_forward_rollback,
+    apply_user_store_initialization,
+    plan_user_store_forward_rollback,
+    plan_user_store_initialization,
+    user_store_status,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -45,6 +58,7 @@ def _main_impl(argv: list[str] | None = None) -> int:
     _add_adoption_arguments(adopt_parser)
     start_parser = _add_root_command(subparsers, "start", "Start ArchMarshal project governance.")
     _add_adoption_arguments(start_parser)
+    _add_resolution_arguments(start_parser, task_required=False)
     _add_root_command(
         subparsers,
         "adoption-status",
@@ -104,6 +118,28 @@ def _main_impl(argv: list[str] | None = None) -> int:
     restore_backup_parser.add_argument("destination", help="New directory to create.")
     restore_backup_parser.add_argument("--apply", action="store_true", help="Create the destination.")
     restore_backup_parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+    user_store_init_parser = subparsers.add_parser(
+        "user-store-init",
+        help="Preview or initialize an isolated, ArchMarshal-owned user Skill store.",
+    )
+    _add_user_store_plan_arguments(user_store_init_parser, include_head=False)
+    user_store_status_parser = subparsers.add_parser(
+        "user-store-status",
+        help="Verify an isolated user Skill store without modifying it.",
+    )
+    user_store_status_parser.add_argument("user_store", help="User Skill store root.")
+    user_store_status_parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+    user_store_rollback_parser = subparsers.add_parser(
+        "user-store-rollback",
+        help="Publish a forward rollback generation from a reviewed ancestor.",
+    )
+    _add_user_store_plan_arguments(user_store_rollback_parser, include_head=True)
+    user_store_rollback_parser.add_argument(
+        "--to", required=True, help="Full SHA-256 digest of an ancestor generation."
+    )
+    user_store_rollback_parser.add_argument(
+        "--reason", default="", help="Short rollback reason; do not include secrets."
+    )
     skill_status_parser = _add_root_command(
         subparsers,
         "skill-index-status",
@@ -146,6 +182,60 @@ def _main_impl(argv: list[str] | None = None) -> int:
         "--apply",
         action="store_true",
         help="Back up the current index and publish the reviewed rollback generation.",
+    )
+    skill_review_parser = _add_root_command(
+        subparsers,
+        "skill-review",
+        "Approve or reject an exact indexed Skill package and routing revision.",
+    )
+    skill_review_parser.add_argument(
+        "--source",
+        required=True,
+        help="Indexed workspace-relative Skill source path.",
+    )
+    skill_review_parser.add_argument(
+        "--decision",
+        required=True,
+        choices=("approve", "reject"),
+        help="Human decision for this exact package and routing digest.",
+    )
+    skill_review_parser.add_argument("--reviewer", default="human", help="Short reviewer identity.")
+    skill_review_parser.add_argument("--reason", default="", help="Short review reason; do not include secrets.")
+    skill_review_parser.add_argument(
+        "--allow-global-policy",
+        action="store_true",
+        help="Separately confirm global or highest-priority policy activation.",
+    )
+    skill_review_parser.add_argument(
+        "--expect-head",
+        help="Exact Skill index HEAD from preview; required with --apply.",
+    )
+    skill_review_parser.add_argument(
+        "--expect-plan",
+        help="Exact review plan digest from preview; required with --apply.",
+    )
+    skill_review_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Back up the index and publish the reviewed immutable decision.",
+    )
+    candidate_review_parser = _add_root_command(
+        subparsers,
+        "candidate-review",
+        "Record a review decision for an exact committed learning candidate.",
+    )
+    _add_candidate_arguments(candidate_review_parser)
+    candidate_review_parser.add_argument(
+        "--decision", required=True, choices=("accept", "reject", "defer")
+    )
+    candidate_promote_parser = _add_root_command(
+        subparsers,
+        "candidate-promote",
+        "Promote an exact committed candidate into the isolated user store.",
+    )
+    _add_candidate_arguments(candidate_promote_parser)
+    candidate_promote_parser.add_argument(
+        "--draft", help="Reviewed common-Skill draft directory; required for Skill candidates."
     )
     end_parser = _add_root_command(subparsers, "end", "Close out ArchMarshal project governance.")
     end_parser.add_argument(
@@ -212,7 +302,7 @@ def _main_impl(argv: list[str] | None = None) -> int:
         "resolve",
         "Suggest relevant skills and context modules for a task.",
     )
-    resolve_parser.add_argument("--task", required=True, help="Task description to resolve.")
+    _add_resolution_arguments(resolve_parser, task_required=True)
     lint_parser = _add_root_command(subparsers, "lint", "Run governance lint rules.")
     lint_parser.add_argument(
         "--strict",
@@ -229,6 +319,43 @@ def _main_impl(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "backup-restore":
         payload = restore_backup(args.archive, args.destination, apply=args.apply)
+        _print_json(payload, args.pretty)
+        return _payload_exit_code(payload)
+    if args.command == "user-store-status":
+        payload = user_store_status(args.user_store)
+        _print_json(payload, args.pretty)
+        return 0 if payload.get("state") in {"absent", "uninitialized", "healthy"} else 2
+    if args.command == "user-store-init":
+        if args.apply:
+            plan = _required_reviewed_plan(args.plan_file)
+            payload = apply_user_store_initialization(
+                args.user_store,
+                plan,
+                expected_plan=_required_arg(args.expect_plan, "--expect-plan"),
+            )
+        else:
+            plan = plan_user_store_initialization(args.user_store)
+            payload = _user_store_plan_envelope(plan, "user_store_initialize")
+        _print_json(payload, args.pretty)
+        return _payload_exit_code(payload)
+    if args.command == "user-store-rollback":
+        if args.apply:
+            plan = _required_reviewed_plan(args.plan_file)
+            _verify_user_store_rollback_request(plan, target=args.to, reason=args.reason)
+            expected_head = _expected_head_from_token(
+                _required_arg(args.expect_head, "--expect-head")
+            )
+            payload = apply_user_store_forward_rollback(
+                args.user_store,
+                plan,
+                expected_head=expected_head,
+                expected_plan=_required_arg(args.expect_plan, "--expect-plan"),
+            )
+        else:
+            plan = plan_user_store_forward_rollback(
+                args.user_store, args.to, reason=args.reason
+            )
+            payload = _user_store_plan_envelope(plan, "user_store_rollback")
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
     root = require_workspace_root(args.root)
@@ -290,6 +417,50 @@ def _main_impl(argv: list[str] | None = None) -> int:
         )
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
+    if args.command == "skill-review":
+        payload = review_workspace_skill(
+            root,
+            args.source,
+            decision=args.decision,
+            reviewer=args.reviewer,
+            reason=args.reason,
+            allow_global_policy=args.allow_global_policy,
+            expected_head=args.expect_head,
+            expected_plan=args.expect_plan,
+            apply=args.apply,
+        )
+        _print_json(payload, args.pretty)
+        return _payload_exit_code(payload)
+    if args.command == "candidate-review":
+        payload = review_learning_candidate(
+            root,
+            args.pack,
+            args.candidate,
+            args.user_store,
+            decision=args.decision,
+            reason=args.reason,
+            expected_head_token=args.expect_head,
+            expected_plan=args.expect_plan,
+            reviewed_plan=_optional_reviewed_plan(args.plan_file),
+            apply=args.apply,
+        )
+        _print_json(payload, args.pretty)
+        return _payload_exit_code(payload)
+    if args.command == "candidate-promote":
+        payload = promote_learning_candidate(
+            root,
+            args.pack,
+            args.candidate,
+            args.user_store,
+            draft=args.draft,
+            reason=args.reason,
+            expected_head_token=args.expect_head,
+            expected_plan=args.expect_plan,
+            reviewed_plan=_optional_reviewed_plan(args.plan_file),
+            apply=args.apply,
+        )
+        _print_json(payload, args.pretty)
+        return _payload_exit_code(payload)
     if args.command == "adopt":
         payload = adopt_workspace(
             root,
@@ -309,14 +480,16 @@ def _main_impl(argv: list[str] | None = None) -> int:
                 backup_scope=args.backup_scope,
                 expected_plan=args.expect_plan,
             )
-            payload = start_workspace(root)
+            payload = start_workspace(root, task=args.task, user_store=args.user_store)
             payload["adoption"] = adoption
             if adoption["mode"] in {"overlay_applied", "overlay_synced", "review_required"}:
                 payload["mode"] = adoption["mode"]
             _print_json(payload, args.pretty)
             return _payload_exit_code(adoption)
         else:
-            _print_json(start_workspace(root), args.pretty)
+            _print_json(
+                start_workspace(root, task=args.task, user_store=args.user_store), args.pretty
+            )
         return 0
     if args.command == "catalog":
         _print_json(
@@ -372,7 +545,7 @@ def _main_impl(argv: list[str] | None = None) -> int:
         _print_json(closeout_workspace(root, args.used_skill), args.pretty)
         return 0
     if args.command == "resolve":
-        _print_json(resolve_workspace(root, args.task), args.pretty)
+        _print_json(resolve_workspace(root, args.task, user_store=args.user_store), args.pretty)
         return 0
     parser.error(f"unknown command {args.command}")
     return 2
@@ -387,9 +560,10 @@ def _start_main_impl(argv: list[str] | None = None) -> int:
     parser.add_argument("root", nargs="?", default=".", help="Workspace root to inspect.")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
     _add_adoption_arguments(parser)
+    _add_resolution_arguments(parser, task_required=False)
     args = parser.parse_args(argv)
     root = require_workspace_root(args.root)
-    payload = start_workspace(root)
+    payload = start_workspace(root, task=args.task, user_store=args.user_store)
     if args.apply:
         payload["adoption"] = adopt_workspace(
             root,
@@ -398,7 +572,9 @@ def _start_main_impl(argv: list[str] | None = None) -> int:
             backup_scope=args.backup_scope,
             expected_plan=args.expect_plan,
         )
-        payload = start_workspace(root) | {"adoption": payload["adoption"]}
+        payload = start_workspace(
+            root, task=args.task, user_store=args.user_store
+        ) | {"adoption": payload["adoption"]}
         if payload["adoption"]["mode"] in {
             "overlay_applied",
             "overlay_synced",
@@ -473,6 +649,68 @@ def _add_adoption_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_resolution_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    task_required: bool,
+) -> None:
+    parser.add_argument(
+        "--task",
+        required=task_required,
+        default=None,
+        help="Task description used for read-only Skill and context resolution.",
+    )
+    parser.add_argument(
+        "--user-store",
+        help="Optional isolated ArchMarshal user Skill store to resolve alongside the project.",
+    )
+
+
+def _add_user_store_plan_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    include_head: bool,
+) -> None:
+    parser.add_argument("user_store", help="User Skill store root.")
+    parser.add_argument("--apply", action="store_true", help="Apply the exact saved preview plan.")
+    parser.add_argument(
+        "--plan-file",
+        help="UTF-8 JSON file containing the complete reviewed preview; required with --apply.",
+    )
+    parser.add_argument(
+        "--expect-plan", help="Exact plan digest from the saved preview; required with --apply."
+    )
+    if include_head:
+        parser.add_argument(
+            "--expect-head",
+            help="Exact HEAD from preview, or 'none'; required with --apply.",
+        )
+    parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+
+
+def _add_candidate_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--pack",
+        required=True,
+        help="Committed pack directory under the owned project's .agent/inbox/learning/.",
+    )
+    parser.add_argument("--candidate", required=True, help="Exact candidate id from the pack.")
+    parser.add_argument("--user-store", required=True, help="Owned user Skill store root.")
+    parser.add_argument("--reason", default="", help="Short decision reason; do not include secrets.")
+    parser.add_argument("--apply", action="store_true", help="Apply the exact saved preview plan.")
+    parser.add_argument(
+        "--plan-file",
+        help="UTF-8 JSON file containing the complete reviewed preview; required with --apply.",
+    )
+    parser.add_argument(
+        "--expect-head",
+        help="Exact user-store HEAD from preview, or 'none'; required with --apply.",
+    )
+    parser.add_argument(
+        "--expect-plan", help="Exact plan digest from the saved preview; required with --apply."
+    )
+
+
 def _add_recording_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--level", choices=CLOSEOUT_LEVELS, help="Closeout recording depth.")
     parser.add_argument("--apply", action="store_true", help="Write a new append-only closeout directory.")
@@ -497,6 +735,83 @@ def _add_recording_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Reference run-script shell; defaults to PowerShell on Windows and Bash elsewhere.",
     )
+
+
+def _user_store_plan_envelope(plan: dict[str, Any], stage: str) -> dict[str, Any]:
+    return {
+        "tool": "archmarshal",
+        "stage": stage,
+        "mode": "propose_only",
+        "expected_head": plan.get("expected_head"),
+        "expected_head_token": plan.get("expected_head") or "none",
+        "plan_digest": plan["plan_digest"],
+        "apply_precondition": (
+            "--plan-file <saved-preview.json> --expect-plan <plan_digest> --apply"
+            if plan.get("kind") == "initialize"
+            else (
+                "--plan-file <saved-preview.json> --expect-head <head|none> "
+                "--expect-plan <plan_digest> --apply"
+            )
+        ),
+        "user_store_plan": plan,
+        "source_mutation": False,
+        "notes": [
+            "Save and review this complete JSON preview before apply.",
+            "Apply fails closed if the plan, current HEAD, root identity, or package bytes change.",
+        ],
+    }
+
+
+def _optional_reviewed_plan(path: str | None) -> dict[str, Any] | None:
+    return load_reviewed_plan(path) if path else None
+
+
+def _required_reviewed_plan(path: str | None) -> dict[str, Any]:
+    if not path:
+        raise ArchMarshalError(
+            "reviewed_plan_required",
+            "Apply requires --plan-file with the complete saved preview.",
+        )
+    return load_reviewed_plan(path)
+
+
+def _required_arg(value: str | None, flag: str) -> str:
+    if not value:
+        raise ArchMarshalError(
+            "reviewed_plan_required", f"Apply requires {flag} from the saved preview."
+        )
+    return value
+
+
+def _expected_head_from_token(token: str) -> str | None:
+    if token == "none":
+        return None
+    if len(token) != 64 or any(character not in "0123456789abcdef" for character in token):
+        raise ArchMarshalError(
+            "expected_head_invalid", "Expected HEAD must be a lowercase SHA-256 digest or 'none'."
+        )
+    return token
+
+
+def _verify_user_store_rollback_request(
+    plan: dict[str, Any],
+    *,
+    target: str,
+    reason: str,
+) -> None:
+    generation = plan.get("generation")
+    operation = generation.get("operation") if isinstance(generation, dict) else None
+    if (
+        plan.get("kind") != "rollback"
+        or not isinstance(operation, dict)
+        or operation.get("kind") != "rollback"
+        or operation.get("target") != target
+        or operation.get("reason") != reason.strip()
+    ):
+        raise ArchMarshalError(
+            "reviewed_plan_argument_mismatch",
+            "Apply target and reason must exactly match the saved rollback preview.",
+        )
 
 
 def _payload_exit_code(payload: dict[str, Any]) -> int:

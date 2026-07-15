@@ -23,6 +23,7 @@ from .safety import (
     verify_backup,
 )
 from .skill_index import commit_skill_index, load_skill_index
+from .workspace_lock import workspace_mutation_lock
 
 FORMAT = "archmarshal-adoption-transaction-v1"
 RECEIPT_FORMAT = "archmarshal-adoption-receipt-v1"
@@ -176,26 +177,29 @@ def recover_adoption_transaction(
             "Recovery apply requires the exact transaction id and plan digest from preview."
         )
         return payload
-    held = _acquire_lock(root_path)
-    try:
-        journal = _load_active_journal(root_path)
-        if (
-            journal["transaction_id"] != expected_transaction
-            or journal["plan_digest"] != expected_plan
-        ):
-            raise ArchMarshalError(
-                "adoption_recovery_stale_plan",
-                "The active adoption transaction no longer matches the reviewed recovery preview.",
-                details={
-                    "expected_transaction": expected_transaction,
-                    "actual_transaction": journal["transaction_id"],
-                    "expected_plan": expected_plan,
-                    "actual_plan": journal["plan_digest"],
-                },
-            )
-        result = _complete_transaction(root_path, journal, held)
-    finally:
-        _release_lock(held)
+    with workspace_mutation_lock(root_path, operation="adoption_recovery") as workspace_held:
+        held = _acquire_lock(root_path)
+        try:
+            journal = _load_active_journal(root_path)
+            if (
+                journal["transaction_id"] != expected_transaction
+                or journal["plan_digest"] != expected_plan
+            ):
+                raise ArchMarshalError(
+                    "adoption_recovery_stale_plan",
+                    "The active adoption transaction no longer matches the reviewed recovery preview.",
+                    details={
+                        "expected_transaction": expected_transaction,
+                        "actual_transaction": journal["transaction_id"],
+                        "expected_plan": expected_plan,
+                        "actual_plan": journal["plan_digest"],
+                    },
+                )
+            workspace_held.verify()
+            result = _complete_transaction(root_path, journal, held)
+            workspace_held.verify()
+        finally:
+            _release_lock(held)
     payload["mode"] = "recovered"
     payload["result"] = result
     payload["transaction"] = adoption_transaction_status(root_path)

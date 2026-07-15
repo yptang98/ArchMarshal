@@ -47,6 +47,18 @@ during either preview or apply.
 Drifted skills are also excluded from resolver activation until this review is
 completed.
 
+Skills imported from an existing project start quarantined. Preview and then
+apply an exact review decision before use:
+
+```text
+archmarshal skill-review . --source skills/example --decision approve \
+  --expect-head <head> --pretty
+archmarshal skill-review . --source skills/example --decision approve \
+  --expect-head <head> --expect-plan <plan_digest> --apply --pretty
+```
+
+Global/highest policy also requires `--allow-global-policy` in both calls.
+
 An interrupted adoption is not rolled back by deleting visible paths. Inspect
 and safely finish it instead:
 
@@ -113,6 +125,28 @@ After repeated sessions, create a review-only learning pack:
 ```text
 archmarshal learn . --include-root ../another-project --apply --pretty
 ```
+
+Promotion is optional. Initialize a separate user store, save its preview as
+UTF-8 JSON, and apply only that complete plan:
+
+```text
+archmarshal user-store-init <store> --pretty > init-plan.json
+archmarshal user-store-init <store> --plan-file init-plan.json \
+  --expect-plan <plan_digest> --apply
+
+archmarshal candidate-review . --pack <committed-pack> \
+  --candidate <id> --decision defer --user-store <store> --pretty
+archmarshal candidate-promote . --pack <committed-pack> \
+  --candidate <id> --draft <reviewed-skill-draft> \
+  --user-store <store> --pretty > promotion-plan.json
+# Repeat candidate-promote with the saved --plan-file, exact --expect-head,
+# exact --expect-plan, and --apply.
+
+archmarshal-start . --task "prepare release" --user-store <store> --pretty
+```
+
+Preference candidates omit `--draft`. The store holds copies and immutable
+metadata; the source project, candidate pack, and draft remain unchanged.
 
 ## Rule
 

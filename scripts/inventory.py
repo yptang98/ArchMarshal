@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Compatibility wrapper for the package CLI."""
 
+# ruff: noqa: E402, I001 -- the source checkout path must be inserted before import.
+
 from __future__ import annotations
 
 import sys

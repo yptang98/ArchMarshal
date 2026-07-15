@@ -1034,6 +1034,7 @@ def test_closeout_plan_binds_stable_path_and_exact_bytes(
 ) -> None:
     root = tmp_path / "project"
     root.mkdir()
+    _apply_adoption(root)
     instants = iter(
         [
             datetime(2026, 7, 15, 1, 2, 3, tzinfo=timezone.utc),

@@ -721,9 +721,10 @@ def test_adoption_preview_is_read_only_and_apply_uses_skill_overlays(tmp_path: P
     assert inventory.skills[0]["_skill_dir"] == ".codex/skills/release-helper"
     assert inventory.workspace["management_mode"] == "overlay"
     resolved = resolve_workspace(root, "release helper")
-    assert resolved["suggested_skills"][0]["path"] == ".codex/skills/release-helper"
-    assert resolved["suggested_skills"][0]["source_managed"] is False
-    assert lint_workspace(root) == []
+    assert resolved["suggested_skills"] == []
+    assert resolved["blocked_skills"][0]["reason"] == "metadata_needs_review"
+    assert inventory.skills[0]["source"]["managed"] is False
+    assert "skill.review_required" in {item.rule for item in lint_workspace(root)}
 
 
 def test_adoption_never_overwrites_conflicting_control_files(tmp_path: Path) -> None:
@@ -757,6 +758,7 @@ def test_skill_overlay_cannot_escape_project_root(tmp_path: Path) -> None:
 
 def test_reproducible_closeout_is_append_only_and_snapshots_scripts(tmp_path: Path) -> None:
     root = copy_example(tmp_path, "simple-project")
+    _apply_adoption(root)
     script = root / "run_demo.py"
     script.write_text("print('demo')\n", encoding="utf-8")
     source_hash = sha256_file(script)
@@ -831,6 +833,7 @@ def test_reproducible_closeout_blocks_inline_secrets(tmp_path: Path) -> None:
 
 def test_learning_creates_review_only_candidates_from_repeated_sessions(tmp_path: Path) -> None:
     root = copy_example(tmp_path, "simple-project")
+    _apply_adoption(root)
     for index in range(2):
         _apply_closeout(
             root,
@@ -845,10 +848,11 @@ def test_learning_creates_review_only_candidates_from_repeated_sessions(tmp_path
     result = learn_from_projects([root], apply=True)
 
     assert result["mode"] == "candidate_pack_created"
-    assert result["common_skill_candidates"][0]["id"] == "skill.functional.doc-summary"
+    assert result["common_skill_candidates"][0]["skill_id"] == "skill.functional.doc-summary"
+    assert result["common_skill_candidates"][0]["candidate_id"].startswith("candidate.skill.")
     assert result["common_skill_candidates"][0]["promotion_policy"] == "human_review_required"
     assert result["preference_candidates"][0]["value"] == "documentation"
-    candidate_pack = root / result["created"]
+    candidate_pack = root / result["created"] / "candidates.yaml"
     payload = yaml.safe_load(candidate_pack.read_text(encoding="utf-8"))
     assert payload["limits"]["automatic_global_skill_mutation"] is False
     assert payload["limits"]["raw_history_included"] is False

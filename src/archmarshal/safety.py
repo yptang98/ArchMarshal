@@ -205,7 +205,13 @@ def create_text_exclusive(path: Path, content: str) -> None:
     create_bytes_exclusive(path, content.encode("utf-8"))
 
 
-def create_bytes_exclusive(path: Path, content: bytes, *, mode: int = 0o644) -> None:
+def create_bytes_exclusive(
+    path: Path,
+    content: bytes,
+    *,
+    mode: int = 0o644,
+    temporary_directory: Path | None = None,
+) -> None:
     """Durably publish complete bytes with create-only, same-filesystem semantics."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if is_link_or_reparse(path.parent):
@@ -214,7 +220,15 @@ def create_bytes_exclusive(path: Path, content: bytes, *, mode: int = 0o644) -> 
             "Create-only destination parent must not be a symbolic link or junction.",
             details={"path": str(path.parent)},
         )
-    temporary = path.parent / f".am-{uuid.uuid4().hex}.tmp"
+    temporary_parent = temporary_directory or path.parent
+    temporary_parent.mkdir(parents=True, exist_ok=True)
+    if is_link_or_reparse(temporary_parent) or not temporary_parent.is_dir():
+        raise ArchMarshalError(
+            "unsafe_managed_link",
+            "Create-only staging directory must be a real directory.",
+            details={"path": str(temporary_parent)},
+        )
+    temporary = temporary_parent / f".am-{uuid.uuid4().hex}.tmp"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     descriptor = os.open(temporary, flags, mode)
     identity = _descriptor_identity(descriptor)
@@ -226,7 +240,8 @@ def create_bytes_exclusive(path: Path, content: bytes, *, mode: int = 0o644) -> 
         os.link(temporary, path)
         fsync_directory(path.parent)
     finally:
-        _unlink_created_path(temporary, identity)
+        if _unlink_created_path(temporary, identity):
+            fsync_directory(temporary_parent)
 
 
 def fsync_directory(path: Path) -> None:

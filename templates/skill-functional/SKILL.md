@@ -1,3 +1,8 @@
+---
+name: skill-functional
+description: Template for a reusable functional capability with explicit routing boundaries.
+---
+
 # Functional Skill Template
 
 Use this skill when the task matches the declared functional capability and does not require project-private knowledge.

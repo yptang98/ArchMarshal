@@ -1,3 +1,8 @@
+---
+name: skill-common-project
+description: Template for a reproducible engineering workflow shared across projects.
+---
+
 # Common Project Skill Template
 
 Use this skill for a reproducible engineering workflow that can be applied across projects.

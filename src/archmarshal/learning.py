@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,14 +12,18 @@ import yaml
 from .errors import ArchMarshalError, require_workspace_root
 from .inventory import collect_inventory
 from .io import load_yaml_safe
+from .ownership import require_owned_workspace, workspace_id
 from .safety import (
-    create_text_exclusive,
+    create_bytes_exclusive,
     ensure_managed_path,
     ensure_path_within,
     files_below_no_links,
+    is_link_or_reparse,
+    sha256_file,
     unique_path,
 )
 from .session import verify_committed_session
+from .workspace_lock import workspace_mutation_lock
 
 
 def learn_from_projects(
@@ -38,7 +43,7 @@ def learn_from_projects(
         raise ValueError("At least one project root is required.")
     sessions: list[dict[str, Any]] = []
     legacy_unverified_session_count = 0
-    skill_metadata: dict[tuple[str, str], dict[str, Any]] = {}
+    skill_metadata: dict[tuple[str, str, str], dict[str, Any]] = {}
     for root in project_roots:
         for skill in collect_inventory(root).skills:
             skill_id = str(skill.get("id") or "")
@@ -51,12 +56,12 @@ def learn_from_projects(
                 if not implementation_hash:
                     seed = f"{root}:{skill.get('_skill_dir')}"
                     implementation_hash = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-                skill_metadata[(str(root), skill_id)] = {
+                skill_metadata[(str(root), skill_id, implementation_hash)] = {
                     "id": skill_id,
                     "name": skill.get("name"),
                     "kind": skill.get("kind"),
                     "source": skill.get("_skill_dir"),
-                    "project": str(root),
+                    "workspace_id": workspace_id(root),
                     "implementation_sha256": implementation_hash,
                 }
         loaded_sessions, legacy_count = _load_sessions(root)
@@ -69,18 +74,51 @@ def learn_from_projects(
     script_observations: dict[str, set[str]] = {}
     script_sources: dict[str, set[tuple[str, str]]] = {}
     usage_by_id: dict[str, set[str]] = {}
+    unversioned_skill_usage_count = 0
+    unreviewed_skill_usage_count = 0
+    ineligible_skill_usage_count = 0
+    session_evidence = {
+        f"{session['_project_root']}::{session['_session_path']}": {
+            "workspace_id": workspace_id(session["_project_root"]),
+            "session": session["_session_path"],
+            "commit_sha256": session.get("_session_commit_sha256"),
+        }
+        for session in sessions
+    }
     for session in sessions:
         session_id = f"{session['_project_root']}::{session['_session_path']}"
         project = str(session["_project_root"])
-        for skill_id in {
-            str(value) for value in session.get("used_skills") or [] if isinstance(value, str) and value
-        }:
-            metadata = skill_metadata.get((project, skill_id))
-            implementation = (
-                str(metadata["implementation_sha256"])
-                if metadata
-                else hashlib.sha256(f"{project}:{skill_id}".encode("utf-8")).hexdigest()
+        usage_records = session.get("skill_usage")
+        if not isinstance(usage_records, list):
+            unversioned_skill_usage_count += len(
+                {
+                    str(value)
+                    for value in session.get("used_skills") or []
+                    if isinstance(value, str) and value
+                }
             )
+            usage_records = []
+        for usage in usage_records:
+            if not isinstance(usage, dict):
+                unversioned_skill_usage_count += 1
+                continue
+            skill_id = usage.get("id")
+            implementation = usage.get("package_sha256")
+            if (
+                not isinstance(skill_id, str)
+                or not skill_id
+                or not isinstance(implementation, str)
+                or len(implementation) != 64
+            ):
+                unversioned_skill_usage_count += 1
+                continue
+            if usage.get("eligible_for_learning") is not True:
+                if usage.get("review_state") in {"needs_review", "rejected"}:
+                    unreviewed_skill_usage_count += 1
+                else:
+                    ineligible_skill_usage_count += 1
+                continue
+            metadata = skill_metadata.get((project, skill_id, implementation))
             key = (skill_id, implementation)
             skill_observations.setdefault(key, set()).add(session_id)
             usage_by_id.setdefault(skill_id, set()).add(session_id)
@@ -89,8 +127,12 @@ def learn_from_projects(
                 metadata
                 or {
                     "id": skill_id,
-                    "project": project,
+                    "name": usage.get("name"),
+                    "kind": usage.get("kind"),
+                    "source": usage.get("path"),
+                    "workspace_id": workspace_id(session["_project_root"]),
                     "implementation_sha256": implementation,
+                    "routing_subject_sha256": usage.get("routing_subject_sha256"),
                 },
             )
         for tag in {
@@ -115,10 +157,21 @@ def learn_from_projects(
         count = len(observed_sessions)
         if count < 2 or metadata.get("kind") in {"global_skill", "common_project_skill"}:
             continue
+        candidate_seed = {
+            "type": "common_skill",
+            "skill_id": metadata.get("id"),
+            "implementation_sha256": metadata.get("implementation_sha256"),
+            "sessions": sorted(observed_sessions),
+        }
+        candidate_id = "candidate.skill." + _canonical_digest(candidate_seed)[:24]
         common_skill_candidates.append(
             {
-                **metadata,
+                "candidate_id": candidate_id,
+                "candidate_type": "common_skill",
+                "skill_id": metadata.get("id"),
+                **{key: value for key, value in metadata.items() if key != "id"},
                 "observed_sessions": count,
+                "evidence_refs": [session_evidence[item] for item in sorted(observed_sessions)],
                 "suggested_kind": "common_project_skill",
                 "status": "candidate",
                 "promotion_policy": "human_review_required",
@@ -142,9 +195,15 @@ def learn_from_projects(
     ]
     preference_candidates = [
         {
+            "candidate_id": "candidate.preference."
+            + _canonical_digest(
+                {"type": "preference", "tag": tag, "sessions": sorted(observed_sessions)}
+            )[:24],
+            "candidate_type": "preference",
             "key": f"preferred_project_tag.{tag}",
             "value": tag,
             "observed_sessions": len(observed_sessions),
+            "evidence_refs": [session_evidence[item] for item in sorted(observed_sessions)],
             "status": "candidate",
             "promotion_policy": "human_review_required",
         }
@@ -154,11 +213,14 @@ def learn_from_projects(
         if len(observed_sessions) >= 2
     ]
     profile = {
-        "format": "archmarshal-learning-candidates-v1",
+        "format": "archmarshal-learning-candidates-v2",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source_project_count": len(project_roots),
         "source_session_count": len(sessions),
         "legacy_unverified_session_count": legacy_unverified_session_count,
+        "unversioned_skill_usage_count": unversioned_skill_usage_count,
+        "unreviewed_skill_usage_count": unreviewed_skill_usage_count,
+        "ineligible_skill_usage_count": ineligible_skill_usage_count,
         "limits": {
             "raw_history_included": False,
             "environment_variables_included": False,
@@ -176,9 +238,29 @@ def learn_from_projects(
         ],
     }
     primary = project_roots[0]
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    target = unique_path(primary / ".agent" / "inbox" / "learning" / f"{timestamp}-candidates.yaml")
-    ensure_managed_path(primary, target, purpose="Learning candidate output")
+    generated_at = datetime.now(timezone.utc)
+    profile_bytes = yaml.safe_dump(profile, sort_keys=False, allow_unicode=True).encode("utf-8")
+    profile_digest = hashlib.sha256(profile_bytes).hexdigest()
+    timestamp = generated_at.strftime("%H%M%S")
+    base = primary / ".agent" / "inbox" / "learning" / generated_at.strftime("%Y/%m/%d")
+    pack_dir = unique_path(base / f"{timestamp}-{profile_digest[:12]}")
+    target = pack_dir / "candidates.yaml"
+    ensure_managed_path(primary, pack_dir, purpose="Learning candidate pack")
+    commit = {
+        "format": "archmarshal-learning-candidate-commit-v1",
+        "candidate_format": profile["format"],
+        "file": "candidates.yaml",
+        "bytes": len(profile_bytes),
+        "sha256": profile_digest,
+        "candidate_ids": sorted(
+            [item["candidate_id"] for item in common_skill_candidates]
+            + [item["candidate_id"] for item in preference_candidates]
+        ),
+        "source_mutation": False,
+    }
+    commit_bytes = (
+        json.dumps(commit, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
     payload = {
         "tool": "archmarshal",
         "stage": "learn",
@@ -186,7 +268,11 @@ def learn_from_projects(
         "source_projects": [str(item) for item in project_roots],
         "source_session_count": len(sessions),
         "legacy_unverified_session_count": legacy_unverified_session_count,
-        "target": target.relative_to(primary).as_posix(),
+        "unversioned_skill_usage_count": unversioned_skill_usage_count,
+        "unreviewed_skill_usage_count": unreviewed_skill_usage_count,
+        "ineligible_skill_usage_count": ineligible_skill_usage_count,
+        "target": pack_dir.relative_to(primary).as_posix(),
+        "candidate_pack_sha256": profile_digest,
         "common_skill_candidates": common_skill_candidates,
         "preference_candidates": preference_candidates,
         "repeated_scripts": repeated_scripts,
@@ -199,10 +285,79 @@ def learn_from_projects(
         ],
     }
     if apply:
-        create_text_exclusive(target, yaml.safe_dump(profile, sort_keys=False, allow_unicode=True))
+        require_owned_workspace(primary, operation="Learning candidate creation")
+        with workspace_mutation_lock(primary, operation="learning_candidate") as held:
+            pack_dir.mkdir(parents=True, exist_ok=False)
+            held.verify()
+            create_bytes_exclusive(target, profile_bytes, mode=0o600)
+            held.verify()
+            create_bytes_exclusive(pack_dir / "COMMITTED.json", commit_bytes, mode=0o600)
+            verify_learning_pack(pack_dir)
+            held.verify()
         payload["mode"] = "candidate_pack_created"
-        payload["created"] = target.relative_to(primary).as_posix()
+        payload["created"] = pack_dir.relative_to(primary).as_posix()
     return payload
+
+
+def verify_learning_pack(pack_dir: Path | str) -> dict[str, Any]:
+    directory = Path(pack_dir).resolve()
+    marker = directory / "COMMITTED.json"
+    candidate_file = directory / "candidates.yaml"
+    if (
+        not marker.is_file()
+        or is_link_or_reparse(marker)
+        or not candidate_file.is_file()
+        or is_link_or_reparse(candidate_file)
+    ):
+        raise ArchMarshalError(
+            "learning_pack_invalid",
+            "Learning candidate pack is incomplete or linked.",
+            details={"path": str(directory)},
+        )
+    try:
+        commit = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ArchMarshalError("learning_pack_invalid", "Candidate commit marker is invalid.") from exc
+    if (
+        not isinstance(commit, dict)
+        or commit.get("format") != "archmarshal-learning-candidate-commit-v1"
+        or commit.get("file") != "candidates.yaml"
+        or commit.get("source_mutation") is not False
+        or commit.get("bytes") != candidate_file.stat().st_size
+        or commit.get("sha256") != sha256_file(candidate_file)
+    ):
+        raise ArchMarshalError(
+            "learning_pack_integrity_failed",
+            "Candidate pack bytes do not match the commit marker.",
+        )
+    result = load_yaml_safe(candidate_file)
+    profile = result.data
+    if (
+        result.error
+        or not isinstance(profile, dict)
+        or profile.get("format") != "archmarshal-learning-candidates-v2"
+    ):
+        raise ArchMarshalError("learning_pack_invalid", "Candidate payload is invalid.")
+    candidates = (profile.get("common_skill_candidates") or []) + (
+        profile.get("preference_candidates") or []
+    )
+    ids = sorted(
+        item.get("candidate_id")
+        for item in candidates
+        if isinstance(item, dict) and isinstance(item.get("candidate_id"), str)
+    )
+    if ids != commit.get("candidate_ids") or len(ids) != len(candidates):
+        raise ArchMarshalError(
+            "learning_pack_integrity_failed",
+            "Candidate identities do not match the commit marker.",
+        )
+    return {
+        "path": str(directory),
+        "sha256": str(commit["sha256"]),
+        "commit_sha256": sha256_file(marker),
+        "commit": commit,
+        "profile": profile,
+    }
 
 
 def _load_sessions(root: Path) -> tuple[list[dict[str, Any]], int]:
@@ -242,9 +397,18 @@ def _load_sessions(root: Path) -> tuple[list[dict[str, Any]], int]:
                 "_session_path": (marker.parent / "session.yaml")
                 .relative_to(root)
                 .as_posix(),
+                "_session_commit_sha256": sha256_file(marker),
             }
         )
     return sessions, legacy_unverified
 
 
-__all__ = ["learn_from_projects"]
+def _canonical_digest(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+
+__all__ = ["learn_from_projects", "verify_learning_pack"]

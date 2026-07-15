@@ -8,6 +8,8 @@ from .diagnostics import severity_counts
 from .inventory import collect_inventory
 from .lint import lint_workspace
 from .planner import plan_workspace
+from .resolver import skill_activation_block_reason
+from .skill_index import skill_review_subject_digest
 
 
 def closeout_workspace(root: Path | str, used_skills: list[str] | None = None) -> dict[str, Any]:
@@ -43,13 +45,7 @@ def closeout_workspace(root: Path | str, used_skills: list[str] | None = None) -
         "tool": "archmarshal",
         "root": str(inventory.root),
         "used_skills": [
-            {
-                "id": skill.get("id"),
-                "name": skill.get("name"),
-                "kind": skill.get("kind"),
-                "path": skill.get("_skill_dir"),
-                "tags": skill.get("tags") or [],
-            }
+            _skill_usage_record(skill, inventory.skill_index.get("head"))
             for skill in matched
         ],
         "missing_used_skills": missing,
@@ -85,7 +81,31 @@ def closeout_workspace(root: Path | str, used_skills: list[str] | None = None) -
             "Use this after project work to preserve reproducible detail without loading raw history by default.",
             "Summaries should never delete or overwrite original project history.",
         ],
-}
+    }
+
+
+def _skill_usage_record(skill: dict[str, Any], index_head: object) -> dict[str, Any]:
+    block_reason = skill_activation_block_reason(skill)
+    return {
+        "id": skill.get("id"),
+        "name": skill.get("name"),
+        "kind": skill.get("kind"),
+        "path": skill.get("_skill_dir"),
+        "tags": skill.get("tags") or [],
+        "package_sha256": skill.get("_current_package_sha256")
+        or skill.get("_current_skill_sha256"),
+        "skill_index_head": index_head,
+        "routing_subject_sha256": _routing_subject_digest(skill),
+        "review_state": skill.get("review_state"),
+        "evidence_state": (
+            "pinned"
+            if (skill.get("_current_package_sha256") or skill.get("_current_skill_sha256"))
+            else "unversioned"
+        ),
+        "usage_outcome": "reported_used",
+        "activation_block_reason": block_reason,
+        "eligible_for_learning": block_reason is None,
+    }
 
 
 def _recording_policy(
@@ -165,6 +185,13 @@ def _recording_policy(
         ],
         "skip_by_default": [],
     }
+
+
+def _routing_subject_digest(skill: dict[str, Any]) -> str | None:
+    try:
+        return skill_review_subject_digest(skill)
+    except (TypeError, ValueError):
+        return None
 
 
 def _candidate_memory_updates(inventory: dict[str, Any]) -> list[dict[str, Any]]:

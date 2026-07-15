@@ -1,6 +1,6 @@
 # Product Readiness
 
-ArchMarshal 0.8 is a safety-hardened alpha, not yet a stable product. This page
+ArchMarshal 0.9 is a safety-hardened alpha, not yet a stable product. This page
 separates implemented behavior from design intent so users can decide what to
 trust.
 
@@ -8,16 +8,17 @@ trust.
 
 | Area | Current state | Safety boundary | Remaining stable-release work |
 |---|---|---|---|
-| Existing project adoption | Implemented, review-first | Root-bound ownership; exact plan digest; verified backup; durable create-only journal; OS lock; receipt-last forward recovery; changed targets block and are never replaced | Unify backup and adoption under one lifetime lock; handle-relative no-follow filesystem backend; orphan transaction inspection |
-| Existing skill management | Immutable tracking implemented | Lock-held package recheck; immutable generations; full reachable-chain verification; reader/writer exclusion; OS lock/CAS `HEAD`; loose-overlay quarantine; exact-plan audited metadata rollback; source never rewritten | Human review/accept-reject lifecycle, ownership migration audit, and safe orphan inspection/cleanup |
+| Existing project adoption | Implemented, review-first | Root-bound ownership; one backup-through-publication lifetime lock; exact plan digest; verified backup; durable create-only journal; receipt-last forward recovery; changed targets block and are never replaced | Handle-relative no-follow filesystem backend; orphan transaction inspection |
+| Existing skill management | Implemented, quarantined and reviewed | Codex package validation; exact package+routing approval; separate global-policy confirmation; immutable generations; full reachable-chain verification; reader/writer exclusion; OS lock/CAS `HEAD`; exact-plan rollback; source never rewritten | Ownership migration audit and safe orphan inspection/cleanup |
 | Backup | Implemented | Bounded archive, byte hashes, CRC, manifest validation, atomic exclusive publish | Large-workspace benchmarks and documented retention policy |
 | Restore | Implemented | Restores only into a new directory; uncertain partial output is preserved rather than recursively deleted | Resumable restore and guided diff/merge tooling; never add in-place restore |
 | Project start | Implemented | Read-only lint plus adoption/sync preview | Share one immutable inventory snapshot for performance |
 | Project closeout | Partial | Exact reviewed plan/path/bytes; create-only directory; commit-last file hashes; incomplete or hash-mismatched sessions excluded from learning | Recovery/status UI; declared cwd/inputs/outputs/expected results; optional execution validation |
 | Human project map | Partial | YAML plus `INDEX.md` remain readable | Regenerate versioned views from machine state without overwriting human notes |
 | Project catalog | Implemented | Reads compact control planes, not raw history | Durable user-level catalog database and rename/move handling |
-| Skill/preference learning | Candidate generation only | Only hash-matching committed v2 sessions are evidence; legacy v1 is counted as unverified; no automatic promotion | Explicit legacy migration, review/accept/reject workflow, provenance, supersession, rollback |
-| Lightweight global preferences | Not implemented | No silent global mutation | User-scoped accepted-preference store with budgets and explicit application |
+| Skill/preference learning | Review and promotion implemented | Session-pinned package hashes; commit-last candidate packs; exact candidate digest and provenance; explicit accept/reject/defer; no automatic promotion | Explicit legacy migration, candidate supersession UI, and richer evidence explanations |
+| Lightweight user preferences | Implemented in isolated store | Count/byte budgets; secret and absolute-path rejection; immutable generations; explicit application and forward rollback | Schema-versioned preference consumers and ergonomic profile selection |
+| User common-Skill store | Implemented | Root-bound ownership; validated immutable packages; complete saved-plan apply; expected-HEAD CAS; OS lock; commit-last copy; forward rollback; source/draft unchanged | Signed/exportable bundles, orphan inspection, retention policy, and native host integration |
 | Dynamic context runtime | Not implemented | Resolver is advisory | Token-budgeted loader and host integrations |
 | Packaging | Implemented in CI | Linux/Windows and Python 3.10-3.13 tests; clean wheel/sdist install | Signed releases, release notes, provenance, rollback drill |
 
@@ -42,13 +43,13 @@ A stable release requires all of the following:
   workspace directories during a filesystem operation; a handle-relative
   no-follow backend is still required for that claim.
 - Windows file and archive contents are flushed, while directory-entry fsync is
-  only available on POSIX. Therefore 0.8 does not claim a cross-platform
+  only available on POSIX. Therefore 0.9 does not claim a cross-platform
   power-loss durability guarantee.
 - A reproducible closeout is an integrity-checked evidence capsule, not proof of
   successful execution. Generated run scripts are never executed automatically.
-- Learning produces candidates only. Accepted preference state, provenance-rich
-  promotion, supersession, rollback, and global budget enforcement remain future
-  work.
+- Learning and promotion provide integrity and explicit review, not identity
+  signatures. A user must still inspect Skill behavior and scripts; ArchMarshal
+  validates and copies them but never proves that executing them is safe.
 - Commit manifests and adoption journals are integrity metadata, not signatures.
   They do not prove provenance against an actor that can coherently rewrite both
   content and its hashes.

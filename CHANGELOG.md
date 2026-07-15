@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.9.0 - 2026-07-15
+
+- Quarantine every Skill discovered during adoption until its exact package and
+  routing subject pass Codex Skill package validation and an explicit
+  `skill-review` decision. Elevated global/highest policy needs a separate
+  confirmation; any package or routing change invalidates the approval.
+- Hold a root-bound OS-lifetime workspace lock across backup, adoption, Skill
+  review, closeout, and learning publication. Closeout and learning writes now
+  require a valid ownership marker and cannot claim an unmanaged project.
+- Pin each recorded Skill use to its package hash, routing digest, index HEAD,
+  and review state. Cross-project learning uses the historical session-bound
+  package rather than attributing old evidence to current source bytes;
+  unreviewed, rejected, drifted, or otherwise resolver-blocked usage is excluded
+  from promotion evidence.
+- Commit date-organized learning packs with a final hash marker and reject
+  incomplete, moved-outside-workspace, linked, or tampered candidate evidence.
+  Persist only root-bound workspace identities and relative evidence paths in
+  packs rather than absolute project paths.
+- Add an isolated, root-bound user Skill store with immutable Skill packages,
+  immutable generation history, bounded preferences, OS locking, exact-plan and
+  expected-HEAD publication, commit-last package copies, and forward-only
+  rollback. Linked path components and concurrent initialization claims are
+  rejected; crash-orphan staging files cannot contaminate a package. Human
+  project and draft sources are never modified.
+- Add `candidate-review` and `candidate-promote` workflows. Apply requires the
+  complete saved preview plus its exact plan digest and HEAD token; common Skill
+  promotion binds the exact reviewed draft directory, while preference
+  promotion binds the exact committed candidate value.
+- Keep raw candidate decision/promotion primitives internal so the supported
+  activation path always begins with a verified committed learning pack.
+- Add optional user-store resolution to `resolve` and task-aware `start`.
+  Verified user common Skills remain task-triggered and project Skills take no
+  mutation dependency on the store.
+- Validate Skill frontmatter, package layout, optional UI metadata, bounded file
+  sizes, and progressive-disclosure directories without executing Skill scripts.
+- Add end-to-end and fault-boundary tests covering unowned workspaces,
+  unreviewed/global activation, package drift, evidence tampering, stale plans,
+  concurrent locks, source preservation, cross-project promotion, and rollback.
+
 ## 0.8.0 - 2026-07-15
 
 - Bind adoption and closeout writes to the exact reviewed preview through a

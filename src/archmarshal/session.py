@@ -15,6 +15,7 @@ import yaml
 from .closeout import closeout_workspace
 from .errors import ArchMarshalError, require_workspace_root
 from .io import load_yaml_safe
+from .ownership import require_owned_workspace
 from .safety import (
     create_bytes_exclusive,
     create_text_exclusive,
@@ -24,6 +25,7 @@ from .safety import (
     sha256_file,
     unique_path,
 )
+from .workspace_lock import workspace_mutation_lock
 
 CLOSEOUT_LEVELS = ("quick", "standard", "reproducible")
 MAX_SNAPSHOT_BYTES = 20 * 1024 * 1024
@@ -82,6 +84,7 @@ def record_closeout(
         "summary": summary.strip(),
         "tags": normalized_tags,
         "used_skills": used_skills,
+        "skill_usage": closeout["used_skills"],
         "steps": steps if level != "quick" else [],
         "key_scripts": script_records if level != "quick" else [],
         "commands": commands if level == "reproducible" else [],
@@ -207,34 +210,44 @@ def record_closeout(
         payload["actual_plan"] = plan_digest
         return payload
 
-    try:
-        session_dir.mkdir(parents=True, exist_ok=False)
-    except FileExistsError:
-        payload["mode"] = "blocked"
-        payload["notes"].append(
-            "The session directory was claimed concurrently; rerun to receive a new path."
-        )
-        return payload
-    created: list[Path] = []
-    for relative, content in files.items():
-        target = session_dir / relative
-        create_text_exclusive(target, content)
-        created.append(target)
-    if level == "reproducible":
-        for record in script_records:
-            source = root_path / record["path"]
-            content = source.read_bytes()
-            if len(content) != record["bytes"] or hashlib.sha256(content).hexdigest() != record["sha256"]:
-                raise ArchMarshalError(
-                    "session_source_changed",
-                    "A selected script changed after closeout planning; the incomplete session was preserved.",
-                    details={"path": record["path"]},
-                )
-            target = session_dir / "scripts" / record["snapshot_name"]
-            create_bytes_exclusive(target, content)
+    require_owned_workspace(root_path, operation="Closeout recording")
+
+    with workspace_mutation_lock(root_path, operation="closeout") as held:
+        try:
+            session_dir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            payload["mode"] = "blocked"
+            payload["notes"].append(
+                "The session directory was claimed concurrently; rerun to receive a new path."
+            )
+            return payload
+        held.verify()
+        created: list[Path] = []
+        for relative, content in files.items():
+            target = session_dir / relative
+            create_text_exclusive(target, content)
             created.append(target)
-    commit_path = _commit_session(session_dir, created, commit_content)
-    created.append(commit_path)
+            held.verify()
+        if level == "reproducible":
+            for record in script_records:
+                source = root_path / record["path"]
+                content = source.read_bytes()
+                if (
+                    len(content) != record["bytes"]
+                    or hashlib.sha256(content).hexdigest() != record["sha256"]
+                ):
+                    raise ArchMarshalError(
+                        "session_source_changed",
+                        "A selected script changed after closeout planning; the incomplete session was preserved.",
+                        details={"path": record["path"]},
+                    )
+                target = session_dir / "scripts" / record["snapshot_name"]
+                create_bytes_exclusive(target, content)
+                created.append(target)
+                held.verify()
+        commit_path = _commit_session(session_dir, created, commit_content)
+        created.append(commit_path)
+        held.verify()
 
     payload["mode"] = "append_only_applied"
     payload["created"] = [path.relative_to(root_path).as_posix() for path in created]

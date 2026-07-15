@@ -39,9 +39,13 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 - Fingerprints the **complete skill package**, so script/reference/asset drift is visible without rewriting the source.
 - Records skill additions, modifications, removals, and restores as immutable, content-addressed generations with a locked compare-and-swap `HEAD`.
 - Blocks drifted skill packages from resolution until reviewed, and supports verified history plus audited metadata rollback without touching source files.
+- Quarantines adopted Skills until their exact package and routing metadata are
+  explicitly approved; global/highest policy needs a separate confirmation.
 - Records **quick**, **standard**, or **reproducible** closeouts in append-only, date-organized directories.
 - Catalogs multiple projects by recorded creation date and AND-filtered tags.
 - Extracts review-only common-skill and user-preference candidates from compact session manifests.
+- Promotes reviewed candidates into an isolated, bounded user Skill store with
+  immutable packages, expected-HEAD publication, provenance, and forward rollback.
 - Provides Codex-facing `archmarshal-start` and `archmarshal-end` entrypoints; mutation-capable flows remain preview-first and create-only.
 
 ## Design Goals
@@ -102,6 +106,21 @@ generation and its file hashes.
 Modified, removed, and restored skills are explicit plan entries. ArchMarshal
 updates only its internal `HEAD` pointer under an exclusive lock and stale-plan
 check; human-owned files remain untouched.
+
+An adopted Skill is initially quarantined. Review the exact package and routing
+revision before it can resolve:
+
+```bash
+archmarshal skill-review . --source skills/release-helper \
+  --decision approve --expect-head <skill-index-head> --pretty
+archmarshal skill-review . --source skills/release-helper \
+  --decision approve --expect-head <skill-index-head> \
+  --expect-plan <plan_digest> --apply --pretty
+```
+
+Use `--allow-global-policy` in both commands only when intentionally approving a
+global, global-scope, or highest-priority Skill. Any later package or routing
+change invalidates that approval.
 
 If a process stops during adoption, inspect and forward-recover the durable
 create-only transaction:
@@ -182,6 +201,35 @@ After multiple sessions, extract lightweight, review-only candidates:
 archmarshal learn . --include-root ../another-project --apply --pretty
 ```
 
+To reuse reviewed candidates across projects, initialize a dedicated user store
+outside project roots. User-store mutation uses the complete saved preview, not
+only a copied digest:
+
+```bash
+archmarshal user-store-init ~/.archmarshal/user-store --pretty > init-plan.json
+archmarshal user-store-init ~/.archmarshal/user-store \
+  --plan-file init-plan.json --expect-plan <plan_digest> --apply --pretty
+
+archmarshal candidate-promote . --pack .agent/inbox/learning/<pack> \
+  --candidate <candidate-id> --user-store ~/.archmarshal/user-store \
+  --draft ../reviewed-skill-draft --reason "reviewed reusable workflow" \
+  --pretty > promotion-plan.json
+archmarshal candidate-promote . --pack .agent/inbox/learning/<pack> \
+  --candidate <candidate-id> --user-store ~/.archmarshal/user-store \
+  --draft ../reviewed-skill-draft --reason "reviewed reusable workflow" \
+  --plan-file promotion-plan.json --expect-head <head-or-none> \
+  --expect-plan <plan_digest> --apply --pretty
+
+archmarshal resolve . --task "prepare release" \
+  --user-store ~/.archmarshal/user-store --pretty
+```
+
+Save preview JSON as UTF-8. Preference candidates omit `--draft`. A project,
+candidate pack, and Skill draft remain unchanged; only immutable files and the
+internal `HEAD` inside the explicitly initialized user store can change. Use
+`candidate-review` for accept/reject/defer decisions and
+`user-store-rollback --to <ancestor>` for a preview-first forward rollback.
+
 Browse projects without loading their raw history:
 
 ```bash
@@ -211,6 +259,7 @@ reproducible evidence when writing a session.
 - No summarization that deletes or replaces original project history.
 - No automatic global configuration mutation.
 - No dynamic context loading runtime.
+- No execution of promoted Skill scripts; resolution is advisory.
 - No claim of protection against a malicious process that can concurrently
   rewrite workspace directories; link/reparse checks and identity checks reduce
   races, but a handle-relative no-follow filesystem backend is still planned.
@@ -306,6 +355,9 @@ archmarshal backup-restore path/to/backup.zip path/to/new-directory --apply --pr
 archmarshal skill-index-rollback path/to/project --to <ancestor-sha256> --pretty
 archmarshal skill-index-rollback path/to/project --to <ancestor-sha256> \
   --expect-head <preview-head> --expect-plan <plan_digest> --apply --pretty
+archmarshal user-store-status path/to/user-store --pretty
+archmarshal candidate-review path/to/project --pack <committed-pack> \
+  --candidate <candidate-id> --decision defer --user-store <store> --pretty
 ```
 
 The compatibility wrapper still works:
@@ -331,11 +383,19 @@ delete, force, or automatic promotion path for human-owned project or skill file
 - Skill sync uses immutable content-addressed objects, an exclusive `HEAD.lock`, and an expected-`HEAD` compare-and-swap; stale or concurrent plans fail without changing the active generation.
 - `HEAD.lock` uses an OS-lifetime lock. Released v2 transaction metadata is recovered only after expected/proposed/current HEAD validation and is recorded under the internal recovery audit directory; legacy or malformed locks remain blocked.
 - Resolver output quarantines source-missing, unsafe, untracked, or drifted skills instead of suggesting them for activation.
+- Imported/adopted Skills also remain quarantined until validation and an exact
+  `skill-review` approval; package or routing drift makes that approval stale.
 - Directory scans do not follow symlinks, junctions, or Windows reparse points and enforce file/package bounds.
 - Reserved control-file conflicts block the whole adoption before managed files are written.
 - Closeout uses unique append-only directories, verifies copied script hashes,
   and writes `COMMITTED.json` last; incomplete or hash-mismatched sessions are
   not learned.
+- Closeout and learning apply only inside a root-bound owned workspace and share
+  a lifetime mutation lock with adoption and Skill review.
+- The user store refuses non-empty unowned roots, is bound to its canonical
+  location, copies only validated common-project Skill packages, rejects linked
+  paths and sensitive/absolute preference values, and publishes by immutable
+  generation plus expected-HEAD compare-and-swap.
 - Atomic create-only publication requires same-filesystem hard-link support and
   fails closed when the filesystem cannot provide it.
 - Environment variables are not captured. Known inline-secret patterns are blocked, but user-selected text and script snapshots may still contain sensitive material and require review.
@@ -406,6 +466,13 @@ delete, force, or automatic promotion path for human-owned project or skill file
 - [x] Date- and tag-aware workspace/session organization
 - [x] Read-only cross-project catalog sorted by date and filtered by tags
 - [x] Review-only common-skill and user-preference learning candidates
+- [x] Codex Skill package validation and exact-package approval/rejection
+- [x] Root-bound lifetime locks across workspace mutations
+- [x] Session-pinned Skill package and routing evidence
+- [x] Commit-last, tamper-evident learning packs
+- [x] Isolated immutable user Skill/preference store with forward rollback
+- [x] Explicit candidate decision and promotion workflow
+- [x] User-store-aware task resolution and project start
 
 ## Research Notes
 

@@ -40,8 +40,9 @@ It must not contain:
 
 A skill node is a reusable capability with explicit metadata. The model supports
 enabled, disabled, archived, upgraded, tagged, and audited states. The current
-CLI discovers, tracks, resolves, inspects history, and rolls metadata forward;
-a complete human accept/reject and state-editing workflow is still planned.
+CLI discovers, validates, quarantines, reviews, tracks, resolves, inspects
+history, and rolls metadata forward. Adopted packages require an approval bound
+to the exact package and routing digest; a changed subject returns to review.
 
 ArchMarshal recognizes these skill kinds:
 
@@ -143,6 +144,23 @@ source skill manifest           session and learning records
 There is no automatic merge between the domains. A reserved-file collision is a
 hard stop.
 
+A third, optional domain holds explicitly promoted user-level reuse:
+
+```text
+Evidence/source domains             ArchMarshal-owned user store
+committed project sessions          immutable candidate decisions
+committed learning pack             immutable common-Skill packages
+human-reviewed Skill draft          bounded preference records
+                                    immutable generations + HEAD
+```
+
+The store never owns the three sources on the left. A complete saved promotion
+plan binds the candidate digest, provenance, draft hashes or preference value,
+store root, and expected HEAD. Publication copies a validated package and then
+advances only the store's internal pointer. Resolver treats verified store
+packages as task-triggered common-project Skills; it does not execute them or
+inject them into global policy.
+
 Readers also treat skill-index publication as a critical section. They block
 while the OS lock is held, verify the complete parent chain reachable from the
 captured `HEAD`, and reject a head/lock race. Once `HEAD` exists, loose overlay
@@ -240,8 +258,14 @@ ArchMarshal operations should mature in this order:
 9. `end --level ... --expect-plan ... --apply`: append and commit a new quick,
    standard, or reproducible session record.
 10. `learn --apply`: append a bounded, review-only learning candidate pack.
+11. `candidate-review`: append an accept/reject/defer decision to the isolated
+    user store from a verified committed candidate.
+12. `candidate-promote`: copy an explicitly reviewed common-Skill draft or
+    preference candidate into a new immutable user-store generation.
+13. `user-store-rollback`: publish a new generation from a verified ancestor
+    snapshot without deleting newer history.
 
 Mutation is capability-specific rather than a general `apply` engine. No command
 can overwrite, move, rename, delete, or force-update existing project and skill
-files. Promotion to shared skills or user preferences remains a human-reviewed
-operation.
+files. Promotion to user common Skills or preferences is explicit, previewed,
+versioned, bounded, and reversible.
