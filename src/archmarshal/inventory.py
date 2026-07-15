@@ -9,6 +9,7 @@ from .adoption import ownership_skill_index_mode
 from .errors import ArchMarshalError, require_workspace_root
 from .io import list_files, load_yaml_safe, rel
 from .safety import (
+    EXCLUDED_BACKUP_PARTS,
     ensure_managed_path,
     files_below_no_links,
     fingerprint_directory,
@@ -398,11 +399,24 @@ def _find_skills(
         + entries.get("project_skills", [])
         + entries.get("generated_skills", [])
     )
+    records = (loaded_skill_index.get("generation") or {}).get("skills", [])
+    selection = (loaded_skill_index.get("generation") or {}).get("selection") or {}
+    excluded_sources = {
+        str(source)
+        for source in selection.get("excluded_packages", [])
+        if isinstance(source, str)
+    }
+    excluded_directories = [root / source for source in excluded_sources]
     manifests: dict[Path, dict[str, Any]] = {}
     for skill_root in skill_roots:
         if not skill_root.exists():
             continue
-        files = files_below_no_links(skill_root, purpose="Skill inventory")
+        files = files_below_no_links(
+            skill_root,
+            purpose="Skill inventory",
+            excluded_parts=EXCLUDED_BACKUP_PARTS,
+            excluded_directories=excluded_directories,
+        )
         for manifest_path in (path for path in files if path.name == "manifest.yaml"):
             manifests[manifest_path.resolve()] = _load_skill_manifest(manifest_path, root)
         for skill_md in (path for path in files if path.name == "SKILL.md"):
@@ -414,7 +428,6 @@ def _find_skills(
                     "_has_skill_md": True,
                     "_missing_manifest": True,
                 }
-    records = (loaded_skill_index.get("generation") or {}).get("skills", [])
     indexed_sources = {str(record["source"]) for record in records}
     skills: list[dict[str, Any]] = []
     indexed_mode = index_required or loaded_skill_index.get("head") is not None or any(
@@ -438,6 +451,7 @@ def _find_skills(
         _load_virtual_skill(record, root=root, object_path=object_path, index=index)
         for index, record in enumerate(records)
         if record.get("state") == "active"
+        and str(record.get("source") or "") not in excluded_sources
     )
     return sorted(skills, key=lambda item: item.get("_skill_dir", ""))
 

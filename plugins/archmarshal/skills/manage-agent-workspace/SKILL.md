@@ -10,6 +10,11 @@ into ArchMarshal operations; do not make the user assemble CLI commands.
 
 ## Resolve the engine
 
+If the user asks to install or update ArchMarshal itself, do not run a project
+lifecycle command. Read [update.md](references/update.md) and keep the operation
+outside every project root. For all project-management requests, continue with
+the engine rules below.
+
 Use `../../scripts/run_archmarshal.py`, resolved relative to this Skill's
 directory. Run this stdlib-only launcher with the active Python interpreter and
 pass ArchMarshal arguments as separate tokens. It uses the active interpreter
@@ -41,7 +46,9 @@ the separately authorized installation prompt, outside every project root.
   asks for project-level detail beyond durable state.
 - Manage a new project: preview `init`.
 - Manage an existing project or existing Skills: run `doctor`, then preview
-  `adopt`. Inspect normal and project-specific Skill locations; supply every
+  `adopt`. If the user already named Skills that ArchMarshal must not manage,
+  preview `adopt` with repeatable exact `--exclude-skill` paths before any
+  broad inventory or doctor pass. Inspect normal and project-specific Skill locations; supply every
   nonstandard project-relative location with repeatable `--skill-root`.
   Preserve the built-in verified backup requirement.
 - Start governed work: use `start` after inspecting whether initialization or
@@ -64,16 +71,23 @@ collision, handling partial state, or making any security claim.
 
 1. Inspect the target and run the relevant preview.
 2. Summarize proposed paths, backup scope, activation state, expected HEAD,
-   conflicts, effective Skill roots, discovered package count, complete backup
-   coverage, and whether any existing bytes could change.
-3. Apply only when the user's request authorizes that concrete change and every
+   conflicts, effective Skill roots, every `prepared_management_packages`
+   directory, every excluded package, preserved artifact boundaries, complete
+   backup coverage, and whether any existing bytes could change. Do not describe
+   a package as accepted for management before showing this boundary.
+3. If `boundary_confirmation_required` is true and the user has not already
+   chosen a policy, ask whether to preserve the reported cache/repository
+   artifacts and manage the remaining Skill source, or exclude that entire
+   Skill. Preservation is the default. Never inspect or remove those artifacts
+   merely to make adoption pass.
+4. Apply only when the user's request authorizes that concrete change and every
    required exact plan/HEAD token is available. Ask when destination, evidence
    depth, replacement, or scope would materially change the result.
-4. Save complete reviewed preview JSON in a system temporary directory or a
+5. Save complete reviewed preview JSON in a system temporary directory or a
    user-approved path outside the project. Do not add plan files to the project
    merely to drive apply.
-5. Re-run through the wrapper with the complete saved preview and exact tokens.
-6. Verify the result with `doctor`, the relevant status command, and a source
+6. Re-run through the wrapper with the complete saved preview and exact tokens.
+7. Verify the result with `doctor`, the relevant status command, and a source
    tree or version-control diff. Report partial output explicitly.
 
 ## Protect user content
@@ -83,6 +97,14 @@ collision, handling partial state, or making any security claim.
 - Treat `--skill-root` as additive. Never point it outside the project or into
   `.agent`, and never continue unless `skill_backup_coverage.complete` is true
   for every discovered package.
+- Treat repeatable `--exclude-skill` as an exact project-relative package
+  boundary, never as a glob or name match. Excluded packages must remain unread,
+  unbacked-up, unindexed, unlearned, and unmodified. The immutable selection
+  persists across later runs. Use exact `--manage-skill` only when the user
+  explicitly restores management; never clear exclusions as a side effect.
+- Preserve `.git`, `.hg`, `.svn`, caches, virtual environments, dependency
+  trees, and build/runtime artifacts reported by the preview. They are outside
+  the managed package fingerprint and backup. Do not delete or move them.
 - Treat a collision, linked/reparse component, stale plan, stale HEAD, changed
   source, corrupt state, or uncertain ownership as a stop condition.
 - Preserve interrupted partial output for inspection; never retry by clearing

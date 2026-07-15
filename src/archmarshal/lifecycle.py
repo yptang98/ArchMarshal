@@ -19,6 +19,8 @@ def start_workspace(
     tags: list[str] | None = None,
     backup_scope: str = "managed",
     skill_roots: list[str] | None = None,
+    exclude_skills: list[str] | None = None,
+    manage_skills: list[str] | None = None,
 ) -> dict[str, Any]:
     inventory = collect_inventory(root)
     diagnostics = lint_workspace(root, inventory=inventory)
@@ -28,6 +30,8 @@ def start_workspace(
         tags=tags,
         backup_scope=backup_scope,
         skill_roots=skill_roots,
+        exclude_skills=exclude_skills,
+        manage_skills=manage_skills,
     )
     blocked_skill_count = sum(
         skill_activation_block_reason(skill) is not None for skill in inventory.skills
@@ -97,6 +101,8 @@ def initialize_workspace(
     backup_scope: str = "managed",
     expected_plan: str | None = None,
     skill_roots: list[str] | None = None,
+    exclude_skills: list[str] | None = None,
+    manage_skills: list[str] | None = None,
 ) -> dict[str, Any]:
     """Create only the missing ArchMarshal control plane and project Skill scaffold."""
     return adopt_workspace(
@@ -107,6 +113,8 @@ def initialize_workspace(
         expected_plan=expected_plan,
         project_initialization=True,
         skill_roots=skill_roots,
+        exclude_skills=exclude_skills,
+        manage_skills=manage_skills,
     )
 
 

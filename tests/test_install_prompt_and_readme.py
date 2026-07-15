@@ -7,15 +7,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
 INSTALL_PROMPT = ROOT / "INSTALL_PROMPT.md"
+UPDATE_PROMPT = ROOT / "UPDATE_PROMPT.md"
 GETTING_STARTED = ROOT / "docs" / "getting-started.md"
 BEGIN = "<!-- BEGIN INSTALL PROMPT -->"
 END = "<!-- END INSTALL PROMPT -->"
+UPDATE_BEGIN = "<!-- BEGIN UPDATE PROMPT -->"
+UPDATE_END = "<!-- END UPDATE PROMPT -->"
 
 
 def _prompt(text: str) -> str:
     assert text.count(BEGIN) == 1
     assert text.count(END) == 1
     return text.split(BEGIN, 1)[1].split(END, 1)[0].strip()
+
+
+def _update_prompt(text: str) -> str:
+    assert text.count(UPDATE_BEGIN) == 1
+    assert text.count(UPDATE_END) == 1
+    return text.split(UPDATE_BEGIN, 1)[1].split(UPDATE_END, 1)[0].strip()
 
 
 def test_readme_and_standalone_install_prompt_stay_identical() -> None:
@@ -54,6 +63,29 @@ def test_install_prompt_is_copyable_safe_and_codex_native() -> None:
 
     assert "<reviewed-full-commit-sha>" not in prompt
     assert "pip install -e" not in prompt
+
+
+def test_update_prompt_is_dedicated_safe_and_install_compatible() -> None:
+    install = _prompt(INSTALL_PROMPT.read_text(encoding="utf-8"))
+    update = _update_prompt(UPDATE_PROMPT.read_text(encoding="utf-8"))
+
+    assert "Install or safely update" in install
+    for phrase in (
+        "Update the installed ArchMarshal management plugin",
+        "If ArchMarshal is not installed, safely perform a first installation instead",
+        "full 40-character commit SHA",
+        "GitHub Actions CI",
+        "user-owned local checkout",
+        "CODEX_HOME/backups/archmarshal/",
+        "restore the last known-good pinned plugin/marketplace",
+        "codex plugin",
+        "--bootstrap-status",
+        "Run read-only `doctor`",
+        "Do not run ArchMarshal against the current project",
+    ):
+        assert phrase in update
+    assert "<reviewed-full-commit-sha>" not in update
+    assert "pip install -e" not in update
 
 
 def test_user_docs_do_not_present_a_literal_sha_placeholder_as_install() -> None:
@@ -96,5 +128,5 @@ def test_readme_primary_flow_is_plugin_first_not_cli_dump() -> None:
 def test_primary_public_docs_are_english_only() -> None:
     han = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 
-    for path in (README, INSTALL_PROMPT, GETTING_STARTED):
+    for path in (README, INSTALL_PROMPT, UPDATE_PROMPT, GETTING_STARTED):
         assert han.search(path.read_text(encoding="utf-8")) is None, path

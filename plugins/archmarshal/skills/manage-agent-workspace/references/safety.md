@@ -5,9 +5,17 @@
 - Existing project and Skill content is human-owned.
 - Preview and read paths must not create directories or metadata.
 - Existing-project adoption must retain its verified backup gate.
-- Every discovered Skill package must have complete planned backup coverage;
-  source-root declarations and each package file path/bytes/mode/hash are bound
+- Every managed Skill source file must have complete planned backup coverage;
+  source-root declarations and each managed file path/bytes/mode/hash are bound
   into the exact reviewed plan.
+- Exact package exclusions are project-relative, repeatable, and persisted in
+  immutable history. They are evaluated before package content is read. An
+  excluded package is not backed up, indexed, activated, learned from, or
+  modified, and only an explicit exact manage request reverses the boundary.
+- Standard VCS metadata, caches, virtual environments, dependency trees, and
+  runtime/build artifacts are reported as preserved boundaries. Their paths
+  may be shown, but their contents are not entered, backed up, indexed, learned
+  from, moved, or deleted.
 - Apply must replay the complete reviewed plan and exact concurrency tokens.
 - User-owned destinations are create-only; a collision is not a merge request.
 - Partial, legacy, orphan, and corrupt state is retained for review. No doctor
@@ -29,7 +37,8 @@ mtimes in proportion to risk. Check:
 - committed pack/session/package hashes;
 - destination absence and disjointness;
 - backup descriptor-bound verification where required;
-- additive effective Skill roots and `skill_backup_coverage.complete`;
+- additive effective Skill roots, exact Skill selection, preserved artifact
+  boundaries, and `skill_backup_coverage.complete`;
 - activation and review state for every affected Skill.
 
 After apply, confirm that only reviewed create-only or internal immutable paths

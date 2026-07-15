@@ -17,6 +17,16 @@ does not publish a fake SHA placeholder that looks copyable but cannot run.
 
 Start a new Codex task after installation so the plugin Skill is loaded.
 
+For an explicit update, paste [UPDATE_PROMPT.md](../UPDATE_PROMPT.md), or ask an
+installed ArchMarshal plugin:
+
+```text
+Update ArchMarshal safely to the latest verified version. Do not manage the current project during the update.
+```
+
+The install prompt is intentionally update-compatible: rerunning it performs a
+verified update or an exact-version no-op rather than requiring an uninstall.
+
 ## 2. Start with natural language
 
 For a new project:
@@ -31,6 +41,12 @@ For an existing project and existing Skills:
 Use ArchMarshal to safely adopt this existing project and its Skills. Diagnose first, confirm complete backup coverage and conflicts, then show me the exact plan.
 ```
 
+To keep exact Skill packages outside ArchMarshal management:
+
+```text
+Use ArchMarshal to adopt this project, but do not manage skills/costmarshal or skills/private-local. List every Skill directory prepared for management before applying anything.
+```
+
 For an already managed project:
 
 ```text
@@ -42,6 +58,14 @@ only missing control-plane/scaffold paths. Existing-project adoption leaves all
 source files in place and puts routing metadata under `.agent/skill-overlays/`.
 Nonstandard project-relative Skill roots can be included explicitly; they add
 to rather than replace normal roots.
+
+Exact package exclusions are repeatable and persist in immutable Skill-index
+history. Excluded package contents are not read, backed up, overlaid, indexed,
+activated, learned from, or modified. A later explicit manage request removes
+one package from the exclusion set and subjects it to fresh backup and review.
+Preview also reports `.git`/VCS metadata, caches, virtual environments,
+dependency trees, and related artifacts as preserved boundaries. Their
+contents remain untouched while the rest of the Skill can still be managed.
 
 Imported Skills begin quarantined. Approval is bound to the exact package,
 routing metadata, and immutable Skill-index `HEAD`. Global/highest policy needs

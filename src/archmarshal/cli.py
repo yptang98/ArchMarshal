@@ -620,6 +620,8 @@ def _main_impl(argv: list[str] | None = None) -> int:
             backup_scope=args.backup_scope,
             expected_plan=args.expect_plan,
             skill_roots=args.skill_root,
+            exclude_skills=args.exclude_skill,
+            manage_skills=args.manage_skill,
         )
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
@@ -633,6 +635,8 @@ def _main_impl(argv: list[str] | None = None) -> int:
             backup_scope=args.backup_scope,
             expected_plan=args.expect_plan,
             skill_roots=args.skill_root,
+            exclude_skills=args.exclude_skill,
+            manage_skills=args.manage_skill,
         )
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
@@ -648,6 +652,8 @@ def _main_impl(argv: list[str] | None = None) -> int:
                 backup_scope=args.backup_scope,
                 expected_plan=args.expect_plan,
                 skill_roots=args.skill_root,
+                exclude_skills=args.exclude_skill,
+                manage_skills=args.manage_skill,
             )
             payload = start_workspace(
                 root,
@@ -656,6 +662,8 @@ def _main_impl(argv: list[str] | None = None) -> int:
                 tags=args.tag,
                 backup_scope=args.backup_scope,
                 skill_roots=args.skill_root,
+                exclude_skills=args.exclude_skill,
+                manage_skills=args.manage_skill,
             )
             payload["adoption"] = adoption
             _mark_start_apply(payload, adoption)
@@ -672,6 +680,8 @@ def _main_impl(argv: list[str] | None = None) -> int:
                     tags=args.tag,
                     backup_scope=args.backup_scope,
                     skill_roots=args.skill_root,
+                    exclude_skills=args.exclude_skill,
+                    manage_skills=args.manage_skill,
                 ),
                 args.pretty,
             )
@@ -781,6 +791,8 @@ def _start_main_impl(argv: list[str] | None = None) -> int:
         tags=args.tag,
         backup_scope=args.backup_scope,
         skill_roots=args.skill_root,
+        exclude_skills=args.exclude_skill,
+        manage_skills=args.manage_skill,
     )
     if args.apply:
         payload["adoption"] = adopt_workspace(
@@ -790,6 +802,8 @@ def _start_main_impl(argv: list[str] | None = None) -> int:
             backup_scope=args.backup_scope,
             expected_plan=args.expect_plan,
             skill_roots=args.skill_root,
+            exclude_skills=args.exclude_skill,
+            manage_skills=args.manage_skill,
         )
         payload = start_workspace(
             root,
@@ -798,6 +812,8 @@ def _start_main_impl(argv: list[str] | None = None) -> int:
             tags=args.tag,
             backup_scope=args.backup_scope,
             skill_roots=args.skill_root,
+            exclude_skills=args.exclude_skill,
+            manage_skills=args.manage_skill,
         ) | {"adoption": payload["adoption"]}
         _mark_start_apply(payload, payload["adoption"])
         if payload["adoption"]["mode"] in {
@@ -874,6 +890,24 @@ def _add_adoption_arguments(parser: argparse.ArgumentParser) -> None:
         help=(
             "Additional project-relative source Skill root. Repeat as needed; "
             "defaults and workspace-declared roots remain in scope."
+        ),
+    )
+    parser.add_argument(
+        "--exclude-skill",
+        action="append",
+        default=[],
+        help=(
+            "Exact project-relative Skill package directory to keep outside ArchMarshal "
+            "management. Repeat as needed; the selection persists in immutable index state."
+        ),
+    )
+    parser.add_argument(
+        "--manage-skill",
+        action="append",
+        default=[],
+        help=(
+            "Exact project-relative Skill package directory to remove from the persisted "
+            "exclusion set. Repeat as needed."
         ),
     )
     parser.add_argument(

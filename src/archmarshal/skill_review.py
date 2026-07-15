@@ -232,6 +232,18 @@ def _plan_skill_review(
             details={"expected_head": expected_head, "actual_head": head},
         )
     generation = loaded.get("generation") or {}
+    selection = generation.get("selection")
+    excluded_packages = (
+        list(selection.get("excluded_packages") or [])
+        if isinstance(selection, dict)
+        else []
+    )
+    if source in excluded_packages:
+        raise ArchMarshalError(
+            "skill_review_source_excluded",
+            "Skill review cannot inspect a package outside ArchMarshal's management boundary.",
+            details={"source": source},
+        )
     records = json.loads(json.dumps(generation.get("skills") or [], ensure_ascii=False))
     matches = [record for record in records if record.get("source") == source]
     if len(matches) != 1 or matches[0].get("state") != "active":
@@ -285,6 +297,8 @@ def _plan_skill_review(
         "skills": records,
         "changes": [{"kind": "modified", "source": source}],
     }
+    if isinstance(selection, dict):
+        new_generation["selection"] = json.loads(json.dumps(selection, ensure_ascii=False))
     generation_bytes = _object_bytes(new_generation)
     digest = hashlib.sha256(generation_bytes).hexdigest()
     return {
@@ -295,7 +309,11 @@ def _plan_skill_review(
         "changes": new_generation["changes"],
         "object_path": _relative_object_path(digest),
         "source_precondition_policy": "active-match",
-        "source_preconditions": _source_preconditions(records, include_removed=False),
+        "source_preconditions": _source_preconditions(
+            records,
+            include_removed=False,
+            excluded_packages=excluded_packages,
+        ),
         "source": source,
         "skill_id": manifest.get("id"),
         "decision": normalized_decision,

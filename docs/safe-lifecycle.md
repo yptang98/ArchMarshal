@@ -73,6 +73,22 @@ archmarshal adopt path/to/project --tag research --tag vision --pretty
 The plan lists every proposed file, every discovered skill source, and any
 conflict. `source_will_change` is always false.
 
+Keep one or more exact Skill packages outside ArchMarshal management with
+repeatable project-relative selections:
+
+```bash
+archmarshal adopt path/to/project \
+  --exclude-skill skills/costmarshal \
+  --exclude-skill skills/private-local --pretty
+```
+
+Preview reports `prepared_management_packages` before apply, plus every exact
+excluded package and every preserved artifact boundary. Exclusions are not
+globs: they persist in immutable index state and are reversed one at a time with
+`--manage-skill <same-project-relative-package>`. Excluded packages are pruned
+before package content is read and receive no backup, overlay, index activation,
+or learning. Apply must replay the same selection arguments shown by preview.
+
 Apply only after reviewing the plan:
 
 ```bash
@@ -93,8 +109,11 @@ The managed backup scope contains:
   modified by Skill-index sync and are never recursively embedded in a new
   managed backup. Skill-index recovery records under
   `.agent/skill-overlays/.archmarshal/recovery/` remain covered.
-- Every regular file in each discovered non-root skill package (bounded by the
-  same link, file-count, and byte limits used for fingerprinting).
+- Every managed source file in each discovered non-root skill package (bounded
+  by the same link, file-count, and byte limits used for fingerprinting).
+- VCS metadata, caches, virtual environments, dependency trees, and related
+  runtime/build artifact boundaries are reported but not entered. They remain
+  in place and do not prevent the remaining Skill source from being managed.
 - For a repository-root `SKILL.md`, only the entrypoint and root manifest, so a
   managed backup does not silently become a full-project backup.
 
@@ -114,6 +133,12 @@ hash for each file; the zip is tested and
 hashed before adoption continues. `.agent/backups/.gitignore` prevents backup
 archives from being committed accidentally; these backups may still contain
 sensitive project files and must not be shared casually.
+
+An explicit Skill-package exclusion also applies to requested full scope. In
+that case the resulting manifest truthfully reports `managed_workspace`, not
+`full_workspace`, because the excluded subtree is outside ArchMarshal's
+authority. Such a bounded archive is not eligible for full-workspace ownership
+rebind.
 
 Verification keeps the archive open through one descriptor while parsing the
 manifest, streaming every declared member hash, and deriving the final archive
@@ -216,11 +241,13 @@ also maintains this internal registry:
 └─ objects/sha256/<generation-digest>.json
 ```
 
-A generation is a complete, canonical JSON view of active and removed skills.
-It points to its parent and records `added`, `modified`, `removed`, and
-`restored` changes. Every regular file in a skill package contributes to its
+A generation is a complete, canonical JSON view of active and removed skills
+plus the exact persistent package-selection policy. It points to its parent and
+records `added`, `modified`, `removed`, `restored`, `excluded`, and `included`
+changes. Every managed source file in a skill package contributes to its
 fingerprint, so changing a script, reference, template, or asset produces a new
-generation without editing the source.
+generation without editing the source. Preserved artifacts and excluded
+packages do not contribute to that fingerprint.
 
 Commit order is deliberately narrow:
 

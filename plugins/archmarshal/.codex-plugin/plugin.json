@@ -1,6 +1,6 @@
 {
   "name": "archmarshal",
-  "version": "0.14.1",
+  "version": "0.15.0",
   "description": "Codex-native, safety-first governance for projects, Skills, memory, and reproducible closeouts.",
   "author": {
     "name": "yptang98",
@@ -20,8 +20,10 @@
     "capabilities": ["Interactive", "Write"],
     "defaultPrompt": [
       "Safely organize this project and its Skills with ArchMarshal.",
+      "Show every Skill directory ArchMarshal would manage and exclude the packages I name.",
       "Audit this project's ArchMarshal health without changing files.",
-      "Close this project with reproducible evidence and reusable Skill candidates."
+      "Close this project with reproducible evidence and reusable Skill candidates.",
+      "Safely update ArchMarshal without touching the current project."
     ]
   }
 }

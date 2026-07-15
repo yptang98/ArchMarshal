@@ -14,6 +14,7 @@ from archmarshal.safety import (
     fingerprint_regular_file,
     verify_backup,
 )
+from archmarshal.skill_review import review_workspace_skill
 
 
 def _skill(root: Path, relative: str = "custom/tools/demo") -> Path:
@@ -47,12 +48,13 @@ def test_explicit_skill_root_binds_complete_package_backup_and_replay(tmp_path: 
 
     preview = plan_adoption(root, skill_roots=["custom/tools"])
 
-    assert preview["skill_discovery"] == {
-        "effective_roots": ["custom/tools"],
-        "additional_roots": ["custom/tools"],
-        "root_count": 1,
-        "discovered_package_count": 1,
-    }
+    assert preview["skill_discovery"]["effective_roots"] == ["custom/tools"]
+    assert preview["skill_discovery"]["additional_roots"] == ["custom/tools"]
+    assert preview["skill_discovery"]["root_count"] == 1
+    assert preview["skill_discovery"]["discovered_package_count"] == 1
+    assert preview["skill_discovery"]["prepared_management_packages"] == [
+        "custom/tools/demo"
+    ]
     assert preview["skill_backup_coverage"]["complete"] is True
     assert preview["skill_backup_coverage"]["covered_package_count"] == 1
     preview_records = {item["path"]: item for item in preview["backup_file_preview"]}
@@ -256,7 +258,9 @@ def test_full_backup_still_reports_complete_skill_package_coverage(tmp_path: Pat
     }
 
 
-def test_skill_package_with_backup_excluded_content_fails_before_writes(tmp_path: Path) -> None:
+def test_skill_package_preserves_generated_artifacts_without_blocking_management(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "project"
     root.mkdir()
     package = _skill(root)
@@ -264,13 +268,278 @@ def test_skill_package_with_backup_excluded_content_fails_before_writes(tmp_path
     cache.mkdir()
     (cache / "generated.pyc").write_bytes(b"not portable source evidence")
 
-    with pytest.raises(ArchMarshalError) as raised:
-        plan_adoption(root, skill_roots=["custom/tools"])
+    repository = package / ".git"
+    repository.mkdir()
+    (repository / "config").write_text("private repository metadata\n", encoding="utf-8")
 
-    assert raised.value.code == "skill_backup_coverage_incomplete"
-    packages = raised.value.details["packages"]
-    assert packages[0]["missing"] == ["custom/tools/demo/__pycache__/generated.pyc"]
+    preview = plan_adoption(root, skill_roots=["custom/tools"])
+
+    assert preview["skill_backup_coverage"]["complete"] is True
+    assert preview["skill_discovery"]["boundary_confirmation_required"] is True
+    artifacts = preview["skill_discovery"]["preserved_artifacts"]
+    assert {item["path"] for item in artifacts} == {
+        "custom/tools/demo/.git",
+        "custom/tools/demo/__pycache__",
+    }
+    assert all(item["contents_inspected"] is False for item in artifacts)
+    assert all(item["policy"] == "preserve_unmanaged" for item in artifacts)
+    assert not {
+        "custom/tools/demo/.git/config",
+        "custom/tools/demo/__pycache__/generated.pyc",
+    } & {item["path"] for item in preview["backup_file_preview"]}
+
+    applied = adopt_workspace(
+        root,
+        apply=True,
+        expected_plan=preview["plan_digest"],
+        skill_roots=["custom/tools"],
+    )
+
+    assert applied["mode"] == "overlay_applied"
+    assert (repository / "config").read_text(encoding="utf-8") == "private repository metadata\n"
+    assert (cache / "generated.pyc").read_bytes() == b"not portable source evidence"
+
+
+def test_exact_skill_exclusions_persist_and_can_be_reversed(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    excluded = _skill(root, "skills/costmarshal")
+    included = _skill(root, "skills/keep")
+    excluded_before = fingerprint_directory(excluded, purpose="excluded before")
+    included_before = fingerprint_directory(included, purpose="included before")
+
+    preview = plan_adoption(root, exclude_skills=["skills/costmarshal"])
+
+    discovery = preview["skill_discovery"]
+    assert discovery["prepared_management_packages"] == ["skills/keep"]
+    assert discovery["excluded_package_count"] == 1
+    assert discovery["excluded_packages"] == [
+        {
+            "source": "skills/costmarshal",
+            "state": "excluded_present",
+            "entrypoint_present": True,
+            "contents_inspected": False,
+            "backup_included": False,
+            "indexed": False,
+            "learning_included": False,
+            "source_mutation": False,
+        }
+    ]
+    assert {item["kind"] for item in preview["skill_index"]["changes"]} == {
+        "initialized",
+        "added",
+        "excluded",
+    }
+    assert not any(
+        item["path"].startswith("skills/costmarshal/")
+        for item in preview["backup_file_preview"]
+    )
+    assert "--exclude-skill" in preview["next_actions"][0]["command"]
+
+    applied = adopt_workspace(
+        root,
+        apply=True,
+        expected_plan=preview["plan_digest"],
+        exclude_skills=["skills/costmarshal"],
+    )
+    assert applied["mode"] == "overlay_applied"
+    assert fingerprint_directory(excluded, purpose="excluded after") == excluded_before
+    assert fingerprint_directory(included, purpose="included after") == included_before
+
+    persisted = plan_adoption(root)
+    assert persisted["skill_discovery"]["prepared_management_packages"] == ["skills/keep"]
+    assert persisted["skill_discovery"]["excluded_package_count"] == 1
+    assert persisted["skill_index"]["changed"] is False
+
+    restored = plan_adoption(root, manage_skills=["skills/costmarshal"])
+    assert restored["skill_discovery"]["prepared_management_packages"] == [
+        "skills/costmarshal",
+        "skills/keep",
+    ]
+    assert restored["skill_discovery"]["excluded_package_count"] == 0
+    assert "included" in {item["kind"] for item in restored["skill_index"]["changes"]}
+    assert "--manage-skill" in restored["next_actions"][0]["command"]
+
+    restored_apply = adopt_workspace(
+        root,
+        apply=True,
+        expected_plan=restored["plan_digest"],
+        manage_skills=["skills/costmarshal"],
+    )
+    assert restored_apply["skill_index"]["excluded_package_count"] == 0
+    assert plan_adoption(root)["skill_discovery"]["excluded_package_count"] == 0
+
+
+def test_multiple_skill_exclusions_are_exact_and_full_backup_respects_them(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    _skill(root, "skills/one")
+    _skill(root, "skills/two")
+    _skill(root, "skills/three")
+    (root / "notes.txt").write_text("keep project evidence\n", encoding="utf-8")
+
+    preview = plan_adoption(
+        root,
+        backup_scope="full",
+        exclude_skills=["skills/one", "skills/two"],
+    )
+
+    assert preview["skill_discovery"]["prepared_management_packages"] == ["skills/three"]
+    assert preview["skill_discovery"]["selection_added"] == ["skills/one", "skills/two"]
+    paths = {item["path"] for item in preview["backup_file_preview"]}
+    assert "notes.txt" in paths
+    assert any(path.startswith("skills/three/") for path in paths)
+    assert not any(path.startswith("skills/one/") for path in paths)
+    assert not any(path.startswith("skills/two/") for path in paths)
+    assert preview["backup_archive_scope"] == "managed_workspace"
+
+    applied = adopt_workspace(
+        root,
+        apply=True,
+        expected_plan=preview["plan_digest"],
+        backup_scope="full",
+        exclude_skills=["skills/one", "skills/two"],
+    )
+    verification = verify_backup(root / applied["backup"]["path"])
+    assert verification["manifest"]["scope"] == "managed_workspace"
+    archived = {item["path"] for item in verification["manifest"]["files"]}
+    assert not any(path.startswith("skills/one/") for path in archived)
+    assert not any(path.startswith("skills/two/") for path in archived)
+
+
+@pytest.mark.parametrize(
+    ("value", "code"),
+    [
+        ("../outside", "skill_selection_outside_project"),
+        ("C:/outside", "skill_selection_outside_project"),
+        (".", "skill_selection_not_portable"),
+        (".agent/private", "skill_selection_managed_state"),
+        ("skills/missing", "skill_selection_missing"),
+    ],
+)
+def test_unsafe_skill_exclusions_fail_before_writes(
+    tmp_path: Path,
+    value: str,
+    code: str,
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+
+    with pytest.raises(ArchMarshalError) as raised:
+        plan_adoption(root, exclude_skills=[value])
+
+    assert raised.value.code == code
     assert not (root / ".agent").exists()
+
+
+def test_same_skill_cannot_be_excluded_and_managed_in_one_plan(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    _skill(root, "skills/demo")
+
+    with pytest.raises(ArchMarshalError) as raised:
+        plan_adoption(
+            root,
+            exclude_skills=["skills/demo"],
+            manage_skills=["skills/demo"],
+        )
+
+    assert raised.value.code == "skill_selection_conflict"
+
+
+def test_excluded_skill_contents_are_not_fingerprinted_or_validated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    excluded = _skill(root, "skills/costmarshal")
+    _skill(root, "skills/keep")
+    real_fingerprint = adoption_module.fingerprint_directory
+    real_validate = adoption_module.validate_skill_package
+
+    def guarded_fingerprint(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        assert Path(path).resolve() != excluded.resolve()
+        return real_fingerprint(path, *args, **kwargs)
+
+    def guarded_validate(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        assert Path(path).resolve() != excluded.resolve()
+        return real_validate(path, *args, **kwargs)
+
+    monkeypatch.setattr(adoption_module, "fingerprint_directory", guarded_fingerprint)
+    monkeypatch.setattr(adoption_module, "validate_skill_package", guarded_validate)
+
+    preview = plan_adoption(root, exclude_skills=["skills/costmarshal"])
+
+    assert preview["skill_discovery"]["prepared_management_packages"] == ["skills/keep"]
+
+
+def test_excluded_skill_cannot_be_reviewed_around_the_management_boundary(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    _skill(root, "skills/costmarshal")
+    preview = plan_adoption(root, exclude_skills=["skills/costmarshal"])
+    applied = adopt_workspace(
+        root,
+        apply=True,
+        expected_plan=preview["plan_digest"],
+        exclude_skills=["skills/costmarshal"],
+    )
+
+    with pytest.raises(ArchMarshalError) as raised:
+        review_workspace_skill(
+            root,
+            "skills/costmarshal",
+            decision="approve",
+            expected_head=applied["skill_index_commit"]["head"],
+        )
+
+    assert raised.value.code == "skill_review_source_excluded"
+
+
+def test_reviewing_managed_skill_preserves_other_package_exclusions(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    for name in ("demo", "private"):
+        package = root / "skills" / name
+        package.mkdir(parents=True)
+        (package / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Reviewed {name} workflow.\n---\n\n# {name}\n",
+            encoding="utf-8",
+        )
+    preview = plan_adoption(root, exclude_skills=["skills/private"])
+    applied = adopt_workspace(
+        root,
+        apply=True,
+        expected_plan=preview["plan_digest"],
+        exclude_skills=["skills/private"],
+    )
+    head = applied["skill_index_commit"]["head"]
+    review = review_workspace_skill(
+        root,
+        "skills/demo",
+        decision="approve",
+        reason="preserve selection",
+        expected_head=head,
+    )
+    reviewed = review_workspace_skill(
+        root,
+        "skills/demo",
+        decision="approve",
+        reason="preserve selection",
+        expected_head=head,
+        expected_plan=review["plan_digest"],
+        reviewed_plan=review["review_plan"],
+        apply=True,
+    )
+
+    assert reviewed["mode"] == "review_recorded"
+    later = plan_adoption(root)
+    assert later["skill_discovery"]["excluded_package_count"] == 1
+    assert later["skill_discovery"]["excluded_packages"][0]["source"] == "skills/private"
 
 
 def test_owned_invalid_workspace_config_blocks_skill_sync(tmp_path: Path) -> None:

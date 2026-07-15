@@ -14,7 +14,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
-REQUIRED_ENGINE_VERSION = "0.14.1"
+REQUIRED_ENGINE_VERSION = "0.15.0"
 REQUIRED_ENGINE_API = "archmarshal-engine-api-v1"
 MARKETPLACE_NAME = "archmarshal"
 LOCK_FORMAT = "archmarshal-plugin-engine-lock-v1"

@@ -16,6 +16,7 @@ from .errors import ArchMarshalError, require_workspace_root
 from .io import load_yaml_safe
 from .ownership import ownership_skill_index_mode, valid_ownership_marker, workspace_id
 from .safety import (
+    EXCLUDED_BACKUP_PARTS,
     MAX_BACKUP_CONTENT_BYTES,
     MAX_BACKUP_FILES,
     MAX_DIRECTORY_SCAN_FILES,
@@ -35,6 +36,7 @@ from .skill_index import (
     disabled_skill_index_plan,
     plan_skill_index,
     public_skill_index_plan,
+    skill_index_exclusions,
 )
 from .skill_validation import validate_skill_package
 from .workspace_lock import WorkspaceMutationLock, workspace_mutation_lock
@@ -110,6 +112,8 @@ def plan_adoption(
     backup_scope: str = "managed",
     project_initialization: bool = False,
     skill_roots: list[str] | None = None,
+    exclude_skills: list[str] | None = None,
+    manage_skills: list[str] | None = None,
 ) -> dict[str, Any]:
     root_path = require_workspace_root(root)
     built = _build_adoption(
@@ -118,6 +122,8 @@ def plan_adoption(
         backup_scope,
         project_initialization=project_initialization,
         skill_roots=skill_roots,
+        exclude_skills=exclude_skills,
+        manage_skills=manage_skills,
     )
     return _public_plan(built, applied=False)
 
@@ -131,6 +137,8 @@ def adopt_workspace(
     expected_plan: str | None = None,
     project_initialization: bool = False,
     skill_roots: list[str] | None = None,
+    exclude_skills: list[str] | None = None,
+    manage_skills: list[str] | None = None,
 ) -> dict[str, Any]:
     root_path = require_workspace_root(root)
     if apply:
@@ -144,6 +152,8 @@ def adopt_workspace(
                 expected_plan=expected_plan,
                 project_initialization=project_initialization,
                 skill_roots=skill_roots,
+                exclude_skills=exclude_skills,
+                manage_skills=manage_skills,
                 held=held,
             )
     return _adopt_workspace_locked(
@@ -154,6 +164,8 @@ def adopt_workspace(
         expected_plan=expected_plan,
         project_initialization=project_initialization,
         skill_roots=skill_roots,
+        exclude_skills=exclude_skills,
+        manage_skills=manage_skills,
         held=None,
     )
 
@@ -167,6 +179,8 @@ def _adopt_workspace_locked(
     expected_plan: str | None,
     project_initialization: bool,
     skill_roots: list[str] | None,
+    exclude_skills: list[str] | None,
+    manage_skills: list[str] | None,
     held: WorkspaceMutationLock | None,
 ) -> dict[str, Any]:
     built = _build_adoption(
@@ -175,6 +189,8 @@ def _adopt_workspace_locked(
         backup_scope,
         project_initialization=project_initialization,
         skill_roots=skill_roots,
+        exclude_skills=exclude_skills,
+        manage_skills=manage_skills,
     )
     if not apply:
         return _public_plan(built, applied=False)
@@ -237,7 +253,7 @@ def _adopt_workspace_locked(
             if project_initialization
             else "ArchMarshal adoption before adding a non-destructive management overlay."
         ),
-        scope=f"{built['backup_scope']}_workspace",
+        scope=built["backup_archive_scope"],
     )
     backup_verification = verify_backup(root_path / backup["path"])
     actual_backup_records = sorted(
@@ -262,8 +278,13 @@ def _adopt_workspace_locked(
         if built["skill_index_plan"].get("disabled")
         else plan_skill_index(
             root_path,
-            _discover_skills(root_path, built["additional_skill_roots"])[0],
+            _discover_skills(
+                root_path,
+                built["additional_skill_roots"],
+                excluded_packages=built["skill_selection"]["excluded_packages"],
+            )[0],
             created_at=(built["skill_index_plan"].get("generation") or {}).get("created_at"),
+            excluded_packages=built["skill_selection"]["excluded_packages"],
         )
     )
     if _logical_skill_plan(revalidated) != _logical_skill_plan(built["skill_index_plan"]):
@@ -321,6 +342,8 @@ def _build_adoption(
     *,
     project_initialization: bool = False,
     skill_roots: list[str] | None = None,
+    exclude_skills: list[str] | None = None,
+    manage_skills: list[str] | None = None,
 ) -> dict[str, Any]:
     if backup_scope not in {"managed", "full"}:
         raise ValueError("backup_scope must be 'managed' or 'full'")
@@ -339,15 +362,26 @@ def _build_adoption(
     reserved_conflicts = [
         relative for relative in RESERVED_FILES[1:] if (root / relative).exists() and not configured
     ]
+    skill_selection = _resolve_skill_selection(
+        root,
+        exclude_skills or [],
+        manage_skills or [],
+    )
     skills, effective_skill_roots, additional_skill_roots = _discover_skills(
-        root, skill_roots
+        root,
+        skill_roots,
+        excluded_packages=skill_selection["excluded_packages"],
     )
     manage_index = not configured or overlay_enabled
+    skill_selection["persistence"] = (
+        "immutable_skill_index" if manage_index else "current_preview_only"
+    )
     skill_index_plan = (
         plan_skill_index(
             root,
             skills,
             created_at=_skill_evidence_timestamp(root, skills),
+            excluded_packages=skill_selection["excluded_packages"],
         )
         if manage_index
         else disabled_skill_index_plan()
@@ -453,11 +487,21 @@ def _build_adoption(
         writes = {}
 
     if backup_scope == "full":
-        backup_files = files_for_full_backup(root)
+        backup_files = files_for_full_backup(
+            root,
+            excluded_directories=[
+                root / PurePosixPath(item)
+                for item in skill_selection["excluded_packages"]
+            ],
+        )
     else:
         backup_files = _managed_backup_files(root, skills)
     backup_records = _backup_source_records(root, backup_files)
     backup_coverage = _skill_backup_coverage(root, skills, backup_records)
+    backup_coverage["excluded_package_count"] = len(
+        skill_selection["excluded_packages"]
+    )
+    backup_coverage["excluded_packages"] = list(skill_selection["excluded_packages"])
     if not backup_coverage["complete"]:
         raise ArchMarshalError(
             "skill_backup_coverage_incomplete",
@@ -476,10 +520,16 @@ def _build_adoption(
         "project_initialization": project_initialization,
         "scaffold_existing": scaffold_existing,
         "backup_scope": backup_scope,
+        "backup_archive_scope": (
+            "managed_workspace"
+            if backup_scope == "full" and skill_selection["excluded_packages"]
+            else f"{backup_scope}_workspace"
+        ),
         "tags": normalized_tags,
         "skills": skills,
         "effective_skill_roots": effective_skill_roots,
         "additional_skill_roots": additional_skill_roots,
+        "skill_selection": skill_selection,
         "backup_coverage": backup_coverage,
         "review_required": review_required,
         "skill_index_plan": skill_index_plan,
@@ -553,6 +603,21 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
         _public_discovered_skill(built, skill, tracked_changes, index_plan)
         for skill in built["skills"]
     ]
+    preserved_artifacts = [
+        {
+            "skill": skill["source"],
+            "path": (
+                artifact
+                if skill["source"] == "."
+                else f"{skill['source']}/{artifact}"
+            ),
+            "policy": "preserve_unmanaged",
+            "contents_inspected": False,
+            "source_mutation": False,
+        }
+        for skill in built["skills"]
+        for artifact in skill.get("preserved_artifacts", [])
+    ]
     skill_reviews_required = [
         {
             "id": skill["id"],
@@ -606,11 +671,21 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
         "transaction": built["transaction_status"],
         "skill_index": index_plan,
         "backup_scope": built["backup_scope"],
+        "backup_archive_scope": built["backup_archive_scope"],
         "skill_discovery": {
             "effective_roots": built["effective_skill_roots"],
             "additional_roots": built["additional_skill_roots"],
             "root_count": len(built["effective_skill_roots"]),
             "discovered_package_count": len(public_skills),
+            "prepared_management_packages": [skill["source"] for skill in public_skills],
+            "excluded_packages": built["skill_selection"]["records"],
+            "excluded_package_count": len(built["skill_selection"]["excluded_packages"]),
+            "selection_added": built["skill_selection"]["added"],
+            "selection_removed": built["skill_selection"]["removed"],
+            "selection_persistence": built["skill_selection"]["persistence"],
+            "preserved_artifacts": preserved_artifacts,
+            "preserved_artifact_count": len(preserved_artifacts),
+            "boundary_confirmation_required": bool(preserved_artifacts),
         },
         "backup_file_count": len(backup_records),
         "backup_file_preview": backup_records[:100],
@@ -636,7 +711,8 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
             "Existing user-owned files are never overwritten, even with --apply.",
             "Only ArchMarshal's internal HEAD pointer may be atomically replaced after backup and CAS validation.",
             "Existing skills stay in place; overlays provide routing metadata without changing SKILL.md.",
-            "Every discovered Skill package is included in the exact verified backup before the first managed file is added.",
+            "Every managed Skill source file is included in the exact verified backup before the first managed file is added.",
+            "Excluded Skill packages and preserved cache/repository artifacts remain outside ArchMarshal management; their contents are not read, backed up, indexed, learned from, or modified.",
             (
                 "Configured overlay projects are incrementally scanned for newly added source skills."
                 if built["configured"] and built["overlay_enabled"]
@@ -767,6 +843,10 @@ def _public_next_actions(
             command_args.extend(["--tag", tag])
         for skill_root in built["additional_skill_roots"]:
             command_args.extend(["--skill-root", skill_root])
+        for source in built["skill_selection"]["requested_exclusions"]:
+            command_args.extend(["--exclude-skill", source])
+        for source in built["skill_selection"]["requested_management"]:
+            command_args.extend(["--manage-skill", source])
         if built["backup_scope"] != "managed":
             command_args.extend(["--backup-scope", built["backup_scope"]])
         command_args.extend(["--expect-plan", plan_digest, "--apply", "--pretty"])
@@ -840,10 +920,16 @@ def _public_next_actions(
 def _adoption_plan_digest(built: dict[str, Any]) -> str:
     root: Path = built["root"]
     intent = {
-        "format": "archmarshal-adoption-plan-v2",
+        "format": "archmarshal-adoption-plan-v3",
         "backup_scope": built["backup_scope"],
+        "backup_archive_scope": built["backup_archive_scope"],
         "effective_skill_roots": built["effective_skill_roots"],
         "additional_skill_roots": built["additional_skill_roots"],
+        "skill_selection": built["skill_selection"],
+        "preserved_artifacts": [
+            {"source": skill["source"], "paths": skill.get("preserved_artifacts", [])}
+            for skill in built["skills"]
+        ],
         "configured": built["configured"],
         "overlay_enabled": built["overlay_enabled"],
         "project_initialization": built["project_initialization"],
@@ -933,7 +1019,11 @@ def _skill_evidence_timestamp(root: Path, skills: list[dict[str, Any]]) -> str:
         if source.resolve(strict=False) == root.resolve():
             source_files = [source / "SKILL.md", source / "manifest.yaml"]
         elif source.is_dir() and not is_link_or_reparse(source):
-            source_files = files_below_no_links(source, purpose="Skill timestamp evidence")
+            source_files = files_below_no_links(
+                source,
+                purpose="Skill timestamp evidence",
+                excluded_parts=EXCLUDED_BACKUP_PARTS,
+            )
         else:
             source_files = []
         candidates.extend(path for path in source_files if path.is_file())
@@ -943,20 +1033,204 @@ def _skill_evidence_timestamp(root: Path, skills: list[dict[str, Any]]) -> str:
     )
 
 
+def _resolve_skill_selection(
+    root: Path,
+    requested_exclusions: list[str],
+    requested_management: list[str],
+) -> dict[str, Any]:
+    persisted = skill_index_exclusions(root)
+    persisted_by_key = {_portable_skill_root_key(item): item for item in persisted}
+    exclusions = [
+        _normalize_skill_package_selection(root, item, allow_missing=False)
+        for item in requested_exclusions
+    ]
+    management = [
+        _normalize_skill_package_selection(
+            root,
+            item,
+            allow_missing=(
+                isinstance(item, str)
+                and _portable_skill_root_key(item.strip().replace("\\", "/"))
+                in persisted_by_key
+            ),
+        )
+        for item in requested_management
+    ]
+    excluded_by_key = _portable_skill_selection_map(exclusions)
+    managed_by_key = _portable_skill_selection_map(management)
+    for key, value in {**excluded_by_key, **managed_by_key}.items():
+        previous = persisted_by_key.get(key)
+        if previous is not None and previous != value:
+            raise ArchMarshalError(
+                "skill_selection_portable_collision",
+                "Skill selection spelling collides with persisted portable path identity.",
+                details={"persisted": previous, "requested": value},
+            )
+    overlap = sorted(set(excluded_by_key) & set(managed_by_key))
+    if overlap:
+        raise ArchMarshalError(
+            "skill_selection_conflict",
+            "The same Skill package cannot be excluded and managed in one plan.",
+            details={"packages": [excluded_by_key[key] for key in overlap]},
+        )
+    desired = dict(persisted_by_key)
+    desired.update(excluded_by_key)
+    for key in managed_by_key:
+        desired.pop(key, None)
+    desired_values = sorted(desired.values(), key=lambda item: (_portable_skill_root_key(item), item))
+    added = sorted(
+        [value for key, value in desired.items() if key not in persisted_by_key],
+        key=str.casefold,
+    )
+    removed = sorted(
+        [value for key, value in persisted_by_key.items() if key not in desired],
+        key=str.casefold,
+    )
+    records: list[dict[str, Any]] = []
+    for source in desired_values:
+        candidate = root / PurePosixPath(source)
+        linked = is_link_or_reparse(candidate)
+        directory_present = not linked and candidate.exists() and candidate.is_dir()
+        entrypoint = candidate / "SKILL.md"
+        entrypoint_present = (
+            directory_present and entrypoint.is_file() and not is_link_or_reparse(entrypoint)
+        )
+        records.append(
+            {
+                "source": source,
+                "state": (
+                    "excluded_present"
+                    if entrypoint_present
+                    else "excluded_unsafe_boundary"
+                    if linked
+                    else "excluded_dormant"
+                ),
+                "entrypoint_present": entrypoint_present,
+                "contents_inspected": False,
+                "backup_included": False,
+                "indexed": False,
+                "learning_included": False,
+                "source_mutation": False,
+            }
+        )
+    return {
+        "format": "archmarshal-skill-selection-v1",
+        "excluded_packages": desired_values,
+        "requested_exclusions": sorted(set(exclusions), key=str.casefold),
+        "requested_management": sorted(set(management), key=str.casefold),
+        "added": added,
+        "removed": removed,
+        "records": records,
+    }
+
+
+def _portable_skill_selection_map(values: list[str]) -> dict[str, str]:
+    selected: dict[str, str] = {}
+    for value in values:
+        key = _portable_skill_root_key(value)
+        previous = selected.get(key)
+        if previous is not None and previous != value:
+            raise ArchMarshalError(
+                "skill_selection_portable_collision",
+                "Skill selections collide under portable case/Unicode path rules.",
+                details={"first": previous, "second": value},
+            )
+        selected[key] = value
+    return selected
+
+
+def _normalize_skill_package_selection(
+    root: Path,
+    value: str,
+    *,
+    allow_missing: bool,
+) -> str:
+    if not isinstance(value, str):
+        raise ArchMarshalError(
+            "skill_selection_invalid",
+            "Skill package selections must be project-relative strings.",
+        )
+    normalized = value.strip().replace("\\", "/")
+    path = PurePosixPath(normalized)
+    if (
+        not normalized
+        or "\x00" in normalized
+        or path.is_absolute()
+        or re.match(r"^[A-Za-z]:/", normalized)
+        or ".." in path.parts
+    ):
+        raise ArchMarshalError(
+            "skill_selection_outside_project",
+            "Skill package selections must stay inside the project root.",
+            details={"source": value},
+        )
+    parts = tuple(part for part in path.parts if part not in {"", "."})
+    relative = PurePosixPath(*parts).as_posix() if parts else "."
+    if relative == "." or unicodedata.normalize("NFC", relative) != relative or any(
+        _unsafe_skill_root_component(part) for part in parts
+    ):
+        raise ArchMarshalError(
+            "skill_selection_not_portable",
+            "Skill package selections require a portable, non-root package directory.",
+            details={"source": value},
+        )
+    if parts[0].casefold() == ".agent":
+        raise ArchMarshalError(
+            "skill_selection_managed_state",
+            "Skill package selections must not point into ArchMarshal's .agent state.",
+            details={"source": relative},
+        )
+    candidate = root / PurePosixPath(relative)
+    if not candidate.exists():
+        if allow_missing:
+            return relative
+        raise ArchMarshalError(
+            "skill_selection_missing",
+            "An explicitly selected Skill package does not exist.",
+            details={"source": relative},
+        )
+    ensure_managed_path(root, candidate, purpose="Skill package selection")
+    entrypoint = candidate / "SKILL.md"
+    if (
+        not candidate.is_dir()
+        or is_link_or_reparse(candidate)
+        or not entrypoint.is_file()
+        or is_link_or_reparse(entrypoint)
+    ):
+        raise ArchMarshalError(
+            "skill_selection_invalid",
+            "A Skill package selection must be a real directory with an unlinked SKILL.md.",
+            details={"source": relative},
+        )
+    return relative
+
+
 def _discover_skills(
     root: Path,
     additional_roots: list[str] | None = None,
+    *,
+    excluded_packages: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     effective_roots, normalized_additional = _effective_skill_roots(
         root, additional_roots or []
     )
     skill_docs: set[Path] = set()
+    excluded_packages = excluded_packages or []
+    excluded_keys = {_portable_skill_root_key(item) for item in excluded_packages}
+    excluded_directories = [root / PurePosixPath(item) for item in excluded_packages]
     root_skill = root / "SKILL.md"
-    if root_skill.is_file():
+    if root_skill.is_file() and _portable_skill_root_key(".") not in excluded_keys:
         skill_docs.add(root_skill)
     for relative in effective_roots:
         candidate = root if relative == "." else root / PurePosixPath(relative)
-        for path in files_below_no_links(candidate, purpose="Skill discovery"):
+        if _portable_skill_root_key(relative) in excluded_keys:
+            continue
+        for path in files_below_no_links(
+            candidate,
+            purpose="Skill discovery",
+            excluded_parts=EXCLUDED_BACKUP_PARTS,
+            excluded_directories=excluded_directories,
+        ):
             if path.name != "SKILL.md":
                 continue
             if ".agent" not in path.relative_to(root).parts:
@@ -967,6 +1241,8 @@ def _discover_skills(
         ensure_path_within(root, skill_md, purpose="Discovered skill source")
         source_dir = skill_md.parent
         source = source_dir.relative_to(root).as_posix()
+        if _portable_skill_root_key(source) in excluded_keys:
+            continue
         frontmatter = _skill_frontmatter(skill_md)
         source_manifest = source_dir / "manifest.yaml"
         declared, import_errors, source_declared_status = _import_source_manifest(
@@ -1005,6 +1281,7 @@ def _discover_skills(
             purpose="Skill package",
             entrypoint_only=source_dir.resolve() == root,
             include_modes=True,
+            excluded_parts=EXCLUDED_BACKUP_PARTS,
         )
         validation = validate_skill_package(
             source_dir,
@@ -1064,6 +1341,7 @@ def _discover_skills(
                 "package_sha256": package["sha256"],
                 "package_file_count": package["file_count"],
                 "package_content_bytes": package["content_bytes"],
+                "package_boundary": "portable-source-v1",
                 "original_manifest": (
                     source_manifest.relative_to(root).as_posix()
                     if source_manifest.exists()
@@ -1092,6 +1370,7 @@ def _discover_skills(
             {
                 "source": source,
                 "package_files": package["files"],
+                "preserved_artifacts": package["preserved_paths"],
                 "source_declared_status": source_declared_status,
                 "source_manifest": (
                     source_manifest.relative_to(root).as_posix()
@@ -1679,6 +1958,7 @@ def _managed_backup_files(root: Path, skills: list[dict[str, Any]]) -> list[Path
                     source_dir,
                     purpose="Source skill package backup",
                     max_files=10_000,
+                    excluded_parts=EXCLUDED_BACKUP_PARTS,
                 )
                 if path.is_file()
             )

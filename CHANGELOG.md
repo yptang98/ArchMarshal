@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.15.0 - 2026-07-16
+
+- Added repeatable exact Skill-package exclusions with immutable persistence,
+  explicit per-package restoration, previewed management boundaries, and no
+  backup/index/activation/learning access to excluded packages.
+- Made VCS metadata, caches, virtual environments, dependency trees, and
+  runtime/build outputs preserved artifact boundaries so they no longer block
+  safe management of the remaining Skill source.
+- Added a dedicated Codex update prompt while keeping the install prompt
+  idempotent across first install, verified update, and exact-version no-op.
+- Updated the Codex Skill workflow to show all proposed management directories
+  first and request a preserve-or-exclude decision when artifact boundaries are
+  present.
+
 ## 0.14.1 - 2026-07-16
 
 ### Prompt-first installation documentation

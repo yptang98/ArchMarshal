@@ -52,6 +52,22 @@ Complete the work yourself under these safety constraints; do not hand the steps
 The same prompt is available as a standalone file:
 [INSTALL_PROMPT.md](INSTALL_PROMPT.md).
 
+## Update command
+
+The installation prompt is idempotent: it installs, safely updates, or reports
+an exact-version no-op. An already installed copy also supports this direct
+Codex request:
+
+```text
+Update ArchMarshal safely to the latest verified version. Do not manage or modify the current project during the update.
+```
+
+For a complete standalone update request, copy
+[UPDATE_PROMPT.md](UPDATE_PROMPT.md). Updates verify the exact remote commit and
+CI result, back up the current Codex-managed ArchMarshal snapshot, preserve
+user-owned local marketplaces, validate the replacement, and restore the last
+known-good pinned version on failure.
+
 The official lower-level command flow is summarized for maintainers in
 [Getting Started](docs/getting-started.md). It intentionally requires a real,
 reviewed full SHA; there is no fake copy-paste placeholder in the primary user
@@ -65,7 +81,9 @@ or command window to learn. Ask for the outcome:
 ```text
 Use ArchMarshal to inspect this project and its existing Skills. Diagnose only; do not modify files.
 Use ArchMarshal to safely adopt this existing project. Back it up first and show me the exact plan.
+Use ArchMarshal to manage this project but never manage skills/costmarshal or skills/private-local. Show every Skill directory you plan to manage first.
 Use ArchMarshal to initialize this new project with the tags research and python.
+Update ArchMarshal safely. Do not run project governance during the update.
 Close this project with a careful record of the key steps and scripts.
 Create a reproducible closeout with complete evidence, commands, and a reference run script.
 Extract reusable Skills and my project preferences from recent projects, but do not activate them automatically.
@@ -95,8 +113,11 @@ flowchart LR
 ```
 
 - **At project start:** initialize a new layout or adopt an existing project
-  through a metadata overlay. Existing Skill packages are discovered,
-  fingerprinted, backed up, and quarantined pending review.
+  through a metadata overlay. Preview lists every Skill directory prepared for
+  management before apply. Exact package exclusions persist across runs.
+  Managed source is fingerprinted, backed up, and quarantined pending review;
+  VCS metadata, caches, virtual environments, and dependency trees remain
+  preserved outside the managed boundary.
 - **During work:** keep active project material readable, registry-backed, and
   separate from history/cache. Skills resolve by tags, triggers, negative
   triggers, status, scope, and verified package identity.
@@ -126,8 +147,15 @@ ArchMarshal is preview-first and fail-closed:
 - Read-only inspection does not create an absent project root.
 - Existing user project and Skill files are never normalized, overwritten,
   moved, renamed, or deleted.
-- Adoption requires complete package-to-backup coverage before the first
+- Adoption requires complete managed-source backup coverage before the first
   managed file is created.
+- Repeatable exact Skill exclusions are evaluated before package content is
+  read and persist in immutable index history. Excluded package contents are not
+  backed up, overlaid, indexed, activated, learned from, moved, or modified.
+  Restoring management is a separate explicit action.
+- `.git` and other VCS metadata, caches, virtual environments, dependency
+  trees, and runtime/build artifacts are reported as preserved boundaries.
+  Their contents are not inspected merely to adopt the remaining Skill source.
 - Apply requires the exact reviewed plan and, where relevant, the expected
   immutable `HEAD`; stale or concurrent plans fail.
 - Control state uses create-only transactions, content hashes, immutable
@@ -158,10 +186,11 @@ over their scheduler. For CostMarshal, the intended boundary is:
 - Integration should exchange accepted manifests/reports through explicit
   paths or contracts; neither tool should edit the other's internal state.
 
-The current generic artifact model can preserve CostMarshal outputs when the
-user places those paths in scope, and the repository documents this boundary.
-A first-class bidirectional bridge remains planned; compatibility is not
-presented as completed integration.
+Users can now place one or more CostMarshal Skill packages outside ArchMarshal's
+management boundary with exact persistent exclusions while ArchMarshal governs
+the rest of the project. This is isolation compatibility, not a bidirectional
+runtime bridge: accepted manifests/reports can be exchanged explicitly, while
+automatic scheduler/governance synchronization remains planned.
 
 ## Current boundaries
 
@@ -180,7 +209,8 @@ presented as completed integration.
 
 ```text
 ArchMarshal/
-├─ INSTALL_PROMPT.md          # copy-paste Codex installer/update prompt
+├─ INSTALL_PROMPT.md          # idempotent Codex installer/update prompt
+├─ UPDATE_PROMPT.md           # dedicated Codex update prompt
 ├─ README.md                  # product overview and safety contract
 ├─ .agents/plugins/           # repository marketplace manifest
 ├─ plugins/archmarshal/       # Codex plugin, Skill, wrapper, engine lock

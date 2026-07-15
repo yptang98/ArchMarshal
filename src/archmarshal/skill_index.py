@@ -17,6 +17,7 @@ else:
 
 from .errors import ArchMarshalError, require_workspace_root
 from .safety import (
+    EXCLUDED_BACKUP_PARTS,
     create_backup,
     create_bytes_exclusive,
     ensure_managed_path,
@@ -28,6 +29,7 @@ from .safety import (
 from .workspace_lock import workspace_mutation_lock
 
 FORMAT = "archmarshal-skill-index-v1"
+SELECTION_FORMAT = "archmarshal-skill-selection-v1"
 STATE_RELATIVE = Path(".agent/skill-overlays/.archmarshal")
 HEAD_NAME = "HEAD"
 LOCK_NAME = "HEAD.lock"
@@ -62,6 +64,7 @@ def plan_skill_index(
     discovered_skills: list[dict[str, Any]],
     *,
     created_at: str | None = None,
+    excluded_packages: list[str] | None = None,
 ) -> dict[str, Any]:
     root = root.resolve()
     loaded = load_skill_index(root)
@@ -69,6 +72,13 @@ def plan_skill_index(
     previous_records = {
         str(record["source"]): record for record in (loaded.get("generation") or {}).get("skills", [])
     }
+    previous_exclusions = _generation_exclusions(loaded.get("generation"))
+    desired_exclusions = (
+        previous_exclusions
+        if excluded_packages is None
+        else _validated_exclusions(excluded_packages)
+    )
+    excluded_keys = {_portable_source_key(source) for source in desired_exclusions}
     if len(discovered_skills) > MAX_INDEX_SKILLS:
         raise ArchMarshalError(
             "skill_index_limit_exceeded",
@@ -112,29 +122,29 @@ def plan_skill_index(
         current_source_keys.add(source_key)
 
     records: list[dict[str, Any]] = []
-    changes: list[dict[str, str]] = []
     for source in sorted(set(previous_records) | set(current_records), key=str.casefold):
         previous = previous_records.get(source)
         current = current_records.get(source)
         if current is None:
+            if previous and _portable_source_key(source) in excluded_keys:
+                records.append(previous)
+                continue
             if previous and previous.get("state") == "removed":
                 records.append(previous)
                 continue
             if previous:
                 records.append({**previous, "state": "removed"})
-                changes.append({"kind": "removed", "source": source})
             continue
         records.append(current)
-        if previous is None:
-            changes.append({"kind": "added", "source": source})
-        elif previous.get("state") == "removed":
-            changes.append({"kind": "restored", "source": source})
-        elif previous.get("manifest") != current["manifest"]:
-            changes.append({"kind": "modified", "source": source})
 
     initializing = expected_head is None
-    if initializing:
-        changes.insert(0, {"kind": "initialized", "source": ""})
+    changes = _diff_skill_records(
+        list(previous_records.values()),
+        records,
+        initializing=initializing,
+        previous_exclusions=previous_exclusions,
+        current_exclusions=desired_exclusions,
+    )
     changed = initializing or bool(changes)
     if not changed:
         return {
@@ -145,7 +155,11 @@ def plan_skill_index(
             "changes": [],
             "object_path": loaded.get("object_path"),
             "source_precondition_policy": "active-match-and-removed-absent",
-            "source_preconditions": _source_preconditions(records, include_removed=True),
+            "source_preconditions": _source_preconditions(
+                records,
+                include_removed=True,
+                excluded_packages=desired_exclusions,
+            ),
         }
 
     generation = {
@@ -154,6 +168,10 @@ def plan_skill_index(
         "parent": expected_head,
         "skills": records,
         "changes": changes,
+        "selection": {
+            "format": SELECTION_FORMAT,
+            "excluded_packages": desired_exclusions,
+        },
     }
     payload = _object_bytes(generation)
     _ensure_object_size(payload)
@@ -166,8 +184,18 @@ def plan_skill_index(
         "changes": changes,
         "object_path": _relative_object_path(digest),
         "source_precondition_policy": "active-match-and-removed-absent",
-        "source_preconditions": _source_preconditions(records, include_removed=True),
+        "source_preconditions": _source_preconditions(
+            records,
+            include_removed=True,
+            excluded_packages=desired_exclusions,
+        ),
     }
+
+
+def skill_index_exclusions(root: Path | str) -> list[str]:
+    """Return the active exact-package exclusions from verified immutable state."""
+    root_path = require_workspace_root(root)
+    return _generation_exclusions(load_skill_index(root_path).get("generation"))
 
 
 def disabled_skill_index_plan() -> dict[str, Any]:
@@ -415,6 +443,8 @@ def _load_generation_object(root: Path, digest: str) -> dict[str, Any]:
 
 
 def public_skill_index_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    generation = plan.get("generation")
+    exclusions = _generation_exclusions(generation if isinstance(generation, dict) else None)
     return {
         "enabled": not bool(plan.get("disabled")),
         "changed": bool(plan.get("changed")),
@@ -426,6 +456,8 @@ def public_skill_index_plan(plan: dict[str, Any]) -> dict[str, Any]:
             else plan.get("object_path")
         ),
         "changes": plan.get("changes") or [],
+        "excluded_packages": exclusions,
+        "excluded_package_count": len(exclusions),
         "commit_policy": "exclusive-lock-and-head-compare-and-swap",
         "source_mutation": False,
     }
@@ -433,12 +465,20 @@ def public_skill_index_plan(plan: dict[str, Any]) -> dict[str, Any]:
 
 def skill_index_summary(loaded: dict[str, Any]) -> dict[str, Any]:
     records = (loaded.get("generation") or {}).get("skills", [])
+    exclusions = _generation_exclusions(loaded.get("generation"))
+    excluded_keys = {_portable_source_key(source) for source in exclusions}
     return {
         "format": FORMAT,
         "head": loaded.get("head"),
         "object_path": loaded.get("object_path"),
-        "active_skills": sum(record.get("state") == "active" for record in records),
+        "active_skills": sum(
+            record.get("state") == "active"
+            and _portable_source_key(str(record.get("source") or "")) not in excluded_keys
+            for record in records
+        ),
         "removed_skills": sum(record.get("state") == "removed" for record in records),
+        "excluded_packages": exclusions,
+        "excluded_package_count": len(exclusions),
         "immutable_objects": True,
         "head_commit": "lock_and_compare_and_swap",
     }
@@ -576,7 +616,14 @@ def plan_skill_index_rollback(
         current_generation.get("skills") or [],
         target_generation.get("skills") or [],
     )
-    changes = _diff_skill_records(current_generation.get("skills") or [], records)
+    current_exclusions = _generation_exclusions(current_generation)
+    target_exclusions = _generation_exclusions(target_generation)
+    changes = _diff_skill_records(
+        current_generation.get("skills") or [],
+        records,
+        previous_exclusions=current_exclusions,
+        current_exclusions=target_exclusions,
+    )
     changes.append(
         {
             "kind": "rollback",
@@ -591,11 +638,19 @@ def plan_skill_index_rollback(
         "parent": current_head,
         "skills": records,
         "changes": changes,
+        "selection": {
+            "format": SELECTION_FORMAT,
+            "excluded_packages": target_exclusions,
+        },
     }
     payload = _object_bytes(generation)
     _ensure_object_size(payload)
     digest = hashlib.sha256(payload).hexdigest()
-    preconditions = _source_preconditions(records, include_removed=False)
+    preconditions = _source_preconditions(
+        records,
+        include_removed=False,
+        excluded_packages=target_exclusions,
+    )
     _verify_source_preconditions(root_path, preconditions)
     return {
         "changed": True,
@@ -725,6 +780,7 @@ def _rollback_plan_digest(root: Path, plan: dict[str, Any]) -> str:
         "target": plan.get("rollback_target"),
         "reason": plan.get("rollback_reason"),
         "skills": generation.get("skills") or [],
+        "selection": generation.get("selection") or {},
         "changes": plan.get("changes") or [],
         "source_precondition_policy": plan.get("source_precondition_policy"),
         "source_preconditions": plan.get("source_preconditions") or [],
@@ -812,6 +868,7 @@ def _validate_history_transitions(chain: list[dict[str, Any]]) -> None:
                     details={"digest": item["digest"], "parent": parent_digest},
                 )
             parent_records: list[dict[str, Any]] = []
+            parent_exclusions: list[str] = []
         else:
             if parent_digest != parent_item["digest"]:
                 raise ArchMarshalError(
@@ -820,7 +877,9 @@ def _validate_history_transitions(chain: list[dict[str, Any]]) -> None:
                     details={"digest": item["digest"], "parent": parent_digest},
                 )
             parent_records = parent_item["generation"].get("skills") or []
+            parent_exclusions = _generation_exclusions(parent_item["generation"])
         child_records = generation.get("skills") or []
+        child_exclusions = _generation_exclusions(generation)
         changes = generation.get("changes") or []
         rollback_changes = [change for change in changes if change.get("kind") == "rollback"]
         ordinary_changes = [change for change in changes if change.get("kind") != "rollback"]
@@ -828,6 +887,8 @@ def _validate_history_transitions(chain: list[dict[str, Any]]) -> None:
             parent_records,
             child_records,
             initializing=parent_item is None,
+            previous_exclusions=parent_exclusions,
+            current_exclusions=child_exclusions,
         )
         if ordinary_changes != expected_changes:
             raise ArchMarshalError(
@@ -855,18 +916,34 @@ def _validate_history_transitions(chain: list[dict[str, Any]]) -> None:
                     "Skill index rollback snapshot does not match its declared target.",
                     details={"digest": item["digest"], "target": target},
                 )
+            if child_exclusions != _generation_exclusions(
+                chain[target_index]["generation"]
+            ):
+                raise ArchMarshalError(
+                    "skill_index_history_invalid",
+                    "Skill index rollback selection does not match its declared target.",
+                    details={"digest": item["digest"], "target": target},
+                )
 
 
 def _history_item(item: dict[str, Any]) -> dict[str, Any]:
     generation = item["generation"]
     records = generation.get("skills") or []
+    exclusions = _generation_exclusions(generation)
+    excluded_keys = {_portable_source_key(source) for source in exclusions}
     return {
         "digest": item["digest"],
         "created_at": generation.get("created_at"),
         "parent": generation.get("parent"),
         "changes": generation.get("changes") or [],
-        "active_skills": sum(record.get("state") == "active" for record in records),
+        "active_skills": sum(
+            record.get("state") == "active"
+            and _portable_source_key(str(record.get("source") or "")) not in excluded_keys
+            for record in records
+        ),
         "removed_skills": sum(record.get("state") == "removed" for record in records),
+        "excluded_package_count": len(exclusions),
+        "excluded_packages": exclusions,
     }
 
 
@@ -890,6 +967,8 @@ def _diff_skill_records(
     child_records: list[dict[str, Any]],
     *,
     initializing: bool = False,
+    previous_exclusions: list[str] | None = None,
+    current_exclusions: list[str] | None = None,
 ) -> list[dict[str, str]]:
     parent = {str(record["source"]): record for record in parent_records}
     child = {str(record["source"]): record for record in child_records}
@@ -919,6 +998,12 @@ def _diff_skill_records(
             changes.append({"kind": "restored", "source": source})
         elif previous.get("manifest") != current.get("manifest"):
             changes.append({"kind": "modified", "source": source})
+    previous_selection = set(previous_exclusions or [])
+    current_selection = set(current_exclusions or [])
+    for source in sorted(current_selection - previous_selection, key=str.casefold):
+        changes.append({"kind": "excluded", "source": source})
+    for source in sorted(previous_selection - current_selection, key=str.casefold):
+        changes.append({"kind": "included", "source": source})
     return changes
 
 
@@ -1064,7 +1149,7 @@ def _validate_generation(generation: object, head: str) -> None:
             details={"limit": MAX_INDEX_SKILLS, "actual": len(records)},
         )
     changes = generation.get("changes")
-    if not isinstance(changes, list) or len(changes) > MAX_INDEX_SKILLS + 1:
+    if not isinstance(changes, list) or len(changes) > (MAX_INDEX_SKILLS * 2) + 1:
         raise ArchMarshalError(
             "skill_index_integrity_failed",
             "Skill index generation contains an invalid change list.",
@@ -1093,7 +1178,15 @@ def _validate_generation(generation: object, head: str) -> None:
                     "Skill index generation contains an invalid rollback record.",
                 )
         elif (
-            kind not in {"initialized", "added", "modified", "removed", "restored"}
+            kind not in {
+                "initialized",
+                "added",
+                "modified",
+                "removed",
+                "restored",
+                "excluded",
+                "included",
+            }
             or (kind != "initialized" and not _is_safe_source(str(change.get("source"))))
             or (kind == "initialized" and change.get("source") != "")
         ):
@@ -1154,16 +1247,28 @@ def _validate_generation(generation: object, head: str) -> None:
                 details={"source": source},
             )
         seen.add(source_key)
+    try:
+        _generation_exclusions(generation)
+    except ArchMarshalError as exc:
+        raise ArchMarshalError(
+            "skill_index_integrity_failed",
+            "Skill index generation contains an invalid selection policy.",
+            details={"cause": exc.code},
+        ) from exc
 
 
 def _source_preconditions(
     records: list[dict[str, Any]],
     *,
     include_removed: bool,
+    excluded_packages: list[str] | None = None,
 ) -> list[dict[str, str]]:
     preconditions: list[dict[str, str]] = []
+    excluded_keys = {_portable_source_key(item) for item in (excluded_packages or [])}
     for record in records:
         source = str(record["source"])
+        if _portable_source_key(source) in excluded_keys:
+            continue
         if record.get("state") == "active":
             source_metadata = record["manifest"].get("source")
             package_hash = (
@@ -1171,13 +1276,17 @@ def _source_preconditions(
                 if isinstance(source_metadata, dict)
                 else None
             )
-            preconditions.append(
-                {
+            item = {
                     "source": source,
                     "state": "active",
                     "package_sha256": str(package_hash or ""),
                 }
-            )
+            if (
+                isinstance(source_metadata, dict)
+                and source_metadata.get("package_boundary") == "portable-source-v1"
+            ):
+                item["package_boundary"] = "portable-source-v1"
+            preconditions.append(item)
         elif include_removed:
             preconditions.append({"source": source, "state": "absent"})
     return preconditions
@@ -1203,6 +1312,7 @@ def _validate_source_preconditions(
     expected = _source_preconditions(
         records,
         include_removed=policy == "active-match-and-removed-absent",
+        excluded_packages=_generation_exclusions(generation),
     )
     normalized: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -1215,6 +1325,7 @@ def _validate_source_preconditions(
         source = item.get("source")
         state = item.get("state")
         package_hash = item.get("package_sha256")
+        package_boundary = item.get("package_boundary")
         source_key = _portable_source_key(source) if isinstance(source, str) else ""
         if (
             not isinstance(source, str)
@@ -1223,6 +1334,8 @@ def _validate_source_preconditions(
             or state not in {"active", "absent"}
             or (state == "active" and (not isinstance(package_hash, str) or not _is_sha256(package_hash)))
             or (state == "absent" and package_hash is not None)
+            or package_boundary not in {None, "portable-source-v1"}
+            or (state == "absent" and package_boundary is not None)
         ):
             raise ArchMarshalError(
                 "skill_index_plan_invalid",
@@ -1232,6 +1345,8 @@ def _validate_source_preconditions(
         normalized_item = {"source": source, "state": str(state)}
         if state == "active":
             normalized_item["package_sha256"] = str(package_hash)
+            if package_boundary is not None:
+                normalized_item["package_boundary"] = str(package_boundary)
         normalized.append(normalized_item)
         seen.add(source_key)
     if normalized != expected:
@@ -1255,6 +1370,11 @@ def _verify_source_preconditions(root: Path, preconditions: list[dict[str, str]]
                     purpose="Skill source precondition",
                     entrypoint_only=source == ".",
                     include_modes=True,
+                    excluded_parts=(
+                        EXCLUDED_BACKUP_PARTS
+                        if precondition.get("package_boundary") == "portable-source-v1"
+                        else ()
+                    ),
                 )
                 if not fingerprint_directory_matches(
                     package,
@@ -1585,6 +1705,57 @@ def _is_sha256(value: str) -> bool:
     return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
+def _generation_exclusions(generation: object) -> list[str]:
+    if generation is None:
+        return []
+    if not isinstance(generation, dict):
+        raise ArchMarshalError(
+            "skill_index_selection_invalid",
+            "Skill index selection requires a generation mapping.",
+        )
+    selection = generation.get("selection")
+    if selection is None:
+        return []
+    if (
+        not isinstance(selection, dict)
+        or set(selection) != {"format", "excluded_packages"}
+        or selection.get("format") != SELECTION_FORMAT
+        or not isinstance(selection.get("excluded_packages"), list)
+    ):
+        raise ArchMarshalError(
+            "skill_index_selection_invalid",
+            "Skill index selection has an unsupported structure.",
+        )
+    return _validated_exclusions(selection["excluded_packages"])
+
+
+def _validated_exclusions(values: list[object]) -> list[str]:
+    if len(values) > MAX_INDEX_SKILLS:
+        raise ArchMarshalError(
+            "skill_index_selection_invalid",
+            "Skill index exclusion count exceeds the safe Skill limit.",
+            details={"limit": MAX_INDEX_SKILLS, "actual": len(values)},
+        )
+    normalized: dict[str, str] = {}
+    for value in values:
+        if not isinstance(value, str) or not _is_safe_source(value):
+            raise ArchMarshalError(
+                "skill_index_selection_invalid",
+                "Skill index exclusion contains an unsafe package path.",
+                details={"source": value},
+            )
+        key = _portable_source_key(value)
+        previous = normalized.get(key)
+        if previous is not None and previous != value:
+            raise ArchMarshalError(
+                "skill_index_selection_invalid",
+                "Skill index exclusions collide under portable path rules.",
+                details={"first": previous, "second": value},
+            )
+        normalized[key] = value
+    return sorted(normalized.values(), key=lambda item: (_portable_source_key(item), item))
+
+
 def _is_safe_source(value: str) -> bool:
     if not value or len(value) > MAX_SOURCE_LENGTH or "\\" in value or "\x00" in value:
         return False
@@ -1621,6 +1792,7 @@ __all__ = [
     "public_skill_index_plan",
     "rollback_skill_index",
     "skill_index_status",
+    "skill_index_exclusions",
     "skill_index_summary",
     "skill_review_subject_digest",
 ]

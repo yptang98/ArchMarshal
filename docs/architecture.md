@@ -103,8 +103,9 @@ invalid recognized value disables the generated metadata and marks it for
 review instead of guessing an active configuration.
 
 Adoption is a durable create-only transaction. Its reviewed plan digest binds
-the exact control-file bytes, source preconditions, backup scope, and proposed
-skill-index generation. After revalidation and backup verification, staged
+the exact control-file bytes, source preconditions, backup scope, persistent
+exact-package selection, preserved artifact boundaries, and proposed skill-index
+generation. After revalidation and backup verification, staged
 payloads plus a journal are published under `.agent/transactions/adoption/`
 before any visible target. An OS-lifetime lock serializes adoption, each target
 is exclusively created or verified as an exact match, the skill generation uses
@@ -138,8 +139,11 @@ After adoption, incremental sync is a small versioned module registry:
 └─ objects/sha256/<digest>.json  # immutable complete generations
 ```
 
-Each generation names its parent and records active/removed skill manifests plus
-added, modified, removed, and restored changes. Publication exclusively creates
+Each generation names its parent and records active/removed skill manifests,
+the exact package-exclusion selection, plus added, modified, removed, restored,
+excluded, and included changes. Selection overrides retained routing metadata,
+so excluded packages stay inactive without pretending their source was deleted.
+Publication exclusively creates
 the object, rechecks the expected `HEAD`, and atomically replaces only the
 ArchMarshal-owned pointer. A stale plan, lock conflict, digest mismatch, unsafe
 path, linked scan root, or size/count limit is a hard failure. Older and orphaned
@@ -153,7 +157,8 @@ or equals a fully verified proposed object. The decision is recorded before the
 next transaction. Legacy or malformed lock files are never auto-cleared.
 
 Rollback is forward-only: a new generation has the current `HEAD` as parent and
-reproduces an ancestor routing snapshot while preserving tombstones. This keeps
+reproduces an ancestor routing and selection snapshot while preserving
+tombstones. This keeps
 history linear. Active target packages must match the source bytes already in
 the workspace; ArchMarshal never restores implementation files.
 

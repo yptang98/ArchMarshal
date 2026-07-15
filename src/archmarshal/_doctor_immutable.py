@@ -450,7 +450,10 @@ def _generation_packages(generation: dict[str, Any]) -> set[str]:
 def _valid_skill_generation(value: object, digest: str) -> bool:
     shallow = (
         isinstance(value, dict)
-        and set(value) == {"format", "created_at", "parent", "skills", "changes"}
+        and set(value) in (
+            {"format", "created_at", "parent", "skills", "changes"},
+            {"format", "created_at", "parent", "skills", "changes", "selection"},
+        )
         and value.get("format") == "archmarshal-skill-index-v1"
         and isinstance(value.get("created_at"), str)
         and bool(value["created_at"])
@@ -458,7 +461,7 @@ def _valid_skill_generation(value: object, digest: str) -> bool:
         and isinstance(value.get("skills"), list)
         and len(value["skills"]) <= 10_000
         and isinstance(value.get("changes"), list)
-        and len(value["changes"]) <= 10_001
+        and len(value["changes"]) <= 20_001
     )
     if not shallow:
         return False

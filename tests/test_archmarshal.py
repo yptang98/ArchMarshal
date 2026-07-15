@@ -24,6 +24,7 @@ from archmarshal.planner import plan_workspace
 from archmarshal.resolver import resolve_workspace
 from archmarshal.safety import sha256_file
 from archmarshal.session import record_closeout
+from archmarshal.skill_review import review_workspace_skill
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -915,6 +916,67 @@ def test_learning_creates_review_only_candidates_from_repeated_sessions(tmp_path
     payload = yaml.safe_load(candidate_pack.read_text(encoding="utf-8"))
     assert payload["limits"]["automatic_global_skill_mutation"] is False
     assert payload["limits"]["raw_history_included"] is False
+
+
+def test_current_exact_skill_exclusion_blocks_historical_learning_candidate(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "project"
+    skill = root / "skills" / "demo"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: Reusable reviewed demo workflow.\n---\n\n# Demo\n",
+        encoding="utf-8",
+    )
+    adoption = plan_adoption(root)
+    applied = adopt_workspace(
+        root,
+        apply=True,
+        expected_plan=adoption["plan_digest"],
+    )
+    skill_id = adoption["discovered_skills"][0]["id"]
+    head = applied["skill_index_commit"]["head"]
+    review = review_workspace_skill(
+        root,
+        "skills/demo",
+        decision="approve",
+        reviewer="reviewer",
+        reason="learning fixture",
+        expected_head=head,
+    )
+    review_workspace_skill(
+        root,
+        "skills/demo",
+        decision="approve",
+        reviewer="reviewer",
+        reason="learning fixture",
+        expected_head=head,
+        expected_plan=review["plan_digest"],
+        reviewed_plan=review["review_plan"],
+        apply=True,
+    )
+    for index in range(2):
+        _apply_closeout(
+            root,
+            level="standard",
+            summary=f"Documentation pass {index}",
+            steps=["Summarize documentation."],
+            tags=["documentation"],
+            used_skills=[skill_id],
+        )
+    source = "skills/demo"
+    exclusion = plan_adoption(root, exclude_skills=[source])
+    adopt_workspace(
+        root,
+        apply=True,
+        expected_plan=exclusion["plan_digest"],
+        exclude_skills=[source],
+    )
+
+    result = learn_from_projects([root])
+
+    assert result["excluded_skill_usage_count"] == 2
+    assert result["common_skill_candidates"] == []
 
 
 def test_catalog_sorts_and_filters_projects_by_date_and_tags(tmp_path: Path) -> None:

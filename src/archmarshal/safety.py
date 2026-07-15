@@ -236,14 +236,17 @@ def fingerprint_directory(
     purpose: str = "Directory",
     entrypoint_only: bool = False,
     include_modes: bool = False,
+    excluded_parts: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Return a deterministic content fingerprint without following links.
 
     Relative paths, file sizes, and file bytes are covered by the legacy digest.
     Callers that manage executable project content can opt into permission-bit
-    coverage with ``include_modes``.  The scan is bounded so a malformed or
-    unexpectedly huge skill cannot make a routine start operation consume
-    unbounded resources.
+    coverage with ``include_modes`` and can declare exact directory/file names
+    as preserved boundaries with ``excluded_parts``. Preserved paths are
+    reported without entering excluded directories. The scan is bounded so a
+    malformed or unexpectedly huge skill cannot make a routine start operation
+    consume unbounded resources.
     """
     directory = root.resolve()
     if not directory.is_dir() or is_link_or_reparse(root):
@@ -253,6 +256,7 @@ def fingerprint_directory(
             details={"path": str(root)},
         )
     records: list[dict[str, Any]] = []
+    preserved_paths: list[str] = []
     total_bytes = 0
     if entrypoint_only:
         entrypoint = directory / "SKILL.md"
@@ -263,6 +267,8 @@ def fingerprint_directory(
             reject_links=True,
             purpose=purpose,
             max_files=MAX_SKILL_FILES + 1,
+            excluded_parts=frozenset(excluded_parts or ()),
+            excluded_found=preserved_paths,
         )
     for path in paths:
         if is_link_or_reparse(path):
@@ -350,6 +356,7 @@ def fingerprint_directory(
         "file_count": len(records),
         "content_bytes": total_bytes,
         "files": records,
+        "preserved_paths": sorted(set(preserved_paths), key=str.casefold),
     }
 
 
@@ -1733,8 +1740,12 @@ def _is_portable_mode(value: Any) -> bool:
     )
 
 
-def files_for_full_backup(root: Path) -> list[Path]:
-    return _scan_full_backup(root)[0]
+def files_for_full_backup(
+    root: Path,
+    *,
+    excluded_directories: Iterable[Path] | None = None,
+) -> list[Path]:
+    return _scan_full_backup(root, excluded_directories=excluded_directories)[0]
 
 
 def backup_relative_is_excluded(relative: Path | str) -> bool:
@@ -1743,7 +1754,11 @@ def backup_relative_is_excluded(relative: Path | str) -> bool:
     return _excluded_backup_relative(path)
 
 
-def _scan_full_backup(root: Path) -> tuple[list[Path], list[dict[str, Any]], int]:
+def _scan_full_backup(
+    root: Path,
+    *,
+    excluded_directories: Iterable[Path] | None = None,
+) -> tuple[list[Path], list[dict[str, Any]], int]:
     """Scan an exact portable full-workspace snapshot without following links."""
     root = root.resolve()
     if not root.is_dir() or is_link_or_reparse(root):
@@ -1756,6 +1771,9 @@ def _scan_full_backup(root: Path) -> tuple[list[Path], list[dict[str, Any]], int
     root_mode = stat.S_IMODE(root.lstat().st_mode) & 0o777
     files: list[Path] = []
     directories_found: list[dict[str, Any]] = []
+    excluded_directory_keys = {
+        os.path.normcase(str(Path(path).absolute())) for path in (excluded_directories or ())
+    }
 
     def fail_scan(error: OSError) -> None:
         raise ArchMarshalError(
@@ -1776,7 +1794,10 @@ def _scan_full_backup(root: Path) -> tuple[list[Path], list[dict[str, Any]], int
             candidate = current_path / name
             relative = candidate.relative_to(root)
             relative_posix = relative.as_posix()
-            if _excluded_backup_relative(relative):
+            if (
+                _excluded_backup_relative(relative)
+                or os.path.normcase(str(candidate.absolute())) in excluded_directory_keys
+            ):
                 continue
             if is_link_or_reparse(candidate):
                 raise ArchMarshalError(
@@ -1845,6 +1866,8 @@ def files_below_no_links(
     *,
     purpose: str,
     max_files: int = MAX_DIRECTORY_SCAN_FILES,
+    excluded_parts: Iterable[str] | None = None,
+    excluded_directories: Iterable[Path] | None = None,
 ) -> list[Path]:
     if is_link_or_reparse(directory):
         raise ArchMarshalError(
@@ -1857,6 +1880,8 @@ def files_below_no_links(
         reject_links=False,
         purpose=purpose,
         max_files=max_files,
+        excluded_parts=frozenset(excluded_parts or ()),
+        excluded_directories=excluded_directories,
     )
 
 
@@ -1866,8 +1891,22 @@ def _walk_files_no_links(
     reject_links: bool,
     purpose: str,
     max_files: int,
+    excluded_parts: frozenset[str] = frozenset(),
+    excluded_directories: Iterable[Path] | None = None,
+    excluded_found: list[str] | None = None,
 ) -> list[Path]:
     files: list[Path] = []
+    excluded_directory_keys = {
+        os.path.normcase(str(Path(path).absolute())) for path in (excluded_directories or ())
+    }
+
+    def preserve(path: Path) -> None:
+        if excluded_found is None:
+            return
+        try:
+            excluded_found.append(path.relative_to(directory).as_posix())
+        except ValueError:
+            return
 
     def fail_scan(error: OSError) -> None:
         raise ArchMarshalError(
@@ -1886,6 +1925,12 @@ def _walk_files_no_links(
         kept: list[str] = []
         for name in sorted(directories, key=str.casefold):
             candidate = current_path / name
+            if (
+                name in excluded_parts
+                or os.path.normcase(str(candidate.absolute())) in excluded_directory_keys
+            ):
+                preserve(candidate)
+                continue
             if is_link_or_reparse(candidate):
                 if reject_links:
                     raise ArchMarshalError(
@@ -1898,6 +1943,9 @@ def _walk_files_no_links(
         directories[:] = kept
         for name in sorted(filenames, key=str.casefold):
             candidate = current_path / name
+            if name in excluded_parts:
+                preserve(candidate)
+                continue
             if is_link_or_reparse(candidate):
                 if reject_links:
                     raise ArchMarshalError(

@@ -22,6 +22,7 @@ from .safety import (
     unique_path,
 )
 from .session import verify_committed_session
+from .skill_index import load_skill_index, skill_index_exclusions
 from .workspace_lock import workspace_mutation_lock
 
 LEARNING_FORMAT = "archmarshal-learning-candidates-v3"
@@ -68,7 +69,23 @@ def learn_from_projects(
     sessions: list[dict[str, Any]] = []
     legacy_unverified_session_count = 0
     skill_metadata: dict[tuple[str, str, str], dict[str, Any]] = {}
+    excluded_sources_by_project: dict[str, set[str]] = {}
+    excluded_skill_keys_by_project: dict[str, set[tuple[str, str]]] = {}
     for root in project_roots:
+        excluded_sources = set(skill_index_exclusions(root))
+        excluded_sources_by_project[str(root)] = excluded_sources
+        loaded_index = load_skill_index(root)
+        excluded_skill_keys: set[tuple[str, str]] = set()
+        for record in (loaded_index.get("generation") or {}).get("skills", []):
+            if not isinstance(record, dict) or str(record.get("source") or "") not in excluded_sources:
+                continue
+            manifest = record.get("manifest")
+            source = manifest.get("source") if isinstance(manifest, dict) else None
+            skill_id = manifest.get("id") if isinstance(manifest, dict) else None
+            package_hash = source.get("package_sha256") if isinstance(source, dict) else None
+            if isinstance(skill_id, str) and isinstance(package_hash, str):
+                excluded_skill_keys.add((skill_id, package_hash))
+        excluded_skill_keys_by_project[str(root)] = excluded_skill_keys
         for skill in collect_inventory(root).skills:
             skill_id = str(skill.get("id") or "")
             if skill_id:
@@ -101,6 +118,7 @@ def learn_from_projects(
     unversioned_skill_usage_count = 0
     unreviewed_skill_usage_count = 0
     ineligible_skill_usage_count = 0
+    excluded_skill_usage_count = 0
     session_evidence = {
         f"{session['_project_root']}::{session['_session_path']}": {
             "workspace_id": workspace_id(session["_project_root"]),
@@ -128,6 +146,21 @@ def learn_from_projects(
                 continue
             skill_id = usage.get("id")
             implementation = usage.get("package_sha256")
+            source_path = usage.get("path")
+            if (
+                (
+                    isinstance(source_path, str)
+                    and source_path in excluded_sources_by_project.get(project, set())
+                )
+                or (
+                    isinstance(skill_id, str)
+                    and isinstance(implementation, str)
+                    and (skill_id, implementation)
+                    in excluded_skill_keys_by_project.get(project, set())
+                )
+            ):
+                excluded_skill_usage_count += 1
+                continue
             if (
                 not isinstance(skill_id, str)
                 or not skill_id
@@ -247,6 +280,7 @@ def learn_from_projects(
         "unversioned_skill_usage_count": unversioned_skill_usage_count,
         "unreviewed_skill_usage_count": unreviewed_skill_usage_count,
         "ineligible_skill_usage_count": ineligible_skill_usage_count,
+        "excluded_skill_usage_count": excluded_skill_usage_count,
         "limits": {
             "raw_history_included": False,
             "environment_variables_included": False,
@@ -322,6 +356,7 @@ def learn_from_projects(
         "unversioned_skill_usage_count": unversioned_skill_usage_count,
         "unreviewed_skill_usage_count": unreviewed_skill_usage_count,
         "ineligible_skill_usage_count": ineligible_skill_usage_count,
+        "excluded_skill_usage_count": excluded_skill_usage_count,
         "target": target_relative,
         "candidate_pack_sha256": profile_digest,
         "plan_digest": learning_plan["plan_digest"],
@@ -332,6 +367,7 @@ def learn_from_projects(
         "notes": [
             "Learning reads only ArchMarshal session manifests, not raw project history.",
             "Candidates never mutate existing skills or global policy.",
+            "Skill packages in the current exact exclusion policy do not contribute learning candidates.",
             "Promotion to a shared skill or user preference requires explicit human review.",
             "Usage lists are capped so the global layer can remain lightweight.",
             "Legacy v1 sessions are counted but remain untrusted until an explicit migration exists.",

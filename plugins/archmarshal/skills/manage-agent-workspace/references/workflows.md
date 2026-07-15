@@ -16,11 +16,23 @@ wrapper. All paths below are arguments, not instructions for the user to type.
 
 - New: preview `init <root> [--tag <tag>] --pretty`; apply only with the exact
   `--expect-plan` and the chosen backup scope.
-- Existing: preview `adopt` after doctor. Inspect every collision, discovered
-  Skill, quarantine state, effective source root, backup scope, complete
-  package-to-backup coverage, and proposed control path before apply. Add each
-  nonstandard project-relative source root with repeatable `--skill-root`; the
-  exact apply must replay the same roots.
+- Existing: when the user already named Skills that must stay unmanaged,
+  preview `adopt` first with repeatable exact `--exclude-skill` package paths so
+  those subtrees are pruned before content inspection. Otherwise preview after
+  doctor. Report every package directory prepared for management, every
+  excluded package, quarantine state, effective source root, backup scope,
+  complete managed-source backup coverage, and proposed control path before
+  apply. Add each nonstandard project-relative source root with repeatable
+  `--skill-root`; the exact apply must replay the same roots and selection
+  arguments.
+- When preview reports preserved `.git`/VCS metadata, caches, virtual
+  environments, dependency trees, or related artifact boundaries, do not enter
+  or remove them. Unless the user already chose, ask whether to preserve those
+  artifacts and manage the remaining Skill source or exclude the whole Skill.
+  Preservation is the default and does not block adoption.
+- Exact exclusions persist in immutable Skill-index history. A later run keeps
+  them without repeated flags. Restore management only with explicit exact
+  `--manage-skill`; then require fresh fingerprint, backup, and review.
 - Start: call `start` after the control plane is healthy. Use the task text only
   for read-only Skill/context resolution.
 - Never treat `start` as permission to reorganize arbitrary project files.
