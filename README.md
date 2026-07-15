@@ -36,6 +36,8 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 - Promotes only distilled reusable knowledge into **context modules**.
 - Detects skill conflicts, missing manifests, unsafe read policies, unregistered generated skills, unregistered memory locations, and workspace mappings that could bloat context.
 - Adopts existing projects through **metadata overlays**: existing `SKILL.md` and project files stay untouched.
+- Initializes new projects through an exact-plan, create-only Skill scaffold;
+  existing scaffold files are preserved rather than normalized in place.
 - Fingerprints the **complete skill package**, so script/reference/asset drift is visible without rewriting the source.
 - Records skill additions, modifications, removals, and restores as immutable, content-addressed generations with a locked compare-and-swap `HEAD`.
 - Blocks drifted skill packages from resolution until reviewed, and supports verified history plus audited metadata rollback without touching source files.
@@ -45,7 +47,10 @@ It treats skills as dynamic capability nodes, treats project memory as lifecycle
 - Catalogs multiple projects by recorded creation date and AND-filtered tags.
 - Extracts review-only common-skill and user-preference candidates from compact session manifests.
 - Promotes reviewed candidates into an isolated, bounded user Skill store with
-  immutable packages, expected-HEAD publication, provenance, and forward rollback.
+  immutable packages that preserve executable modes and empty directories,
+  expected-HEAD publication, provenance, and forward rollback.
+- Loads built-in CLI domains on demand while keeping user Skill code strictly
+  data-only until a host deliberately chooses to execute it.
 - Provides Codex-facing `archmarshal-start` and `archmarshal-end` entrypoints; mutation-capable flows remain preview-first and create-only.
 
 ## Design Goals
@@ -73,9 +78,23 @@ This repository is not currently a one-click Codex Skill package; the command
 above installs the actual CLI from an explicitly reviewed commit. Avoid an
 unpinned `main` install when reproducibility matters.
 
-### 2. Start
+### 2. Initialize a new project or adopt an existing one
 
-Preview adoption first:
+For a new project, preview the complete control plane and project Skill
+scaffold first:
+
+```bash
+archmarshal init . --tag research --tag python --pretty
+archmarshal init . --tag research --tag python \
+  --expect-plan <plan_digest> --apply --pretty
+```
+
+This creates only missing files under `.agent/` plus
+`.agents/skills/README.md`, `.agents/skills/project/.gitkeep`, and
+`.agents/skills/generated/.gitkeep`. If any path already exists, ArchMarshal
+preserves it; a linked ancestor or file/directory collision stops the operation.
+
+For an existing project, preview adoption first:
 
 ```bash
 archmarshal adopt . --tag research --tag python --pretty
@@ -108,8 +127,11 @@ Modified, removed, and restored skills are explicit plan entries. ArchMarshal
 updates only its internal `HEAD` pointer under an exclusive lock and stale-plan
 check; human-owned files remain untouched.
 
-An adopted Skill is initially quarantined. Review the exact package and routing
-revision before it can resolve:
+An adopted Skill is initially quarantined. Adoption output distinguishes the
+optional raw `source_declared_status`, validated `normalized_source_status`,
+`review_state`, and `activation_state` and supplies HEAD-bound `next_actions`;
+source status is never presented as effective activation. Review the exact
+package and routing revision before it can resolve:
 
 ```bash
 archmarshal skill-review . --source skills/release-helper \
@@ -423,6 +445,8 @@ delete, force, or automatic promotion path for human-owned project or skill file
 - Adoption and closeout require both explicit `--apply` and the exact reviewed
   `--expect-plan`; learning additionally requires the complete saved preview.
 - Adoption backs up the relevant managed control state and complete non-root skill packages before writing; root skills remain entrypoint-only. Managed backups never recursively embed prior backups, transactions, history, inbox, or cache. `--backup-scope full` creates a bounded project-content snapshot excluding VCS, dependencies, virtual environments, and prior backups, and preserves portable root/directory/file modes plus empty directories.
+- Backup verification binds ZIP parsing, expanded file hashes, archive size,
+  and archive hash to one stable descriptor and rejects path replacement.
 - Existing skill sources are immutable to ArchMarshal; overlay manifests live under `.agent/skill-overlays/`.
 - Skill sync uses immutable content-addressed objects, an exclusive `HEAD.lock`, and an expected-`HEAD` compare-and-swap; stale or concurrent plans fail without changing the active generation.
 - `HEAD.lock` uses an OS-lifetime lock. Released v2 transaction metadata is recovered only after expected/proposed/current HEAD validation and is recorded under the internal recovery audit directory; legacy or malformed locks remain blocked.
@@ -440,6 +464,10 @@ delete, force, or automatic promotion path for human-owned project or skill file
   location, copies only validated common-project Skill packages, rejects linked
   paths and sensitive/absolute preference values, and publishes by immutable
   generation plus expected-HEAD compare-and-swap.
+- New user-store Skill packages use a v2 digest over file bytes, modes,
+  executable state, subdirectory modes, and empty-subdirectory topology. The
+  package root remains store-owned; existing v1 packages stay read-compatible
+  and are never rewritten for migration.
 - Atomic create-only publication requires same-filesystem hard-link support and
   fails closed when the filesystem cannot provide it.
 - Environment variables are not captured. Known inline-secret patterns are blocked, but user-selected text and script snapshots may still contain sensitive material and require review.
@@ -496,6 +524,7 @@ delete, force, or automatic promotion path for human-owned project or skill file
 - [x] Memory-aware resolve and closeout candidate output
 - [x] Tests for clean examples, missing entry files, skill conflicts, and historical read policy
 - [x] Preview-first, backup-before-write adoption for existing projects
+- [x] Exact-plan, create-only project Skill scaffold initialization
 - [x] Reviewed-plan binding and durable forward-recoverable adoption transactions
 - [x] Non-mutating skill metadata overlays
 - [x] Complete skill-package fingerprints and drift reporting
@@ -517,6 +546,8 @@ delete, force, or automatic promotion path for human-owned project or skill file
 - [x] Isolated immutable user Skill/preference store with forward rollback
 - [x] Explicit candidate decision and promotion workflow
 - [x] User-store-aware task resolution and project start
+- [x] User Skill package v2 with mode and empty-directory preservation
+- [x] Lazy built-in CLI module loading for fast help/version bootstrap
 
 ## Research Notes
 

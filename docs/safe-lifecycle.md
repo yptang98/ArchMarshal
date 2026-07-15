@@ -33,10 +33,34 @@ rearrange the project itself.
     are approved. Global/highest policy requires a separate confirmation.
 17. Candidate promotion writes only to an explicitly initialized user store.
     Apply requires the complete saved plan, exact plan digest, and exact HEAD.
+18. Project initialization creates only missing Skill scaffold files through
+    the adoption transaction; it never normalizes an existing scaffold.
+19. Backup verification parses the ZIP and derives its archive size/hash from
+    one stable descriptor whose path identity must remain unchanged.
+20. New user-store Skill packages bind file and subdirectory modes plus empty
+    subdirectory topology; old v1 packages are read, never silently migrated.
 
 These constraints intentionally make ArchMarshal less aggressive than a general
 project formatter. A blocked or explicitly recoverable adoption is preferable
 to a clever rewrite that changes a working project.
+
+## New Project Initialization
+
+Use the explicit initialization workflow when a new project should begin with
+the complete Skill layout:
+
+```bash
+archmarshal init path/to/project --tag research --pretty
+archmarshal init path/to/project --tag research \
+  --expect-plan <plan_digest> --apply --pretty
+```
+
+The transaction creates the normal missing control-plane files plus only
+`.agents/skills/README.md`, `.agents/skills/project/.gitkeep`, and
+`.agents/skills/generated/.gitkeep`. Existing files at those locations are
+reported as preserved and never compared against a preferred template or
+rewritten. A link, reparse point, file/directory ancestor collision, stale
+plan, or newly appeared target blocks publication.
 
 ## Existing Project Adoption
 
@@ -90,6 +114,13 @@ hash for each file; the zip is tested and
 hashed before adoption continues. `.agent/backups/.gitignore` prevents backup
 archives from being committed accidentally; these backups may still contain
 sensitive project files and must not be shared casually.
+
+Verification keeps the archive open through one descriptor while parsing the
+manifest, streaming every declared member hash, and deriving the final archive
+size and SHA-256. The descriptor identity must match the path before and after
+the read. A replaced, linked, unstable, or disappeared archive is rejected;
+manifest bytes from one path generation cannot be paired with a hash from
+another.
 
 Use `archmarshal backup-verify` to re-check every archived byte. Restore is
 deliberately one-way into a new, non-existing directory; ArchMarshal never
@@ -357,6 +388,16 @@ requires all three reviewed inputs:
 1. the complete saved JSON preview (`--plan-file`);
 2. its exact `--expect-plan` digest; and
 3. its exact `--expect-head`, using `none` only when the preview says so.
+
+New common-Skill copies use immutable package format v2. The package digest
+binds file bytes, file modes and executable state, every subdirectory mode, and
+empty subdirectories. The package root remains store-owned. Portable paths must
+be NFC, may not collide after Unicode
+case-folding, and reject Windows-reserved or invalid components. Links,
+non-regular entries, unreadable owner modes, changed descriptors, and
+unexpected partial-package entries stop publication without repairing or
+overwriting the path. A committed v1 package continues through its separate v1
+verifier and is never rewritten merely to upgrade its format.
 
 An active Skill id or preference key is never silently replaced. Replacement
 needs the matching `--replace-existing-skill` or

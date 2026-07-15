@@ -96,6 +96,13 @@ backup, lock path, or index relationship stops without overwrite or deletion.
 Recovery apply is a second compare-and-swap: the active transaction id and plan
 digest must still equal the reviewed recovery preview while the lock is held.
 
+`archmarshal init` is an explicit specialization of this same transaction for
+new-project structure. It adds only missing `.agents/skills/README.md`,
+`.agents/skills/project/.gitkeep`, and
+`.agents/skills/generated/.gitkeep` targets. It does not reinterpret or rewrite
+an existing Skill directory. Ordinary `adopt` remains control-plane-only so an
+existing project is not expanded merely because ArchMarshal inspected it.
+
 `ownership.json` is root-bound and declares whether the immutable Skill index is
 required. That declaration must agree with the workspace management mode and
 Skill roots. When required, a missing `HEAD` is an integrity failure: inventory
@@ -160,6 +167,25 @@ store root, and expected HEAD. Publication copies a validated package and then
 advances only the store's internal pointer. Resolver treats verified store
 packages as task-triggered common-project Skills; it does not execute them or
 inject them into global policy.
+
+New immutable Skill copies use package format v2. Their content address covers
+file bytes, file permission/executable state, every subdirectory mode, and
+empty-subdirectory topology. The package root remains a store-owned boundary.
+The portable namespace rejects Windows-reserved or invalid components, non-NFC
+spelling, and Unicode/case-fold collisions before copy.
+Files and commit markers are verified through stable descriptors; topology is
+checked before and after content verification; `COMMITTED.json` is created
+last. The v1 verifier remains separate so an old committed package is read
+without applying v2-only rules or rewriting history.
+
+## Built-in Module Loading Boundary
+
+The CLI parser, version, and error envelope form a lightweight bootstrap.
+After parsing, the selected command imports only its built-in domain module
+(adoption, backup, user store, lifecycle, and so on). This is software-module
+lazy loading, not dynamic execution of a Skill. Project and user Skills remain
+validated data packages; ArchMarshal's resolver is advisory and never imports
+their Python, shell, or other executable content.
 
 Readers also treat skill-index publication as a critical section. They block
 while the OS lock is held, verify the complete parent chain reachable from the

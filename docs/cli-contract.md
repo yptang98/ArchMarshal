@@ -17,6 +17,11 @@ When a command payload has its own schema version, ArchMarshal returns it as
 `payload_schema_version`; `api_version` always describes the outer CLI
 envelope. Help and `--version` deliberately remain plain text.
 
+Parser construction, help, and version use only the lightweight CLI, version,
+and error layer. Built-in domains are imported after a command is selected.
+This is an implementation/performance boundary, not permission to import or
+execute project or user Skill code; ArchMarshal treats those packages as data.
+
 ## Exit Codes
 
 | Code | Meaning | Output |

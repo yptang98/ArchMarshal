@@ -8,36 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .adoption import adopt_workspace
-from .adoption_tx import adoption_transaction_status, recover_adoption_transaction
-from .audit import audit_workspace
-from .catalog import catalog_projects
-from .checkpoint import checkpoint_workspace
-from .closeout import closeout_workspace
-from .diagnostics import severity_counts
 from .errors import ArchMarshalError, require_workspace_root
-from .inventory import collect_inventory
-from .learning import learn_from_projects
-from .lifecycle import end_workspace, start_workspace
-from .lint import lint_workspace
-from .planner import plan_workspace
-from .promotion import (
-    load_reviewed_plan,
-    promote_learning_candidate,
-    review_learning_candidate,
-)
-from .resolver import resolve_workspace
-from .safety import restore_backup, verify_backup
-from .session import CLOSEOUT_LEVELS, record_closeout
-from .skill_index import rollback_skill_index, skill_index_status
-from .skill_review import load_reviewed_skill_plan, review_workspace_skill
-from .user_store import (
-    apply_user_store_forward_rollback,
-    apply_user_store_initialization,
-    plan_user_store_forward_rollback,
-    plan_user_store_initialization,
-    user_store_status,
-)
+
+CLOSEOUT_LEVELS = ("quick", "standard", "reproducible")
 
 
 class _ArgumentParser(argparse.ArgumentParser):
@@ -69,6 +42,12 @@ def _main_impl(argv: list[str] | None = None) -> int:
         "Safely add an ArchMarshal overlay without changing existing project or skill files.",
     )
     _add_adoption_arguments(adopt_parser)
+    init_parser = _add_root_command(
+        subparsers,
+        "init",
+        "Create a missing project Skill scaffold through the safe adoption transaction.",
+    )
+    _add_adoption_arguments(init_parser)
     start_parser = _add_root_command(subparsers, "start", "Start ArchMarshal project governance.")
     _add_adoption_arguments(start_parser)
     _add_resolution_arguments(start_parser, task_required=False)
@@ -106,13 +85,17 @@ def _main_impl(argv: list[str] | None = None) -> int:
         default=[],
         help="Additional project to include. Repeat as needed.",
     )
-    catalog_parser.add_argument("--tag", action="append", default=[], help="Required tag. Repeat for AND filtering.")
+    catalog_parser.add_argument(
+        "--tag", action="append", default=[], help="Required tag. Repeat for AND filtering."
+    )
     learn_parser = _add_root_command(
         subparsers,
         "learn",
         "Extract review-only common-skill and user-preference candidates from session manifests.",
     )
-    learn_parser.add_argument("--apply", action="store_true", help="Write a new candidate pack to inbox.")
+    learn_parser.add_argument(
+        "--apply", action="store_true", help="Write a new candidate pack to inbox."
+    )
     learn_parser.add_argument(
         "--plan-file",
         help="Saved JSON preview containing learning_plan; required with --apply.",
@@ -136,13 +119,17 @@ def _main_impl(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Include the complete verified backup manifest and file list.",
     )
-    verify_backup_parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+    verify_backup_parser.add_argument(
+        "--pretty", action="store_true", help="Pretty-print JSON output."
+    )
     restore_backup_parser = subparsers.add_parser(
         "backup-restore", help="Restore a verified backup into a new, non-existing directory."
     )
     restore_backup_parser.add_argument("archive", help="Backup zip to restore.")
     restore_backup_parser.add_argument("destination", help="New directory to create.")
-    restore_backup_parser.add_argument("--apply", action="store_true", help="Create the destination.")
+    restore_backup_parser.add_argument(
+        "--apply", action="store_true", help="Create the destination."
+    )
     restore_backup_parser.add_argument(
         "--rebind-workspace",
         action="store_true",
@@ -151,7 +138,9 @@ def _main_impl(argv: list[str] | None = None) -> int:
     restore_backup_parser.add_argument(
         "--expect-plan", help="Exact plan digest from the reviewed restore preview."
     )
-    restore_backup_parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+    restore_backup_parser.add_argument(
+        "--pretty", action="store_true", help="Pretty-print JSON output."
+    )
     user_store_init_parser = subparsers.add_parser(
         "user-store-init",
         help="Preview or initialize an isolated, ArchMarshal-owned user Skill store.",
@@ -162,7 +151,9 @@ def _main_impl(argv: list[str] | None = None) -> int:
         help="Verify an isolated user Skill store without modifying it.",
     )
     user_store_status_parser.add_argument("user_store", help="User Skill store root.")
-    user_store_status_parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+    user_store_status_parser.add_argument(
+        "--pretty", action="store_true", help="Pretty-print JSON output."
+    )
     user_store_rollback_parser = subparsers.add_parser(
         "user-store-rollback",
         help="Publish a forward rollback generation from a reviewed ancestor.",
@@ -234,7 +225,9 @@ def _main_impl(argv: list[str] | None = None) -> int:
         help="Human decision for this exact package and routing digest.",
     )
     skill_review_parser.add_argument("--reviewer", default="human", help="Short reviewer identity.")
-    skill_review_parser.add_argument("--reason", default="", help="Short review reason; do not include secrets.")
+    skill_review_parser.add_argument(
+        "--reason", default="", help="Short review reason; do not include secrets."
+    )
     skill_review_parser.add_argument(
         "--allow-global-policy",
         action="store_true",
@@ -299,7 +292,9 @@ def _main_impl(argv: list[str] | None = None) -> int:
         "Create a read-only context checkpoint after summarization or compaction.",
     )
     checkpoint_parser.add_argument("--summary", required=True, help="Compact summary to preserve.")
-    checkpoint_parser.add_argument("--task", default="", help="Task or project stage being checkpointed.")
+    checkpoint_parser.add_argument(
+        "--task", default="", help="Task or project stage being checkpointed."
+    )
     checkpoint_parser.add_argument(
         "--save-path",
         help="User-approved project-file directory for this checkpoint. Overrides workspace save_paths.",
@@ -360,6 +355,8 @@ def _main_impl(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "backup-verify":
+        from .safety import verify_backup
+
         verification = verify_backup(args.archive)
         verification.update({"tool": "archmarshal", "stage": "backup_verify", "mode": "verified"})
         if not args.show_files:
@@ -374,6 +371,8 @@ def _main_impl(argv: list[str] | None = None) -> int:
         _print_json(verification, args.pretty)
         return 0
     if args.command == "backup-restore":
+        from .safety import restore_backup
+
         payload = restore_backup(
             args.archive,
             args.destination,
@@ -384,10 +383,17 @@ def _main_impl(argv: list[str] | None = None) -> int:
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
     if args.command == "user-store-status":
+        from .user_store import user_store_status
+
         payload = user_store_status(args.user_store)
         _print_json(payload, args.pretty)
         return 0 if payload.get("state") in {"absent", "initialized_empty", "healthy"} else 2
     if args.command == "user-store-init":
+        from .user_store import (
+            apply_user_store_initialization,
+            plan_user_store_initialization,
+        )
+
         if args.apply:
             plan = _required_reviewed_plan(args.plan_file)
             payload = apply_user_store_initialization(
@@ -401,6 +407,11 @@ def _main_impl(argv: list[str] | None = None) -> int:
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
     if args.command == "user-store-rollback":
+        from .user_store import (
+            apply_user_store_forward_rollback,
+            plan_user_store_forward_rollback,
+        )
+
         if args.apply:
             plan = _required_reviewed_plan(args.plan_file)
             _verify_user_store_rollback_request(plan, target=args.to, reason=args.reason)
@@ -414,18 +425,21 @@ def _main_impl(argv: list[str] | None = None) -> int:
                 expected_plan=_required_arg(args.expect_plan, "--expect-plan"),
             )
         else:
-            plan = plan_user_store_forward_rollback(
-                args.user_store, args.to, reason=args.reason
-            )
+            plan = plan_user_store_forward_rollback(args.user_store, args.to, reason=args.reason)
             payload = _user_store_plan_envelope(plan, "user_store_rollback")
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
     root = require_workspace_root(args.root)
 
     if args.command == "inventory":
+        from .inventory import collect_inventory
+
         _print_json(collect_inventory(root).to_dict(), args.pretty)
         return 0
     if args.command == "lint":
+        from .diagnostics import severity_counts
+        from .lint import lint_workspace
+
         diagnostics = lint_workspace(root)
         payload = {
             "tool": "archmarshal",
@@ -440,12 +454,18 @@ def _main_impl(argv: list[str] | None = None) -> int:
             return 1
         return 0
     if args.command == "audit":
+        from .audit import audit_workspace
+
         _print_json(audit_workspace(root), args.pretty)
         return 0
     if args.command == "plan":
+        from .planner import plan_workspace
+
         _print_json(plan_workspace(root), args.pretty)
         return 0
     if args.command == "skill-index-status":
+        from .skill_index import skill_index_status
+
         _print_json(
             skill_index_status(
                 root,
@@ -456,10 +476,14 @@ def _main_impl(argv: list[str] | None = None) -> int:
         )
         return 0
     if args.command == "adoption-status":
+        from .adoption_tx import adoption_transaction_status
+
         payload = adoption_transaction_status(root)
         _print_json(payload, args.pretty)
         return 0 if payload.get("state") == "none" else 2
     if args.command == "adoption-recover":
+        from .adoption_tx import recover_adoption_transaction
+
         payload = recover_adoption_transaction(
             root,
             apply=args.apply,
@@ -469,6 +493,8 @@ def _main_impl(argv: list[str] | None = None) -> int:
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
     if args.command == "skill-index-rollback":
+        from .skill_index import rollback_skill_index
+
         payload = rollback_skill_index(
             root,
             args.to,
@@ -480,6 +506,8 @@ def _main_impl(argv: list[str] | None = None) -> int:
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
     if args.command == "skill-review":
+        from .skill_review import load_reviewed_skill_plan, review_workspace_skill
+
         payload = review_workspace_skill(
             root,
             args.source,
@@ -489,14 +517,14 @@ def _main_impl(argv: list[str] | None = None) -> int:
             allow_global_policy=args.allow_global_policy,
             expected_head=args.expect_head,
             expected_plan=args.expect_plan,
-            reviewed_plan=(
-                load_reviewed_skill_plan(args.plan_file) if args.plan_file else None
-            ),
+            reviewed_plan=(load_reviewed_skill_plan(args.plan_file) if args.plan_file else None),
             apply=args.apply,
         )
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
     if args.command == "candidate-review":
+        from .promotion import review_learning_candidate
+
         payload = review_learning_candidate(
             root,
             args.pack,
@@ -512,6 +540,8 @@ def _main_impl(argv: list[str] | None = None) -> int:
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
     if args.command == "candidate-promote":
+        from .promotion import promote_learning_candidate
+
         payload = promote_learning_candidate(
             root,
             args.pack,
@@ -528,7 +558,21 @@ def _main_impl(argv: list[str] | None = None) -> int:
         )
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
+    if args.command == "init":
+        from .lifecycle import initialize_workspace
+
+        payload = initialize_workspace(
+            root,
+            apply=args.apply,
+            tags=args.tag,
+            backup_scope=args.backup_scope,
+            expected_plan=args.expect_plan,
+        )
+        _print_json(payload, args.pretty)
+        return _payload_exit_code(payload)
     if args.command == "adopt":
+        from .adoption import adopt_workspace
+
         payload = adopt_workspace(
             root,
             apply=args.apply,
@@ -539,6 +583,9 @@ def _main_impl(argv: list[str] | None = None) -> int:
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
     if args.command == "start":
+        from .adoption import adopt_workspace
+        from .lifecycle import start_workspace
+
         if args.apply:
             adoption = adopt_workspace(
                 root,
@@ -573,12 +620,16 @@ def _main_impl(argv: list[str] | None = None) -> int:
             )
         return 0
     if args.command == "catalog":
+        from .catalog import catalog_projects
+
         _print_json(
             catalog_projects([root, *[Path(item) for item in args.include_root]], tags=args.tag),
             args.pretty,
         )
         return 0
     if args.command == "learn":
+        from .learning import learn_from_projects
+
         reviewed = _optional_reviewed_plan(args.plan_file)
         if isinstance(reviewed, dict) and isinstance(reviewed.get("learning_plan"), dict):
             reviewed = reviewed["learning_plan"]
@@ -594,6 +645,8 @@ def _main_impl(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "end":
         if args.level:
+            from .session import record_closeout
+
             payload = record_closeout(
                 root,
                 level=args.level,
@@ -612,9 +665,13 @@ def _main_impl(argv: list[str] | None = None) -> int:
         else:
             if args.apply:
                 parser.error("--apply for end requires --level quick, standard, or reproducible")
+            from .lifecycle import end_workspace
+
             _print_json(end_workspace(root, args.used_skill), args.pretty)
         return 0
     if args.command == "checkpoint":
+        from .checkpoint import checkpoint_workspace
+
         _print_json(
             checkpoint_workspace(
                 root,
@@ -631,9 +688,13 @@ def _main_impl(argv: list[str] | None = None) -> int:
         )
         return 0
     if args.command == "closeout":
+        from .closeout import closeout_workspace
+
         _print_json(closeout_workspace(root, args.used_skill), args.pretty)
         return 0
     if args.command == "resolve":
+        from .resolver import resolve_workspace
+
         _print_json(resolve_workspace(root, args.task, user_store=args.user_store), args.pretty)
         return 0
     parser.error(f"unknown command {args.command}")
@@ -652,6 +713,9 @@ def _start_main_impl(argv: list[str] | None = None) -> int:
     _add_adoption_arguments(parser)
     _add_resolution_arguments(parser, task_required=False)
     args = parser.parse_args(argv)
+    from .adoption import adopt_workspace
+    from .lifecycle import start_workspace
+
     root = require_workspace_root(args.root)
     payload = start_workspace(
         root,
@@ -704,6 +768,8 @@ def _end_main_impl(argv: list[str] | None = None) -> int:
     _add_recording_arguments(parser)
     args = parser.parse_args(argv)
     if args.level:
+        from .session import record_closeout
+
         payload = record_closeout(
             require_workspace_root(args.root),
             level=args.level,
@@ -720,6 +786,8 @@ def _end_main_impl(argv: list[str] | None = None) -> int:
     else:
         if args.apply:
             parser.error("--apply requires --level quick, standard, or reproducible")
+        from .lifecycle import end_workspace
+
         payload = end_workspace(require_workspace_root(args.root), args.used_skill)
     _print_json(payload, args.pretty)
     return _payload_exit_code(payload)
@@ -798,7 +866,9 @@ def _add_candidate_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--candidate", required=True, help="Exact candidate id from the pack.")
     parser.add_argument("--user-store", required=True, help="Owned user Skill store root.")
-    parser.add_argument("--reason", default="", help="Short decision reason; do not include secrets.")
+    parser.add_argument(
+        "--reason", default="", help="Short decision reason; do not include secrets."
+    )
     parser.add_argument("--apply", action="store_true", help="Apply the exact saved preview plan.")
     parser.add_argument(
         "--plan-file",
@@ -815,14 +885,20 @@ def _add_candidate_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _add_recording_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--level", choices=CLOSEOUT_LEVELS, help="Closeout recording depth.")
-    parser.add_argument("--apply", action="store_true", help="Write a new append-only closeout directory.")
+    parser.add_argument(
+        "--apply", action="store_true", help="Write a new append-only closeout directory."
+    )
     parser.add_argument(
         "--expect-plan",
         help="Exact closeout plan digest from a reviewed preview; required before writing.",
     )
     parser.add_argument("--summary", default="", help="Project or phase outcome summary.")
-    parser.add_argument("--step", action="append", default=[], help="Ordered work step. Repeat as needed.")
-    parser.add_argument("--script", action="append", default=[], help="Key script path. Repeat as needed.")
+    parser.add_argument(
+        "--step", action="append", default=[], help="Ordered work step. Repeat as needed."
+    )
+    parser.add_argument(
+        "--script", action="append", default=[], help="Key script path. Repeat as needed."
+    )
     parser.add_argument(
         "--command",
         dest="command_line",
@@ -865,7 +941,11 @@ def _user_store_plan_envelope(plan: dict[str, Any], stage: str) -> dict[str, Any
 
 
 def _optional_reviewed_plan(path: str | None) -> dict[str, Any] | None:
-    return load_reviewed_plan(path) if path else None
+    if not path:
+        return None
+    from .promotion import load_reviewed_plan
+
+    return load_reviewed_plan(path)
 
 
 def _required_reviewed_plan(path: str | None) -> dict[str, Any]:
@@ -874,6 +954,8 @@ def _required_reviewed_plan(path: str | None) -> dict[str, Any]:
             "reviewed_plan_required",
             "Apply requires --plan-file with the complete saved preview.",
         )
+    from .promotion import load_reviewed_plan
+
     return load_reviewed_plan(path)
 
 

@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.12.0 - 2026-07-15
+
+### Safe project and Skill initialization
+
+- Add an explicit `archmarshal init` preview/apply workflow for new projects.
+  It uses the same exact-plan, verified-backup, durable create-only adoption
+  transaction and creates only missing `.agents/skills/` guide, project, and
+  generated-draft scaffold files. Existing paths are preserved byte-for-byte;
+  file/directory conflicts and linked ancestors stop before publication.
+- Report imported Skill state truthfully as source-declared status, review
+  state, and effective activation state. New valid imports are quarantined
+  until a separate exact-package approval, invalid imports are disabled, and
+  structured next actions bind the proposed or current Skill-index HEAD.
+
+### Safety and operability
+
+- Verify each backup manifest, expanded member, archive size, and archive hash
+  through one stable open descriptor, and reject path replacement during
+  verification. Backup publication now reports bytes and hashes from the
+  descriptor-bound verification of the published path.
+- Publish new user common-Skill packages with a v2 content address that binds
+  file bytes, executable and permission modes, subdirectory modes, and empty
+  subdirectory topology. Portable path validation rejects Windows-reserved or
+  invalid components plus Unicode/case-fold collisions; commit markers remain
+  last and v1 packages remain verifiable without migration.
+- Regenerate any unapplied pre-0.12 common-Skill promotion preview after
+  upgrading. Exact-plan apply intentionally rejects its v1 package fingerprint;
+  already committed v1 packages remain active and verifiable.
+- Verify package files and commit markers through stable descriptors, bound
+  reads, and repeat topology checks. Oversized or mismatching partial packages
+  fail before content hashing and are never repaired by overwriting an existing
+  path.
+- Load CLI domain modules only after argument parsing and command selection.
+  Help and version requests no longer initialize YAML, JSON Schema, backup,
+  adoption, lifecycle, session, or user-store domains; user Skill code is still
+  never imported or executed.
+
 ## 0.11.0 - 2026-07-15
 
 ### Breaking safety changes

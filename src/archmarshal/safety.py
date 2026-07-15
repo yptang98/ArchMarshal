@@ -609,35 +609,61 @@ def create_backup(
                 )
             raw_archive.flush()
             os.fsync(raw_archive.fileno())
-        verification = verify_backup(temporary)
+        verify_backup(temporary)
         os.link(temporary, destination)
         fsync_directory(destination.parent)
-        verify_backup(destination)
+        published_verification = verify_backup(destination)
     finally:
         if temporary_identity is not None:
             _unlink_created_path(temporary, temporary_identity)
 
     return {
         "path": destination.relative_to(root).as_posix(),
-        "file_count": verification["file_count"],
-        "content_bytes": verification["content_bytes"],
+        "file_count": published_verification["file_count"],
+        "content_bytes": published_verification["content_bytes"],
         "file_preview": records[:100],
         "file_preview_truncated": len(records) > 100,
-        "bytes": destination.stat().st_size,
-        "sha256": sha256_file(destination),
+        "bytes": published_verification["archive_bytes"],
+        "sha256": published_verification["sha256"],
         "verified": True,
     }
 
 
 def verify_backup(path: Path | str) -> dict[str, Any]:
-    archive_path = Path(path).expanduser()
-    if not archive_path.is_file() or is_link_or_reparse(archive_path):
+    archive_path = Path(path).expanduser().absolute()
+    try:
+        if is_link_or_reparse(archive_path):
+            raise OSError("archive path is linked or reparse-backed")
+        path_before = archive_path.lstat()
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(archive_path, flags)
+    except OSError as exc:
         raise ArchMarshalError(
             "backup_not_found",
             f"Backup archive does not exist as a regular unlinked file: {archive_path}",
-        )
+        ) from exc
     try:
-        with zipfile.ZipFile(archive_path, "r") as archive:
+        archive_handle = os.fdopen(descriptor, "rb")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    try:
+        descriptor_before = os.fstat(archive_handle.fileno())
+        descriptor_identity = (descriptor_before.st_dev, descriptor_before.st_ino)
+        if (
+            not stat.S_ISREG(descriptor_before.st_mode)
+            or (path_before.st_dev, path_before.st_ino) != descriptor_identity
+        ):
+            raise ArchMarshalError(
+                "backup_archive_changed",
+                "Backup archive identity changed while it was being opened.",
+                details={"path": str(archive_path)},
+            )
+        with zipfile.ZipFile(archive_handle, "r") as archive:
             names = archive.namelist()
             if len(names) > MAX_BACKUP_FILES + 1:
                 raise ArchMarshalError(
@@ -861,12 +887,44 @@ def verify_backup(path: Path | str) -> dict[str, Any]:
         raise ArchMarshalError(
             "backup_integrity_failed", "Backup is not a valid ZIP archive."
         ) from exc
+    else:
+        try:
+            archive_handle.seek(0)
+            archive_digest = hashlib.sha256()
+            archive_bytes = 0
+            for chunk in iter(lambda: archive_handle.read(1024 * 1024), b""):
+                archive_digest.update(chunk)
+                archive_bytes += len(chunk)
+            descriptor_after = os.fstat(archive_handle.fileno())
+            path_after = archive_path.lstat()
+        except OSError as exc:
+            raise ArchMarshalError(
+                "backup_archive_changed",
+                "Backup archive changed or disappeared during verification.",
+                details={"path": str(archive_path)},
+            ) from exc
+        if (
+            (descriptor_after.st_dev, descriptor_after.st_ino) != descriptor_identity
+            or (path_after.st_dev, path_after.st_ino) != descriptor_identity
+            or is_link_or_reparse(archive_path)
+            or descriptor_before.st_size != descriptor_after.st_size
+            or descriptor_before.st_mtime_ns != descriptor_after.st_mtime_ns
+            or archive_bytes != descriptor_after.st_size
+        ):
+            raise ArchMarshalError(
+                "backup_archive_changed",
+                "Backup archive identity or bytes changed during verification.",
+                details={"path": str(archive_path)},
+            )
+        archive_sha256 = archive_digest.hexdigest()
+    finally:
+        archive_handle.close()
     return {
-        "path": str(archive_path.resolve()),
+        "path": str(archive_path),
         "file_count": len(records),
         "content_bytes": total_bytes,
-        "archive_bytes": archive_path.stat().st_size,
-        "sha256": sha256_file(archive_path),
+        "archive_bytes": archive_bytes,
+        "sha256": archive_sha256,
         "verified": True,
         "manifest": manifest,
     }

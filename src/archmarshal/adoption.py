@@ -58,6 +58,18 @@ MANAGED_PLACEHOLDERS = (
     ".agent/plans/.gitkeep",
     ".agent/reports/.gitkeep",
 )
+PROJECT_SKILL_SCAFFOLD = (
+    (
+        ".agents/skills/README.md",
+        "# Project Skills\n\n"
+        "- `project/`: human-reviewed, project-specific Skills.\n"
+        "- `generated/`: generated Skill drafts that still require review.\n\n"
+        "ArchMarshal creates only this missing scaffold. It never moves or rewrites "
+        "an existing Skill package.\n",
+    ),
+    (".agents/skills/project/.gitkeep", ""),
+    (".agents/skills/generated/.gitkeep", ""),
+)
 MANAGED_BACKUP_EXCLUDED_AGENT_ROOTS = frozenset(
     {
         "backups",
@@ -74,9 +86,15 @@ def plan_adoption(
     *,
     tags: list[str] | None = None,
     backup_scope: str = "managed",
+    project_initialization: bool = False,
 ) -> dict[str, Any]:
     root_path = require_workspace_root(root)
-    built = _build_adoption(root_path, tags or [], backup_scope)
+    built = _build_adoption(
+        root_path,
+        tags or [],
+        backup_scope,
+        project_initialization=project_initialization,
+    )
     return _public_plan(built, applied=False)
 
 
@@ -87,16 +105,19 @@ def adopt_workspace(
     tags: list[str] | None = None,
     backup_scope: str = "managed",
     expected_plan: str | None = None,
+    project_initialization: bool = False,
 ) -> dict[str, Any]:
     root_path = require_workspace_root(root)
     if apply:
-        with workspace_mutation_lock(root_path, operation="adoption") as held:
+        operation = "project_initialization" if project_initialization else "adoption"
+        with workspace_mutation_lock(root_path, operation=operation) as held:
             return _adopt_workspace_locked(
                 root_path,
                 apply=True,
                 tags=tags,
                 backup_scope=backup_scope,
                 expected_plan=expected_plan,
+                project_initialization=project_initialization,
                 held=held,
             )
     return _adopt_workspace_locked(
@@ -105,6 +126,7 @@ def adopt_workspace(
         tags=tags,
         backup_scope=backup_scope,
         expected_plan=expected_plan,
+        project_initialization=project_initialization,
         held=None,
     )
 
@@ -116,9 +138,15 @@ def _adopt_workspace_locked(
     tags: list[str] | None,
     backup_scope: str,
     expected_plan: str | None,
+    project_initialization: bool,
     held: WorkspaceMutationLock | None,
 ) -> dict[str, Any]:
-    built = _build_adoption(root_path, tags or [], backup_scope)
+    built = _build_adoption(
+        root_path,
+        tags or [],
+        backup_scope,
+        project_initialization=project_initialization,
+    )
     if not apply:
         return _public_plan(built, applied=False)
     if built["blocked"]:
@@ -127,7 +155,13 @@ def _adopt_workspace_locked(
         return payload
     if not built["writes"] and not built["skill_index_plan"]["changed"]:
         payload = _public_plan(built, applied=True)
-        payload["mode"] = "review_required" if built["review_required"] else "already_managed"
+        payload["mode"] = (
+            "review_required"
+            if built["review_required"]
+            else "already_initialized"
+            if project_initialization
+            else "already_managed"
+        )
         payload["backup"] = None
         return payload
 
@@ -155,18 +189,25 @@ def _adopt_workspace_locked(
             payload["conflicts"] = sorted(
                 set(payload["conflicts"] + [target.relative_to(root_path).as_posix()])
             )
-            payload["notes"].append("A target appeared after planning; no managed files were written.")
+            payload["notes"].append(
+                "A target appeared after planning; no managed files were written."
+            )
             return payload
 
     if held is not None:
         held.verify()
 
     backup_dir = root_path / ".agent" / "backups"
+    backup_label = "initialization" if project_initialization else "adoption"
     backup = create_backup(
         root_path,
         built["backup_files"],
-        backup_dir / f"{built['timestamp']}-pre-adoption.zip",
-        reason="ArchMarshal adoption before adding a non-destructive management overlay.",
+        backup_dir / f"{built['timestamp']}-pre-{backup_label}.zip",
+        reason=(
+            "ArchMarshal initialization before adding a create-only project Skill scaffold."
+            if project_initialization
+            else "ArchMarshal adoption before adding a non-destructive management overlay."
+        ),
         scope=f"{built['backup_scope']}_workspace",
     )
     if held is not None:
@@ -178,9 +219,7 @@ def _adopt_workspace_locked(
         else plan_skill_index(
             root_path,
             _discover_skills(root_path),
-            created_at=(built["skill_index_plan"].get("generation") or {}).get(
-                "created_at"
-            ),
+            created_at=(built["skill_index_plan"].get("generation") or {}).get("created_at"),
         )
     )
     if _logical_skill_plan(revalidated) != _logical_skill_plan(built["skill_index_plan"]):
@@ -204,7 +243,13 @@ def _adopt_workspace_locked(
         held.verify()
 
     payload = _public_plan(built, applied=True)
-    payload["mode"] = "overlay_synced" if built["configured"] else "overlay_applied"
+    payload["mode"] = (
+        "project_initialization_applied"
+        if project_initialization
+        else "overlay_synced"
+        if built["configured"]
+        else "overlay_applied"
+    )
     payload["backup"] = backup
     payload["transaction"] = transaction
     payload["skill_index_commit"] = transaction["skill_index_commit"]
@@ -218,10 +263,20 @@ def _adopt_workspace_locked(
         "Multi-file adoption is recoverable from a durable create-only transaction journal.",
         "Published transaction files are never automatically deleted during recovery.",
     ]
+    if project_initialization:
+        payload["safety_guarantees"].append(
+            "Project Skill scaffold files were created only where paths were absent."
+        )
     return payload
 
 
-def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str, Any]:
+def _build_adoption(
+    root: Path,
+    tags: list[str],
+    backup_scope: str,
+    *,
+    project_initialization: bool = False,
+) -> dict[str, Any]:
     if backup_scope not in {"managed", "full"}:
         raise ValueError("backup_scope must be 'managed' or 'full'")
 
@@ -229,13 +284,15 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
     timestamp = now.strftime("%Y%m%d-%H%M%S")
     workspace_file = root / ".agent" / "workspace.yaml"
     ensure_managed_path(root, root / ".agent", purpose="ArchMarshal control directory")
+    scaffold_writes: dict[Path, str] = {}
+    scaffold_existing: list[str] = []
+    if project_initialization:
+        scaffold_writes, scaffold_existing = _project_skill_scaffold_writes(root)
     configured = _is_archmarshal_workspace(workspace_file)
     overlay_enabled = _workspace_uses_overlays(workspace_file) if configured else True
     transaction_status = adoption_transaction_status(root)
     reserved_conflicts = [
-        relative
-        for relative in RESERVED_FILES[1:]
-        if (root / relative).exists() and not configured
+        relative for relative in RESERVED_FILES[1:] if (root / relative).exists() and not configured
     ]
     skills = _discover_skills(root)
     manage_index = not configured or overlay_enabled
@@ -268,7 +325,9 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
     normalized_tags = _normalize_tags(tags)
     if not normalized_tags and configured:
         existing_workspace = load_yaml_safe(workspace_file)
-        workspace_data = existing_workspace.data if isinstance(existing_workspace.data, dict) else {}
+        workspace_data = (
+            existing_workspace.data if isinstance(existing_workspace.data, dict) else {}
+        )
         workspace_tags = workspace_data.get("workspace", {}).get("tags", [])
         if isinstance(workspace_tags, list):
             normalized_tags = _normalize_tags(
@@ -309,6 +368,8 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
         placeholder = root / relative
         if not placeholder.exists():
             writes[placeholder] = ""
+    if project_initialization:
+        writes.update(scaffold_writes)
     if overlay_enabled:
         for skill in skills:
             overlay = root / skill["overlay_manifest"]
@@ -317,9 +378,13 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
                     skill["manifest"], sort_keys=False, allow_unicode=True
                 )
 
-    ownership_mode_conflict = configured and ownership_index_mode is not None and (
-        (overlay_enabled and ownership_index_mode != "required")
-        or (not overlay_enabled and ownership_index_mode != "disabled")
+    ownership_mode_conflict = (
+        configured
+        and ownership_index_mode is not None
+        and (
+            (overlay_enabled and ownership_index_mode != "required")
+            or (not overlay_enabled and ownership_index_mode != "disabled")
+        )
     )
     if ownership_mode_conflict:
         reserved_conflicts.append(".agent/ownership.json#skill_index")
@@ -348,6 +413,8 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
         "timestamp": timestamp,
         "configured": configured,
         "overlay_enabled": overlay_enabled,
+        "project_initialization": project_initialization,
+        "scaffold_existing": scaffold_existing,
         "backup_scope": backup_scope,
         "tags": normalized_tags,
         "skills": skills,
@@ -363,6 +430,7 @@ def _build_adoption(root: Path, tags: list[str], backup_scope: str) -> dict[str,
 
 def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
     root: Path = built["root"]
+    scaffold_paths = {relative for relative, _content in PROJECT_SKILL_SCAFFOLD}
     operations = [
         {
             "action": "create",
@@ -370,6 +438,11 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
             "bytes": len(content.encode("utf-8")),
             "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
             "overwrite": False,
+            "category": (
+                "project_skill_scaffold"
+                if path.relative_to(root).as_posix() in scaffold_paths
+                else "control_plane"
+            ),
         }
         for path, content in built["writes"].items()
     ]
@@ -411,16 +484,60 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
             ]
         )
     backup_records = _backup_source_records(root, built["backup_files"])
+    plan_digest = _adoption_plan_digest(built)
+    public_skills = [
+        _public_discovered_skill(built, skill, tracked_changes, index_plan)
+        for skill in built["skills"]
+    ]
+    skill_reviews_required = [
+        {
+            "id": skill["id"],
+            "source": skill["source"],
+            "review_state": skill["review_state"],
+            "activation_state": skill["activation_state"],
+            "expected_head": index_plan["proposed_head"],
+            "available_after": (
+                "now"
+                if applied or not index_plan["changed"]
+                else "project_initialization_apply"
+                if built["project_initialization"]
+                else "adoption_apply"
+            ),
+        }
+        for skill in public_skills
+        if skill["review_required"]
+    ]
+    next_actions = _public_next_actions(
+        built,
+        applied=applied,
+        plan_digest=plan_digest,
+        operations=operations,
+        index_plan=index_plan,
+        skills=public_skills,
+    )
     return {
         "tool": "archmarshal",
-        "stage": "sync" if built["configured"] else "adopt",
+        "stage": (
+            "init"
+            if built["project_initialization"]
+            else "sync"
+            if built["configured"]
+            else "adopt"
+        ),
         "root": str(root),
         "mode": "applied" if applied else "propose_only",
         "configured": built["configured"],
         "overlay_enabled": built["overlay_enabled"],
+        "project_initialization": built["project_initialization"],
+        "mutation_scope": (
+            "archmarshal_control_plane_and_project_skill_scaffold"
+            if built["project_initialization"]
+            else "archmarshal_control_plane_only"
+        ),
+        "source_files_modified": False,
         "blocked": built["blocked"],
         "review_required": built["review_required"],
-        "plan_digest": _adoption_plan_digest(built),
+        "plan_digest": plan_digest,
         "apply_precondition": "--expect-plan <plan_digest>",
         "transaction": built["transaction_status"],
         "skill_index": index_plan,
@@ -429,29 +546,18 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
         "backup_file_preview": backup_records[:100],
         "backup_file_preview_truncated": len(backup_records) > 100,
         "project_tags": built["tags"],
-        "discovered_skills": [
-            {
-                "id": skill["manifest"]["id"],
-                "name": skill["manifest"]["name"],
-                "source": skill["source"],
-                "source_manifest": skill["source_manifest"],
-                "kind": skill["manifest"]["kind"],
-                "status": skill["manifest"]["status"],
-                "tags": skill["manifest"]["tags"],
-                "triggers": skill["manifest"]["triggers"],
-                "negative_triggers": skill["manifest"]["negative_triggers"],
-                "overlay_manifest": skill["overlay_manifest"],
-                "source_will_change": False,
-                "source_drift": skill["source_drift"],
-                "tracking_state": tracked_changes.get(
-                    skill["source"],
-                    "indexed"
-                    if index_plan["enabled"] and index_plan["expected_head"]
-                    else skill["source_drift"],
-                ),
-            }
-            for skill in built["skills"]
-        ],
+        "discovered_skills": public_skills,
+        "skill_reviews_required": skill_reviews_required,
+        "next_actions": next_actions,
+        "project_skill_scaffold": {
+            "paths": sorted(scaffold_paths),
+            "planned_create": sorted(
+                operation["path"]
+                for operation in operations
+                if operation.get("category") == "project_skill_scaffold"
+            ),
+            "preserved_existing": built["scaffold_existing"],
+        },
         "operations": operations,
         "conflicts": built["conflicts"],
         "notes": [
@@ -469,6 +575,195 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
     }
 
 
+def _project_skill_scaffold_writes(root: Path) -> tuple[dict[Path, str], list[str]]:
+    writes: dict[Path, str] = {}
+    existing: list[str] = []
+    for relative, content in PROJECT_SKILL_SCAFFOLD:
+        target = root / relative
+        current = root
+        parts = Path(relative).parts
+        for index, part in enumerate(parts):
+            current = current / part
+            if is_link_or_reparse(current):
+                raise ArchMarshalError(
+                    "unsafe_managed_link",
+                    "Project Skill scaffold crosses a symbolic link or junction.",
+                    details={"path": str(current)},
+                )
+            if not current.exists():
+                continue
+            is_target = index == len(parts) - 1
+            if (is_target and not current.is_file()) or (not is_target and not current.is_dir()):
+                raise ArchMarshalError(
+                    "project_initialization_path_conflict",
+                    "Project Skill scaffold has a file/directory path conflict.",
+                    details={"path": str(current), "target": relative},
+                )
+        ensure_managed_path(root, target, purpose="Project Skill scaffold target")
+        if target.exists():
+            existing.append(relative)
+        else:
+            writes[target] = content
+    return writes, sorted(existing)
+
+
+def _planned_skill_manifest(built: dict[str, Any], source: str) -> dict[str, Any] | None:
+    generation = built["skill_index_plan"].get("generation")
+    records = generation.get("skills") if isinstance(generation, dict) else None
+    if not isinstance(records, list):
+        return None
+    matches = [
+        record.get("manifest")
+        for record in records
+        if isinstance(record, dict)
+        and record.get("state") == "active"
+        and record.get("source") == source
+        and isinstance(record.get("manifest"), dict)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _public_discovered_skill(
+    built: dict[str, Any],
+    skill: dict[str, Any],
+    tracked_changes: dict[str, str],
+    index_plan: dict[str, Any],
+) -> dict[str, Any]:
+    manifest = _planned_skill_manifest(built, skill["source"]) or skill["manifest"]
+    validation = manifest.get("validation")
+    validation_valid = isinstance(validation, dict) and validation.get("valid") is True
+    provenance = manifest.get("metadata_provenance")
+    import_errors = provenance.get("errors") if isinstance(provenance, dict) else []
+    invalid = not validation_valid or bool(import_errors)
+    effective_status = str(manifest.get("status") or "disabled")
+    index_enabled = bool(index_plan.get("enabled"))
+    review_state = str(manifest.get("review_state") or "needs_review")
+    if invalid:
+        activation_state = "disabled_invalid"
+    elif effective_status not in {"active", "experimental"}:
+        activation_state = "disabled_source"
+    elif not index_enabled:
+        activation_state = "active_native"
+        review_state = "not_applicable"
+    elif review_state == "approved":
+        activation_state = "active_approved"
+    elif review_state == "rejected":
+        activation_state = "quarantined_rejected"
+    else:
+        activation_state = "quarantined_needs_review"
+        review_state = "needs_review"
+    review_required = activation_state == "quarantined_needs_review"
+    return {
+        "id": manifest["id"],
+        "name": manifest["name"],
+        "source": skill["source"],
+        "source_manifest": skill["source_manifest"],
+        "kind": manifest["kind"],
+        "source_declared_status": skill["source_declared_status"],
+        "normalized_source_status": effective_status,
+        "review_state": review_state,
+        "activation_state": activation_state,
+        "review_required": review_required,
+        "tags": manifest["tags"],
+        "triggers": manifest["triggers"],
+        "negative_triggers": manifest["negative_triggers"],
+        "overlay_manifest": skill["overlay_manifest"],
+        "source_will_change": False,
+        "source_drift": skill["source_drift"],
+        "tracking_state": tracked_changes.get(
+            skill["source"],
+            "indexed"
+            if index_plan["enabled"] and index_plan["expected_head"]
+            else skill["source_drift"],
+        ),
+    }
+
+
+def _public_next_actions(
+    built: dict[str, Any],
+    *,
+    applied: bool,
+    plan_digest: str,
+    operations: list[dict[str, Any]],
+    index_plan: dict[str, Any],
+    skills: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    if not applied and not built["blocked"] and (operations or index_plan.get("changed")):
+        command_name = "init" if built["project_initialization"] else "adopt"
+        command_args = ["archmarshal", command_name, str(built["root"])]
+        for tag in built["tags"]:
+            command_args.extend(["--tag", tag])
+        if built["backup_scope"] != "managed":
+            command_args.extend(["--backup-scope", built["backup_scope"]])
+        command_args.extend(["--expect-plan", plan_digest, "--apply", "--pretty"])
+        actions.append(
+            {
+                "id": "apply_project_initialization"
+                if built["project_initialization"]
+                else "apply_adoption",
+                "kind": "apply_project_initialization"
+                if built["project_initialization"]
+                else "apply_adoption",
+                "available": True,
+                "command_args": command_args,
+                "command": subprocess.list2cmdline(command_args),
+            }
+        )
+
+    review_head = index_plan.get("proposed_head")
+    for skill in skills:
+        if not skill["review_required"] or not isinstance(review_head, str):
+            continue
+        elevated = skill["kind"] == "global_skill"
+        preview_args = [
+            "archmarshal",
+            "skill-review",
+            str(built["root"]),
+            "--source",
+            skill["source"],
+            "--decision",
+            "approve",
+            "--expect-head",
+            review_head,
+        ]
+        if elevated:
+            preview_args.append("--allow-global-policy")
+        preview_args.append("--pretty")
+        apply_args = [*preview_args[:-1]]
+        apply_args.extend(
+            [
+                "--plan-file",
+                "skill-review-plan.json",
+                "--expect-plan",
+                "<plan_digest>",
+                "--apply",
+                "--pretty",
+            ]
+        )
+        available = applied or not index_plan.get("changed")
+        actions.append(
+            {
+                "id": f"review_skill:{skill['id']}",
+                "kind": "review_skill",
+                "skill_id": skill["id"],
+                "source": skill["source"],
+                "expected_head": review_head,
+                "available": available,
+                "available_after": None
+                if available
+                else "apply_project_initialization"
+                if built["project_initialization"]
+                else "apply_adoption",
+                "preview_command_args": preview_args,
+                "preview_command": subprocess.list2cmdline(preview_args),
+                "apply_command_args": apply_args,
+                "apply_command": subprocess.list2cmdline(apply_args),
+            }
+        )
+    return actions
+
+
 def _adoption_plan_digest(built: dict[str, Any]) -> str:
     root: Path = built["root"]
     intent = {
@@ -476,6 +771,7 @@ def _adoption_plan_digest(built: dict[str, Any]) -> str:
         "backup_scope": built["backup_scope"],
         "configured": built["configured"],
         "overlay_enabled": built["overlay_enabled"],
+        "project_initialization": built["project_initialization"],
         "tags": built["tags"],
         "writes": [
             {
@@ -576,10 +872,13 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
         source = source_dir.relative_to(root).as_posix()
         frontmatter = _skill_frontmatter(skill_md)
         source_manifest = source_dir / "manifest.yaml"
-        declared, import_errors = _import_source_manifest(source_manifest)
-        display_name = str(
-            declared.get("name") or frontmatter.get("name") or source_dir.name
-        ).strip() or source_dir.name
+        declared, import_errors, source_declared_status = _import_source_manifest(
+            source_manifest
+        )
+        display_name = (
+            str(declared.get("name") or frontmatter.get("name") or source_dir.name).strip()
+            or source_dir.name
+        )
         name_slug = _slug(display_name)
         description = str(
             declared.get("summary")
@@ -592,9 +891,7 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
         scope = str(declared.get("scope") or inferred_scope)
         overlay_group = _overlay_group(kind, scope)
         identity_suffix = hashlib.sha256(source.encode("utf-8")).hexdigest()[:8]
-        skill_id = str(
-            declared.get("id") or f"skill.{scope}.{name_slug}-{identity_suffix}"
-        )
+        skill_id = str(declared.get("id") or f"skill.{scope}.{name_slug}-{identity_suffix}")
         overlay_manifest = (
             f".agent/skill-overlays/{overlay_group}/{name_slug}-{identity_suffix}/manifest.yaml"
         )
@@ -670,7 +967,9 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
                 "package_file_count": package["file_count"],
                 "package_content_bytes": package["content_bytes"],
                 "original_manifest": (
-                    source_manifest.relative_to(root).as_posix() if source_manifest.exists() else None
+                    source_manifest.relative_to(root).as_posix()
+                    if source_manifest.exists()
+                    else None
                 ),
                 "managed": False,
                 "mutation_policy": "never",
@@ -690,14 +989,15 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
                 "templates_local": local["templates"],
                 "references_local": local["references"],
             }
-            manifest["paths"] = {
-                key: key for key, present in local.items() if present
-            }
+            manifest["paths"] = {key: key for key, present in local.items() if present}
         skills.append(
             {
                 "source": source,
+                "source_declared_status": source_declared_status,
                 "source_manifest": (
-                    source_manifest.relative_to(root).as_posix() if source_manifest.exists() else None
+                    source_manifest.relative_to(root).as_posix()
+                    if source_manifest.exists()
+                    else None
                 ),
                 "overlay_manifest": overlay_manifest,
                 "manifest": manifest,
@@ -732,13 +1032,18 @@ def _overlay_group(kind: str, scope: str) -> str:
     return "project"
 
 
-def _import_source_manifest(path: Path) -> tuple[dict[str, Any], list[str]]:
+def _import_source_manifest(
+    path: Path,
+) -> tuple[dict[str, Any], list[str], str | None]:
     if not path.exists():
-        return {}, []
+        return {}, [], None
     result = load_yaml_safe(path)
     if result.error or not isinstance(result.data, dict):
-        return {}, ["source_manifest_invalid"]
+        return {}, ["source_manifest_invalid"], None
     data = result.data
+    source_declared_status = data.get("status")
+    if not isinstance(source_declared_status, str) or len(source_declared_status) > 64:
+        source_declared_status = None
     imported: dict[str, Any] = {}
     errors: list[str] = []
     string_fields = {
@@ -746,19 +1051,23 @@ def _import_source_manifest(path: Path) -> tuple[dict[str, Any], list[str]]:
         "name": lambda value: bool(value.strip()),
         "summary": lambda value: bool(value.strip()),
         "version": lambda value: bool(re.fullmatch(r"\d+\.\d+\.\d+", value)),
-        "kind": lambda value: value
-        in {
-            "global_skill",
-            "functional_skill",
-            "common_project_skill",
-            "project_skill",
-            "generated_project_skill",
-            "governance_skill",
-        },
-        "scope": lambda value: value
-        in {"global", "functional", "common_project", "project", "module", "generated"},
-        "status": lambda value: value
-        in {"active", "disabled", "experimental", "deprecated", "archived"},
+        "kind": lambda value: (
+            value
+            in {
+                "global_skill",
+                "functional_skill",
+                "common_project_skill",
+                "project_skill",
+                "generated_project_skill",
+                "governance_skill",
+            }
+        ),
+        "scope": lambda value: (
+            value in {"global", "functional", "common_project", "project", "module", "generated"}
+        ),
+        "status": lambda value: (
+            value in {"active", "disabled", "experimental", "deprecated", "archived"}
+        ),
         "priority": lambda value: value in {"highest", "high", "normal", "low"},
     }
     for field, validator in string_fields.items():
@@ -788,7 +1097,7 @@ def _import_source_manifest(path: Path) -> tuple[dict[str, Any], list[str]]:
             imported[field] = json.loads(json.dumps(data[field], ensure_ascii=False))
         else:
             errors.append(f"invalid_{field}")
-    return imported, errors
+    return imported, errors, source_declared_status
 
 
 def _skill_frontmatter(path: Path) -> dict[str, Any]:
@@ -891,18 +1200,21 @@ def _workspace_id(root: Path) -> str:
 
 
 def _ownership_json(root: Path, *, index_required: bool) -> str:
-    return json.dumps(
-        {
-            "format": "archmarshal-workspace-ownership-v1",
-            "workspace_id": _workspace_id(root),
-            "managed_root": ".",
-            "skill_index": "required" if index_required else "disabled",
-            "source_mutation": False,
-        },
-        ensure_ascii=False,
-        indent=2,
-        sort_keys=True,
-    ) + "\n"
+    return (
+        json.dumps(
+            {
+                "format": "archmarshal-workspace-ownership-v1",
+                "workspace_id": _workspace_id(root),
+                "managed_root": ".",
+                "skill_index": "required" if index_required else "disabled",
+                "source_mutation": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
 
 
 def _registry_yaml(skills: list[dict[str, Any]]) -> str:
@@ -922,7 +1234,9 @@ def _registry_yaml(skills: list[dict[str, Any]]) -> str:
         ),
         _artifact("managed.archive", "artifact", ".agent/archive", "never_default", ["archive"]),
         _artifact("managed.cache", "cache", ".agent/cache", "never_default", ["cache"]),
-        _artifact("managed.knowledge", "knowledge", ".agent/knowledge", "task_based", ["knowledge"]),
+        _artifact(
+            "managed.knowledge", "knowledge", ".agent/knowledge", "task_based", ["knowledge"]
+        ),
         _artifact(
             "managed.skill-overlays",
             "config",
@@ -982,7 +1296,7 @@ def _index_markdown(
     ] or ["- No existing skills were discovered during adoption."]
     return "\n".join(
         [
-            f"# {root.name} · ArchMarshal Index",
+            f"# {root.name} - ArchMarshal Index",
             "",
             f"- Adopted: {now.date().isoformat()}",
             f"- Tags: {', '.join(tags)}",
@@ -996,6 +1310,12 @@ def _index_markdown(
             "- Date-organized history: `.agent/history/YYYY/MM/DD/`",
             "- Review inbox: `.agent/inbox/`",
             "- Verified backups: `.agent/backups/` (never loaded by default)",
+            "",
+            "## Project Skill paths",
+            "",
+            "- Human-reviewed project Skills: `.agents/skills/project/`",
+            "- Generated Skill drafts: `.agents/skills/generated/`",
+            "- Skill directory guide: `.agents/skills/README.md` (created by `archmarshal init`)",
             "",
             "## Existing skills (sources remain untouched)",
             "",
@@ -1143,8 +1463,7 @@ def _workspace_uses_overlays(path: Path) -> bool:
         for value in (paths.get(key) or [])
     ]
     return any(
-        str(value).replace("\\", "/").startswith(".agent/skill-overlays/")
-        for value in skill_paths
+        str(value).replace("\\", "/").startswith(".agent/skill-overlays/") for value in skill_paths
     )
 
 
@@ -1177,7 +1496,9 @@ def _git_creation_date(root: Path) -> str | None:
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    root_commit = roots.stdout.splitlines()[0].strip() if roots.returncode == 0 and roots.stdout else ""
+    root_commit = (
+        roots.stdout.splitlines()[0].strip() if roots.returncode == 0 and roots.stdout else ""
+    )
     if not root_commit:
         return None
     try:
@@ -1200,9 +1521,7 @@ def _normalize_tags(tags: list[str]) -> list[str]:
 
 def _human_label(value: str) -> str:
     cleaned = "-".join(value.strip().split())
-    cleaned = "".join(
-        char for char in cleaned if char.isalnum() or char in {"-", "_", "."}
-    )
+    cleaned = "".join(char for char in cleaned if char.isalnum() or char in {"-", "_", "."})
     return cleaned[:80]
 
 

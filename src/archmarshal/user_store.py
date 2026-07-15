@@ -5,6 +5,8 @@ import json
 import os
 import re
 import socket
+import stat
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -16,7 +18,7 @@ else:
     import fcntl
 
 from .errors import ArchMarshalError
-from .io import load_yaml_safe
+from .io import load_yaml_safe, read_bytes_safe
 from .safety import (
     create_bytes_exclusive,
     ensure_managed_path,
@@ -30,7 +32,10 @@ from .skill_validation import validate_skill_package
 
 OWNERSHIP_FORMAT = "archmarshal-user-store-ownership-v1"
 GENERATION_FORMAT = "archmarshal-user-store-generation-v1"
-PACKAGE_COMMIT_FORMAT = "archmarshal-user-skill-package-v1"
+PACKAGE_COMMIT_FORMAT_V1 = "archmarshal-user-skill-package-v1"
+PACKAGE_COMMIT_FORMAT_V2 = "archmarshal-user-skill-package-v2"
+PACKAGE_COMMIT_FORMAT = PACKAGE_COMMIT_FORMAT_V2
+PACKAGE_SNAPSHOT_FORMAT_V2 = "archmarshal-user-skill-snapshot-v2"
 PLAN_FORMAT = "archmarshal-user-store-plan-v1"
 LOCK_FORMAT = "archmarshal-user-store-lock-v1"
 STATUS_API_VERSION = "archmarshal-user-store-status-v2"
@@ -51,11 +56,21 @@ MAX_COMMON_SKILLS = 500
 MAX_CANDIDATE_DECISIONS = 10_000
 MAX_SKILL_PACKAGE_FILES = 1_000
 MAX_SKILL_PACKAGE_BYTES = 64 * 1024 * 1024
+MAX_PACKAGE_COMMIT_BYTES = 16 * 1024 * 1024
 MAX_PREFERENCES = 100
 MAX_PREFERENCE_ENTRY_BYTES = 4 * 1024
 MAX_PREFERENCES_BYTES = 64 * 1024
 MAX_REASON_LENGTH = 1_000
 MAX_LABEL_LENGTH = 512
+
+WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 
 _SKILL_ID = re.compile(r"^skill\.[a-z0-9_.-]+$")
 _PREFERENCE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -723,6 +738,16 @@ def _plan_operations(
     operations: list[dict[str, Any]] = []
     if package is not None:
         package_path = PurePosixPath(package["package_path"])
+        for record in package["fingerprint"].get("directories", []):
+            operations.append(
+                {
+                    "action": "mkdir_create_only",
+                    "source": record["path"],
+                    "path": (package_path / record["path"]).as_posix(),
+                    "mode": record["mode"],
+                    "overwrite": False,
+                }
+            )
         for record in package["fingerprint"]["files"]:
             operations.append(
                 {
@@ -731,6 +756,8 @@ def _plan_operations(
                     "path": (package_path / record["path"]).as_posix(),
                     "bytes": record["bytes"],
                     "sha256": record["sha256"],
+                    "mode": record.get("mode"),
+                    "executable": record.get("executable"),
                     "overwrite": False,
                 }
             )
@@ -1014,19 +1041,23 @@ def _plan_package(draft: Path) -> dict[str, Any]:
             details={"path": str(draft_root)},
         )
     manifest = _load_draft_manifest(draft_root)
-    fingerprint = fingerprint_directory(draft_root, purpose="User Skill draft package")
+    fingerprint = _snapshot_package_v2(draft_root, purpose="User Skill draft package")
     if not any(item["path"] == "SKILL.md" for item in fingerprint["files"]):
         raise ArchMarshalError(
             "user_store_skill_draft_invalid",
             "Skill draft package must contain SKILL.md.",
         )
-    if any(item["path"] == PACKAGE_COMMIT_NAME for item in fingerprint["files"]):
+    if any(
+        item["path"] == PACKAGE_COMMIT_NAME
+        for item in [*fingerprint["files"], *fingerprint["directories"]]
+    ):
         raise ArchMarshalError(
             "user_store_skill_draft_invalid",
             f"Skill draft reserves the root {PACKAGE_COMMIT_NAME} name.",
         )
     if (
-        fingerprint["file_count"] > MAX_SKILL_PACKAGE_FILES
+        fingerprint["file_count"] + fingerprint["directory_count"]
+        > MAX_SKILL_PACKAGE_FILES
         or fingerprint["content_bytes"] > MAX_SKILL_PACKAGE_BYTES
     ):
         raise ArchMarshalError(
@@ -1036,6 +1067,7 @@ def _plan_package(draft: Path) -> dict[str, Any]:
                 "max_files": MAX_SKILL_PACKAGE_FILES,
                 "max_bytes": MAX_SKILL_PACKAGE_BYTES,
                 "actual_files": fingerprint["file_count"],
+                "actual_directories": fingerprint["directory_count"],
                 "actual_bytes": fingerprint["content_bytes"],
             },
         )
@@ -1043,9 +1075,12 @@ def _plan_package(draft: Path) -> dict[str, Any]:
     commit = {
         "format": PACKAGE_COMMIT_FORMAT,
         "package_sha256": fingerprint["sha256"],
+        "snapshot_format": fingerprint["format"],
         "file_count": fingerprint["file_count"],
+        "directory_count": fingerprint["directory_count"],
         "content_bytes": fingerprint["content_bytes"],
         "files": fingerprint["files"],
+        "directories": fingerprint["directories"],
         "manifest_digest": manifest_digest,
         "source_mutation": False,
     }
@@ -1157,67 +1192,39 @@ def _load_draft_manifest(
 
 
 def _validate_package_plan(package: Any) -> None:
-    if not isinstance(package, dict):
-        raise ArchMarshalError("user_store_plan_invalid", "Skill package plan is invalid.")
-    fingerprint = package.get("fingerprint")
-    digest = fingerprint.get("sha256") if isinstance(fingerprint, dict) else None
-    files = fingerprint.get("files") if isinstance(fingerprint, dict) else None
-    valid_file_sizes = isinstance(files, list) and all(
-        isinstance(item, dict)
-        and isinstance(item.get("bytes"), int)
-        and item["bytes"] >= 0
-        for item in files
-    )
-    summed_bytes = sum(item["bytes"] for item in files) if valid_file_sizes else -1
     if (
-        not isinstance(package.get("draft_root"), str)
-        or not isinstance(fingerprint, dict)
-        or not _is_sha256(str(digest or ""))
-        or package.get("package_path") != _package_relative(str(digest)).as_posix()
+        not isinstance(package, dict)
+        or set(package)
+        != {
+            "draft_root",
+            "package_path",
+            "fingerprint",
+            "manifest",
+            "manifest_digest",
+            "commit",
+        }
+        or not isinstance(package.get("draft_root"), str)
         or not isinstance(package.get("manifest"), dict)
         or not _is_sha256(str(package.get("manifest_digest") or ""))
-        or package.get("commit", {}).get("package_sha256") != digest
-        or package.get("commit", {}).get("files") != fingerprint.get("files")
+    ):
+        raise ArchMarshalError("user_store_plan_invalid", "Skill package plan is invalid.")
+    fingerprint = package["fingerprint"]
+    _validate_package_snapshot_v2(fingerprint, code="user_store_plan_invalid")
+    digest = fingerprint["sha256"]
+    if (
+        package.get("package_path") != _package_relative(digest).as_posix()
+        or hashlib.sha256(_canonical_bytes(package["manifest"])).hexdigest()
+        != package["manifest_digest"]
     ):
         raise ArchMarshalError(
             "user_store_plan_invalid",
             "Skill package plan is not content-addressed or internally consistent.",
         )
-    content_bytes = fingerprint.get("content_bytes")
-    if (
-        not valid_file_sizes
-        or fingerprint.get("file_count") != len(files)
-        or not isinstance(content_bytes, int)
-        or content_bytes < 0
-        or content_bytes != summed_bytes
-        or len(files) > MAX_SKILL_PACKAGE_FILES
-        or content_bytes > MAX_SKILL_PACKAGE_BYTES
-    ):
-        raise ArchMarshalError(
-            "user_store_plan_invalid",
-            "Skill package plan has invalid counts or exceeds its lightweight budget.",
-        )
-    if hashlib.sha256(_canonical_bytes(package["manifest"])).hexdigest() != package["manifest_digest"]:
-        raise ArchMarshalError(
-            "user_store_plan_invalid",
-            "Skill package manifest digest is inconsistent.",
-        )
-    if _records_digest(fingerprint.get("files")) != digest:
-        raise ArchMarshalError(
-            "user_store_plan_invalid",
-            "Skill package file records do not match the package digest.",
-        )
-    commit = package["commit"]
-    expected_commit = {
-        "format": PACKAGE_COMMIT_FORMAT,
-        "package_sha256": digest,
-        "file_count": fingerprint.get("file_count"),
-        "content_bytes": fingerprint.get("content_bytes"),
-        "files": fingerprint.get("files"),
-        "manifest_digest": package["manifest_digest"],
-        "source_mutation": False,
-    }
-    if commit != expected_commit:
+    expected_commit = _package_v2_commit(
+        fingerprint,
+        manifest_digest=package["manifest_digest"],
+    )
+    if package.get("commit") != expected_commit:
         raise ArchMarshalError(
             "user_store_plan_invalid",
             "Skill package commit marker does not match the reviewed package.",
@@ -1233,7 +1240,10 @@ def _verify_draft(package: dict[str, Any]) -> None:
             "Skill draft disappeared or became linked after planning.",
         )
     manifest = _load_draft_manifest(draft_root)
-    current = fingerprint_directory(draft_root, purpose="User Skill draft precondition")
+    current = _snapshot_package_v2(
+        draft_root,
+        purpose="User Skill draft precondition",
+    )
     if current != package["fingerprint"] or manifest != package["manifest"]:
         raise ArchMarshalError(
             "user_store_source_changed",
@@ -1293,9 +1303,15 @@ def _validate_package_topology(root: Path, package: dict[str, Any]) -> None:
 def _publish_package(root: Path, package: dict[str, Any]) -> None:
     _validate_package_topology(root, package)
     _verify_draft(package)
+    snapshot = package["fingerprint"]
+    _validate_package_snapshot_v2(snapshot, code="user_store_plan_invalid")
     destination = root / PurePosixPath(package["package_path"])
     ensure_managed_path(root, destination, purpose="User Skill immutable package")
-    destination.mkdir(parents=True, exist_ok=True)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        destination.mkdir(mode=0o700, exist_ok=False)
+    except FileExistsError:
+        pass
     if is_link_or_reparse(destination) or not destination.is_dir():
         raise ArchMarshalError(
             "user_store_package_collision",
@@ -1305,20 +1321,39 @@ def _publish_package(root: Path, package: dict[str, Any]) -> None:
     staging = root / STATE_NAME / "staging"
     ensure_managed_path(root, staging, purpose="User Skill package staging")
     if commit_path.exists():
-        _verify_package(root, package["fingerprint"]["sha256"], package["manifest_digest"])
+        _verify_package(root, snapshot["sha256"], package["manifest_digest"])
         return
 
-    expected = {item["path"]: item for item in package["fingerprint"]["files"]}
-    existing = fingerprint_directory(destination, purpose="Partial User Skill package")
-    extras = sorted(item["path"] for item in existing["files"] if item["path"] not in expected)
-    if extras:
-        raise ArchMarshalError(
-            "user_store_package_collision",
-            "Partial immutable package contains undeclared files.",
-            details={"paths": extras[:100]},
-        )
+    _verify_partial_package_v2(
+        destination,
+        snapshot,
+        require_complete=False,
+        collision_code="user_store_package_collision",
+    )
+    expected_directories = {
+        item["path"]: item for item in snapshot["directories"]
+    }
+    created_directories: set[str] = set()
+    for relative, record in sorted(
+        expected_directories.items(),
+        key=lambda item: (len(PurePosixPath(item[0]).parts), _portable_path_key(item[0])),
+    ):
+        target = destination.joinpath(*PurePosixPath(relative).parts)
+        ensure_managed_path(root, target, purpose="User Skill package directory")
+        try:
+            target.mkdir(mode=0o700, exist_ok=False)
+        except FileExistsError:
+            _verify_directory(
+                target,
+                record,
+                collision_code="user_store_package_collision",
+            )
+        else:
+            created_directories.add(relative)
+
+    expected_files = {item["path"]: item for item in snapshot["files"]}
     draft_root = Path(package["draft_root"])
-    for relative, record in expected.items():
+    for relative, record in expected_files.items():
         source = draft_root.joinpath(*PurePosixPath(relative).parts)
         content = _read_exact_source(source, record)
         target = destination.joinpath(*PurePosixPath(relative).parts)
@@ -1327,12 +1362,37 @@ def _publish_package(root: Path, package: dict[str, Any]) -> None:
             _verify_file(target, record, collision_code="user_store_package_collision")
             continue
         try:
-            create_bytes_exclusive(target, content, temporary_directory=staging)
+            create_bytes_exclusive(
+                target,
+                content,
+                mode=record["mode"],
+                temporary_directory=staging,
+            )
         except FileExistsError:
             _verify_file(target, record, collision_code="user_store_package_collision")
+        else:
+            _apply_recorded_mode(target, record["mode"])
         _verify_file(target, record, collision_code="user_store_package_collision")
 
     _verify_draft(package)
+    for relative, record in sorted(
+        expected_directories.items(),
+        key=lambda item: (-len(PurePosixPath(item[0]).parts), _portable_path_key(item[0])),
+    ):
+        target = destination.joinpath(*PurePosixPath(relative).parts)
+        if relative in created_directories:
+            _apply_recorded_mode(target, record["mode"])
+        _verify_directory(
+            target,
+            record,
+            collision_code="user_store_package_collision",
+        )
+    _verify_partial_package_v2(
+        destination,
+        snapshot,
+        require_complete=True,
+        collision_code="user_store_package_collision",
+    )
     commit_bytes = _json_bytes(package["commit"])
     try:
         create_bytes_exclusive(
@@ -1348,7 +1408,7 @@ def _publish_package(root: Path, package: dict[str, Any]) -> None:
                 "User Skill package commit marker appeared with different bytes.",
             )
     fsync_directory(destination)
-    _verify_package(root, package["fingerprint"]["sha256"], package["manifest_digest"])
+    _verify_package(root, snapshot["sha256"], package["manifest_digest"])
 
 
 def _verify_package(root: Path, package_digest: str, manifest_digest: str) -> dict[str, Any]:
@@ -1366,17 +1426,114 @@ def _verify_package(root: Path, package_digest: str, manifest_digest: str) -> di
             "User Skill package is missing its final regular commit marker.",
             details={"package": package_digest},
         )
+    loaded_commit = read_bytes_safe(
+        commit_path,
+        max_bytes=MAX_PACKAGE_COMMIT_BYTES,
+        label="User Skill package commit marker",
+    )
+    if loaded_commit.error:
+        raise ArchMarshalError(
+            "user_store_package_integrity_failed",
+            "User Skill package commit marker is unreadable or unstable.",
+            details={"reason": loaded_commit.error},
+        )
     try:
-        commit = json.loads(commit_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        commit = json.loads(loaded_commit.data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ArchMarshalError(
             "user_store_package_integrity_failed",
             "User Skill package commit marker is invalid.",
         ) from exc
-    records = commit.get("files") if isinstance(commit, dict) else None
+    commit_format = commit.get("format") if isinstance(commit, dict) else None
+    if commit_format == PACKAGE_COMMIT_FORMAT_V1:
+        manifest = _verify_package_v1(
+            destination,
+            commit,
+            package_digest=package_digest,
+            manifest_digest=manifest_digest,
+        )
+        _verify_commit_marker_unchanged(commit_path, loaded_commit.identity, loaded_commit.data)
+        return manifest
+    if commit_format != PACKAGE_COMMIT_FORMAT_V2:
+        raise ArchMarshalError(
+            "user_store_package_integrity_failed",
+            "User Skill package commit marker uses an unsupported format.",
+        )
+    snapshot = {
+        "format": commit.get("snapshot_format"),
+        "sha256": commit.get("package_sha256"),
+        "file_count": commit.get("file_count"),
+        "directory_count": commit.get("directory_count"),
+        "content_bytes": commit.get("content_bytes"),
+        "files": commit.get("files"),
+        "directories": commit.get("directories"),
+    }
+    _validate_package_snapshot_v2(snapshot, code="user_store_package_integrity_failed")
     if (
-        not isinstance(commit, dict)
-        or commit.get("format") != PACKAGE_COMMIT_FORMAT
+        commit.get("package_sha256") != package_digest
+        or commit.get("manifest_digest") != manifest_digest
+        or commit.get("source_mutation") is not False
+        or commit != _package_v2_commit(snapshot, manifest_digest=manifest_digest)
+        or loaded_commit.data != _json_bytes(commit)
+    ):
+        raise ArchMarshalError(
+            "user_store_package_integrity_failed",
+            "User Skill package commit marker does not match its content address.",
+        )
+    _verify_partial_package_v2(
+        destination,
+        snapshot,
+        require_complete=True,
+        collision_code="user_store_package_integrity_failed",
+    )
+    manifest = _load_draft_manifest(destination, enforce_folder_name=False)
+    if hashlib.sha256(_canonical_bytes(manifest)).hexdigest() != manifest_digest:
+        raise ArchMarshalError(
+            "user_store_package_integrity_failed",
+            "User Skill package manifest no longer matches its generation record.",
+        )
+    _verify_partial_package_v2(
+        destination,
+        snapshot,
+        require_complete=True,
+        collision_code="user_store_package_integrity_failed",
+    )
+    _verify_commit_marker_unchanged(commit_path, loaded_commit.identity, loaded_commit.data)
+    return manifest
+
+
+def _verify_commit_marker_unchanged(
+    commit_path: Path,
+    identity: tuple[int, int] | None,
+    content: bytes,
+) -> None:
+    final_commit = read_bytes_safe(
+        commit_path,
+        max_bytes=MAX_PACKAGE_COMMIT_BYTES,
+        label="User Skill package commit marker",
+    )
+    if (
+        final_commit.error
+        or final_commit.identity != identity
+        or final_commit.data != content
+    ):
+        raise ArchMarshalError(
+            "user_store_package_integrity_failed",
+            "User Skill package commit marker changed during verification.",
+        )
+
+
+def _verify_package_v1(
+    destination: Path,
+    commit: dict[str, Any],
+    *,
+    package_digest: str,
+    manifest_digest: str,
+) -> dict[str, Any]:
+    """Verify immutable v1 packages without applying v2-only path or mode rules."""
+    records = commit.get("files")
+    if (
+        commit.get("format") != PACKAGE_COMMIT_FORMAT_V1
         or commit.get("package_sha256") != package_digest
         or commit.get("manifest_digest") != manifest_digest
         or commit.get("source_mutation") is not False
@@ -1385,26 +1542,30 @@ def _verify_package(root: Path, package_digest: str, manifest_digest: str) -> di
         or _records_digest(records) != package_digest
         or len(records) > MAX_SKILL_PACKAGE_FILES
         or not isinstance(commit.get("content_bytes"), int)
+        or isinstance(commit.get("content_bytes"), bool)
         or commit["content_bytes"] > MAX_SKILL_PACKAGE_BYTES
     ):
         raise ArchMarshalError(
             "user_store_package_integrity_failed",
-            "User Skill package commit marker does not match its content address.",
+            "User Skill package commit marker does not match its v1 content address.",
         )
     total = 0
     expected: set[str] = set()
     for record in records:
-        relative = _safe_relative(record.get("path"))
+        relative = _safe_relative_v1(record.get("path"))
         if relative in expected:
             raise ArchMarshalError(
                 "user_store_package_integrity_failed",
-                "User Skill package contains duplicate file records.",
+                "User Skill package contains duplicate v1 file records.",
             )
         target = destination.joinpath(*PurePosixPath(relative).parts)
         _verify_file(target, record, collision_code="user_store_package_integrity_failed")
         total += record["bytes"]
         expected.add(relative)
-    actual_fingerprint = fingerprint_directory(destination, purpose="Committed User Skill package")
+    actual_fingerprint = fingerprint_directory(
+        destination,
+        purpose="Committed v1 User Skill package",
+    )
     actual = {
         item["path"]
         for item in actual_fingerprint["files"]
@@ -1413,15 +1574,365 @@ def _verify_package(root: Path, package_digest: str, manifest_digest: str) -> di
     if actual != expected or commit.get("content_bytes") != total:
         raise ArchMarshalError(
             "user_store_package_integrity_failed",
-            "User Skill package contains undeclared, missing, or miscounted files.",
+            "User Skill v1 package contains undeclared, missing, or miscounted files.",
         )
     manifest = _load_draft_manifest(destination, enforce_folder_name=False)
     if hashlib.sha256(_canonical_bytes(manifest)).hexdigest() != manifest_digest:
         raise ArchMarshalError(
             "user_store_package_integrity_failed",
-            "User Skill package manifest no longer matches its generation record.",
+            "User Skill v1 package manifest no longer matches its generation record.",
         )
     return manifest
+
+
+def _snapshot_package_v2(root: Path, *, purpose: str) -> dict[str, Any]:
+    metadata_before = _scan_package_metadata_v2(root, purpose=purpose)
+    content = fingerprint_directory(root, purpose=purpose)
+    metadata_after = _scan_package_metadata_v2(root, purpose=purpose)
+    if metadata_before != metadata_after:
+        raise ArchMarshalError(
+            "user_store_source_changed",
+            f"{purpose} path topology or permission modes changed while it was reviewed.",
+            details={"path": str(root)},
+        )
+    modes_by_path = {record["path"]: record for record in metadata_after["files"]}
+    content_by_path = {record["path"]: record for record in content["files"]}
+    if set(modes_by_path) != set(content_by_path):
+        raise ArchMarshalError(
+            "user_store_source_changed",
+            f"{purpose} file topology changed while it was reviewed.",
+            details={"path": str(root)},
+        )
+    files = [
+        {
+            **content_by_path[relative],
+            "mode": modes_by_path[relative]["mode"],
+            "executable": modes_by_path[relative]["executable"],
+        }
+        for relative in sorted(content_by_path, key=_portable_sort_key)
+    ]
+    directories = sorted(
+        metadata_after["directories"],
+        key=lambda record: _portable_sort_key(record["path"]),
+    )
+    snapshot = {
+        "format": PACKAGE_SNAPSHOT_FORMAT_V2,
+        "file_count": len(files),
+        "directory_count": len(directories),
+        "content_bytes": content["content_bytes"],
+        "files": files,
+        "directories": directories,
+    }
+    snapshot["sha256"] = _package_v2_digest(snapshot)
+    _validate_package_snapshot_v2(snapshot, code="user_store_package_integrity_failed")
+    return snapshot
+
+
+def _scan_package_metadata_v2(root: Path, *, purpose: str) -> dict[str, Any]:
+    if not root.is_dir() or is_link_or_reparse(root):
+        raise ArchMarshalError(
+            "user_store_skill_draft_invalid",
+            f"{purpose} must be a real unlinked directory.",
+            details={"path": str(root)},
+        )
+    files: list[dict[str, Any]] = []
+    directories_found: list[dict[str, Any]] = []
+    portable_seen: dict[str, str] = {}
+
+    def fail_scan(error: OSError) -> None:
+        raise ArchMarshalError(
+            "directory_scan_failed",
+            f"{purpose} could not be scanned completely.",
+            details={"path": str(getattr(error, "filename", None) or root)},
+        ) from error
+
+    for current, directories, filenames in os.walk(
+        root,
+        topdown=True,
+        onerror=fail_scan,
+        followlinks=False,
+    ):
+        current_path = Path(current)
+        if is_link_or_reparse(current_path):
+            raise ArchMarshalError(
+                "user_store_package_integrity_failed",
+                f"{purpose} contains a linked directory.",
+                details={"path": str(current_path)},
+            )
+        kept: list[str] = []
+        for name in sorted(directories, key=_portable_sort_key):
+            candidate = current_path / name
+            relative = candidate.relative_to(root).as_posix()
+            _register_portable_path(relative, portable_seen)
+            if is_link_or_reparse(candidate):
+                raise ArchMarshalError(
+                    "user_store_package_integrity_failed",
+                    f"{purpose} contains a linked directory.",
+                    details={"path": relative},
+                )
+            metadata = candidate.lstat()
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise ArchMarshalError(
+                    "user_store_package_integrity_failed",
+                    f"{purpose} contains a non-directory traversal entry.",
+                    details={"path": relative},
+                )
+            directories_found.append(
+                {"path": relative, "mode": _portable_mode(metadata.st_mode)}
+            )
+            kept.append(name)
+        directories[:] = kept
+        for name in sorted(filenames, key=_portable_sort_key):
+            candidate = current_path / name
+            relative = candidate.relative_to(root).as_posix()
+            _register_portable_path(relative, portable_seen)
+            if is_link_or_reparse(candidate):
+                raise ArchMarshalError(
+                    "user_store_package_integrity_failed",
+                    f"{purpose} contains a linked file.",
+                    details={"path": relative},
+                )
+            metadata = candidate.lstat()
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ArchMarshalError(
+                    "user_store_package_integrity_failed",
+                    f"{purpose} contains a non-regular file.",
+                    details={"path": relative},
+                )
+            mode = _portable_mode(metadata.st_mode)
+            files.append(
+                {
+                    "path": relative,
+                    "mode": mode,
+                    "executable": bool(mode & 0o111),
+                }
+            )
+        if len(files) + len(directories_found) > MAX_SKILL_PACKAGE_FILES + 1:
+            raise ArchMarshalError(
+                "user_store_skill_budget_exceeded",
+                "Skill package exceeds its portable filesystem-entry budget.",
+                details={"limit": MAX_SKILL_PACKAGE_FILES},
+            )
+    return {
+        "files": sorted(files, key=lambda record: _portable_sort_key(record["path"])),
+        "directories": sorted(
+            directories_found,
+            key=lambda record: _portable_sort_key(record["path"]),
+        ),
+    }
+
+
+def _validate_package_snapshot_v2(snapshot: Any, *, code: str) -> None:
+    if (
+        not isinstance(snapshot, dict)
+        or set(snapshot)
+        != {
+            "format",
+            "sha256",
+            "file_count",
+            "directory_count",
+            "content_bytes",
+            "files",
+            "directories",
+        }
+        or snapshot.get("format") != PACKAGE_SNAPSHOT_FORMAT_V2
+        or not _is_sha256(str(snapshot.get("sha256") or ""))
+        or not isinstance(snapshot.get("files"), list)
+        or not isinstance(snapshot.get("directories"), list)
+    ):
+        raise ArchMarshalError(code, "User Skill package v2 snapshot is invalid.")
+    files = snapshot["files"]
+    directories = snapshot["directories"]
+    portable_seen: dict[str, str] = {}
+    file_paths: set[str] = set()
+    directory_paths: set[str] = set()
+    total = 0
+    for record in directories:
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"path", "mode"}
+            or not _is_portable_mode(record.get("mode"))
+            or record["mode"] & 0o500 != 0o500
+        ):
+            raise ArchMarshalError(
+                code,
+                "User Skill package directories must be owner-readable and traversable.",
+            )
+        relative = _safe_relative(record["path"])
+        _register_portable_path(relative, portable_seen)
+        directory_paths.add(relative)
+    for record in files:
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"path", "bytes", "sha256", "mode", "executable"}
+            or not isinstance(record.get("bytes"), int)
+            or isinstance(record.get("bytes"), bool)
+            or record["bytes"] < 0
+            or not _is_sha256(str(record.get("sha256") or ""))
+            or not _is_portable_mode(record.get("mode"))
+            or not isinstance(record.get("executable"), bool)
+            or record["executable"] is not bool(record["mode"] & 0o111)
+            or record["mode"] & 0o400 != 0o400
+            or (record["executable"] and record["mode"] & 0o100 != 0o100)
+        ):
+            raise ArchMarshalError(
+                code,
+                "User Skill package files must be owner-readable and owner-executable when executable.",
+            )
+        relative = _safe_relative(record["path"])
+        _register_portable_path(relative, portable_seen)
+        file_paths.add(relative)
+        total += record["bytes"]
+    if (
+        snapshot.get("file_count") != len(files)
+        or snapshot.get("directory_count") != len(directories)
+        or snapshot.get("content_bytes") != total
+        or total > MAX_SKILL_PACKAGE_BYTES
+        or len(files) + len(directories) > MAX_SKILL_PACKAGE_FILES
+        or [record["path"] for record in files]
+        != sorted(file_paths, key=_portable_sort_key)
+        or [record["path"] for record in directories]
+        != sorted(directory_paths, key=_portable_sort_key)
+        or not {"SKILL.md", "manifest.yaml"}.issubset(file_paths)
+    ):
+        raise ArchMarshalError(
+            code,
+            "User Skill package v2 counts, ordering, entrypoints, or byte budget are invalid.",
+        )
+    for relative in [*directory_paths, *file_paths]:
+        parent = PurePosixPath(relative).parent.as_posix()
+        if parent != "." and parent not in directory_paths:
+            raise ArchMarshalError(
+                code,
+                "User Skill package v2 omits an ancestor directory record.",
+                details={"path": relative, "missing_parent": parent},
+            )
+    if _package_v2_digest(snapshot) != snapshot["sha256"]:
+        raise ArchMarshalError(
+            code,
+            "User Skill package v2 metadata does not match its content address.",
+        )
+
+
+def _package_v2_digest(snapshot: dict[str, Any]) -> str:
+    payload = {key: value for key, value in snapshot.items() if key != "sha256"}
+    return hashlib.sha256(
+        b"archmarshal-user-skill-package-digest-v2\0" + _canonical_bytes(payload)
+    ).hexdigest()
+
+
+def _package_v2_commit(
+    snapshot: dict[str, Any],
+    *,
+    manifest_digest: str,
+) -> dict[str, Any]:
+    return {
+        "format": PACKAGE_COMMIT_FORMAT_V2,
+        "package_sha256": snapshot["sha256"],
+        "snapshot_format": snapshot["format"],
+        "file_count": snapshot["file_count"],
+        "directory_count": snapshot["directory_count"],
+        "content_bytes": snapshot["content_bytes"],
+        "files": snapshot["files"],
+        "directories": snapshot["directories"],
+        "manifest_digest": manifest_digest,
+        "source_mutation": False,
+    }
+
+
+def _verify_partial_package_v2(
+    destination: Path,
+    snapshot: dict[str, Any],
+    *,
+    require_complete: bool,
+    collision_code: str,
+) -> None:
+    metadata = _scan_package_metadata_v2(
+        destination,
+        purpose="User Skill package publication",
+    )
+    metadata_files = {record["path"]: record for record in metadata["files"]}
+    actual_files = set(metadata_files) - {PACKAGE_COMMIT_NAME}
+    actual_directories = {record["path"]: record for record in metadata["directories"]}
+    expected_files = {record["path"]: record for record in snapshot["files"]}
+    expected_directories = {
+        record["path"]: record for record in snapshot["directories"]
+    }
+    extras = sorted(
+        (actual_files - set(expected_files))
+        | (set(actual_directories) - set(expected_directories)),
+        key=_portable_sort_key,
+    )
+    missing = sorted(
+        (set(expected_files) - actual_files)
+        | (set(expected_directories) - set(actual_directories)),
+        key=_portable_sort_key,
+    )
+    if extras or (require_complete and missing):
+        raise ArchMarshalError(
+            collision_code,
+            "User Skill package contains undeclared or missing filesystem entries.",
+            details={"extras": extras[:100], "missing": missing[:100]},
+        )
+    for relative in sorted(actual_files, key=_portable_sort_key):
+        expected = expected_files[relative]
+        target = destination.joinpath(*PurePosixPath(relative).parts)
+        _verify_file(target, expected, collision_code=collision_code)
+        if os.name != "nt" and (
+            metadata_files[relative]["mode"] != expected["mode"]
+            or metadata_files[relative]["executable"] != expected["executable"]
+        ):
+            raise ArchMarshalError(
+                collision_code,
+                "User Skill package file mode differs from the reviewed snapshot.",
+                details={"path": relative},
+            )
+    for relative, actual in sorted(
+        actual_directories.items(), key=lambda item: _portable_sort_key(item[0])
+    ):
+        expected = expected_directories[relative]
+        target = destination.joinpath(*PurePosixPath(relative).parts)
+        _verify_directory(target, expected, collision_code=collision_code)
+        if os.name != "nt" and actual["mode"] != expected["mode"]:
+            raise ArchMarshalError(
+                collision_code,
+                "User Skill package directory mode differs from the reviewed snapshot.",
+                details={"path": relative},
+            )
+    metadata_after = _scan_package_metadata_v2(
+        destination,
+        purpose="User Skill package publication",
+    )
+    if metadata_after != metadata:
+        raise ArchMarshalError(
+            collision_code,
+            "User Skill package topology or permission modes changed during verification.",
+        )
+
+
+def _verify_directory(path: Path, record: dict[str, Any], *, collision_code: str) -> None:
+    if not path.is_dir() or is_link_or_reparse(path):
+        raise ArchMarshalError(
+            collision_code,
+            "Immutable user store directory is missing, linked, or not a directory.",
+            details={"path": str(path)},
+        )
+    if os.name != "nt" and _portable_mode(path.lstat().st_mode) != record["mode"]:
+        raise ArchMarshalError(
+            collision_code,
+            "Immutable user store directory mode does not match its reviewed record.",
+            details={"path": str(path)},
+        )
+
+
+def _apply_recorded_mode(path: Path, mode: int) -> None:
+    os.chmod(path, mode)
+    if os.name != "nt" and _portable_mode(path.lstat().st_mode) != mode:
+        raise ArchMarshalError(
+            "user_store_package_mode_failed",
+            "User Skill package permission mode could not be reproduced exactly.",
+            details={"path": str(path), "mode": mode},
+        )
 
 
 def _publish_generation_object(root: Path, digest: str, generation: dict[str, Any]) -> None:
@@ -2402,15 +2913,32 @@ def _read_exact_source(path: Path, record: dict[str, Any]) -> bytes:
             "Skill draft file disappeared or became linked during publication.",
             details={"path": record["path"]},
         )
-    with path.open("rb") as handle:
+    path_before = path.lstat()
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    with os.fdopen(descriptor, "rb") as handle:
         before = os.fstat(handle.fileno())
         content = handle.read()
         after = os.fstat(handle.fileno())
+    path_after = path.lstat()
+    expected_mode = record.get("mode")
     if (
-        before.st_size != after.st_size
+        (path_before.st_dev, path_before.st_ino) != (before.st_dev, before.st_ino)
+        or (path_after.st_dev, path_after.st_ino) != (before.st_dev, before.st_ino)
+        or not stat.S_ISREG(before.st_mode)
+        or is_link_or_reparse(path)
+        or before.st_size != after.st_size
         or before.st_mtime_ns != after.st_mtime_ns
         or len(content) != record["bytes"]
         or hashlib.sha256(content).hexdigest() != record["sha256"]
+        or (
+            expected_mode is not None
+            and (
+                _portable_mode(before.st_mode) != expected_mode
+                or _portable_mode(after.st_mode) != expected_mode
+                or _portable_mode(path_after.st_mode) != expected_mode
+            )
+        )
     ):
         raise ArchMarshalError(
             "user_store_source_changed",
@@ -2421,12 +2949,55 @@ def _read_exact_source(path: Path, record: dict[str, Any]) -> bytes:
 
 
 def _verify_file(path: Path, record: dict[str, Any], *, collision_code: str) -> None:
-    if (
-        not path.is_file()
-        or is_link_or_reparse(path)
-        or path.stat().st_size != record.get("bytes")
-        or sha256_file(path) != record.get("sha256")
-    ):
+    expected_mode = record.get("mode")
+    try:
+        if is_link_or_reparse(path):
+            raise OSError("linked or reparse-backed file")
+        path_before = path.lstat()
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        try:
+            handle = os.fdopen(descriptor, "rb")
+        except BaseException:
+            os.close(descriptor)
+            raise
+        with handle:
+            before = os.fstat(handle.fileno())
+            if before.st_size != record.get("bytes"):
+                raise OSError("unexpected file size")
+            digest = hashlib.sha256()
+            byte_count = 0
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+                byte_count += len(chunk)
+                if byte_count > record["bytes"]:
+                    raise OSError("unexpected file size")
+            after = os.fstat(handle.fileno())
+        path_after = path.lstat()
+        descriptor_identity = (before.st_dev, before.st_ino)
+        valid = (
+            stat.S_ISREG(before.st_mode)
+            and (path_before.st_dev, path_before.st_ino) == descriptor_identity
+            and (path_after.st_dev, path_after.st_ino) == descriptor_identity
+            and not is_link_or_reparse(path)
+            and before.st_size == after.st_size == byte_count == record.get("bytes")
+            and before.st_mtime_ns == after.st_mtime_ns
+            and digest.hexdigest() == record.get("sha256")
+            and (
+                expected_mode is None
+                or os.name == "nt"
+                or (
+                    _portable_mode(before.st_mode)
+                    == _portable_mode(after.st_mode)
+                    == _portable_mode(path_after.st_mode)
+                    == expected_mode
+                    and bool(expected_mode & 0o111) is record.get("executable")
+                )
+            )
+        )
+    except (OSError, KeyError, TypeError, ValueError):
+        valid = False
+    if not valid:
         raise ArchMarshalError(
             collision_code,
             "Immutable user store file does not match its reviewed record.",
@@ -2449,7 +3020,7 @@ def _records_digest(records: Any) -> str:
         ):
             return ""
         try:
-            relative = _safe_relative(record.get("path"))
+            relative = _safe_relative_v1(record.get("path"))
         except ArchMarshalError:
             return ""
         if relative in seen:
@@ -2467,12 +3038,77 @@ def _safe_relative(value: Any) -> str:
             "User Skill package contains an unsafe relative path.",
         )
     path = PurePosixPath(value)
+    if (
+        path.is_absolute()
+        or path.as_posix() != value
+        or unicodedata.normalize("NFC", value) != value
+        or any(_unsafe_portable_component(part) for part in path.parts)
+    ):
+        raise ArchMarshalError(
+            "user_store_package_integrity_failed",
+            "User Skill package contains an unsafe relative path.",
+        )
+    return path.as_posix()
+
+
+def _unsafe_portable_component(part: str) -> bool:
+    return (
+        part in {"", ".", ".."}
+        or part.endswith((" ", "."))
+        or any(ord(char) < 32 or char in '<>:"|?*' for char in part)
+        or part.split(".", 1)[0].rstrip(" .").upper() in WINDOWS_RESERVED_NAMES
+    )
+
+
+def _safe_relative_v1(value: Any) -> str:
+    """Preserve the exact path acceptance contract used by committed v1 packages."""
+    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
+        raise ArchMarshalError(
+            "user_store_package_integrity_failed",
+            "User Skill package contains an unsafe relative path.",
+        )
+    path = PurePosixPath(value)
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
         raise ArchMarshalError(
             "user_store_package_integrity_failed",
             "User Skill package contains an unsafe relative path.",
         )
     return path.as_posix()
+
+
+def _portable_path_key(value: str) -> str:
+    relative = _safe_relative(value)
+    return unicodedata.normalize("NFC", relative).casefold()
+
+
+def _portable_sort_key(value: str) -> tuple[str, str, str]:
+    normalized = unicodedata.normalize("NFC", value)
+    return normalized.casefold(), normalized, value
+
+
+def _register_portable_path(value: str, seen: dict[str, str]) -> None:
+    relative = _safe_relative(value)
+    key = _portable_path_key(relative)
+    previous = seen.get(key)
+    if previous is not None:
+        raise ArchMarshalError(
+            "user_store_package_integrity_failed",
+            "User Skill package paths collide under Unicode normalization and case folding.",
+            details={"path": relative, "collides_with": previous},
+        )
+    seen[key] = relative
+
+
+def _portable_mode(value: int) -> int:
+    return stat.S_IMODE(value) & 0o777
+
+
+def _is_portable_mode(value: Any) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 <= value <= 0o777
+    )
 
 
 def _record_digest(record: dict[str, Any]) -> str:

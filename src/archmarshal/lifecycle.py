@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .adoption import plan_adoption
+from .adoption import adopt_workspace, plan_adoption
 from .closeout import closeout_workspace
 from .diagnostics import severity_counts
 from .inventory import collect_inventory
@@ -83,6 +83,25 @@ def start_workspace(
     return payload
 
 
+def initialize_workspace(
+    root: Path | str,
+    *,
+    apply: bool = False,
+    tags: list[str] | None = None,
+    backup_scope: str = "managed",
+    expected_plan: str | None = None,
+) -> dict[str, Any]:
+    """Create only the missing ArchMarshal control plane and project Skill scaffold."""
+    return adopt_workspace(
+        root,
+        apply=apply,
+        tags=tags,
+        backup_scope=backup_scope,
+        expected_plan=expected_plan,
+        project_initialization=True,
+    )
+
+
 def end_workspace(root: Path | str, used_skills: list[str] | None = None) -> dict[str, Any]:
     payload = closeout_workspace(root, used_skills)
     payload["stage"] = "end"
@@ -96,4 +115,4 @@ def end_workspace(root: Path | str, used_skills: list[str] | None = None) -> dic
     return payload
 
 
-__all__ = ["start_workspace", "end_workspace"]
+__all__ = ["end_workspace", "initialize_workspace", "start_workspace"]

@@ -9,7 +9,29 @@ python -m pip install "git+https://github.com/yptang98/ArchMarshal.git@<reviewed
 archmarshal --help
 ```
 
-## 2. Start
+## 2. Initialize or adopt
+
+For a new project, preview and then apply the dedicated initialization plan:
+
+```text
+archmarshal init . --tag research --pretty
+archmarshal init . --tag research --expect-plan <plan_digest> --apply --pretty
+```
+
+Initialization adds the normal `.agent/` control plane and creates only the
+missing project Skill scaffold paths:
+
+```text
+.agents/skills/README.md
+.agents/skills/project/.gitkeep
+.agents/skills/generated/.gitkeep
+```
+
+Existing files at those paths are preserved byte-for-byte. A linked ancestor,
+file/directory collision, stale plan, or path that appears after preview stops
+publication without rewriting the path. Ordinary adoption does not create this
+scaffold implicitly, so use `init` when the project should follow the complete
+layout from its first ArchMarshal-managed run.
 
 For an existing project, preview the management overlay:
 
@@ -47,7 +69,10 @@ during either preview or apply.
 Drifted skills are also excluded from resolver activation until this review is
 completed.
 
-Skills imported from an existing project start quarantined. Preview and then
+Skills imported from an existing project start quarantined. Adoption exposes
+their optional raw `source_declared_status` and validated
+`normalized_source_status` separately from `review_state` and effective
+`activation_state`, and returns HEAD-bound review actions. Preview and then
 apply an exact review decision before use:
 
 ```text
@@ -162,6 +187,14 @@ Rejected, deferred, or unreviewed candidates cannot be promoted.
 Replacing an active record with the same Skill id or preference key also
 requires `--replace-existing-skill` or `--replace-existing-preference` in both
 preview and apply.
+
+New common-Skill copies use package format v2. The content address covers file
+bytes, permission and executable modes, all subdirectory modes, and empty
+subdirectories. The package root remains store-owned. Non-portable Windows
+names, Unicode-normalization/case collisions, links, and unusable owner
+permissions are rejected rather than normalized. Committed v1 packages remain
+readable and are not rewritten automatically; unapplied pre-0.12 promotion
+previews must be regenerated.
 
 ## Rule
 
