@@ -5,6 +5,9 @@
 - Existing project and Skill content is human-owned.
 - Preview and read paths must not create directories or metadata.
 - Existing-project adoption must retain its verified backup gate.
+- Every discovered Skill package must have complete planned backup coverage;
+  source-root declarations and each package file path/bytes/mode/hash are bound
+  into the exact reviewed plan.
 - Apply must replay the complete reviewed plan and exact concurrency tokens.
 - User-owned destinations are create-only; a collision is not a merge request.
 - Partial, legacy, orphan, and corrupt state is retained for review. No doctor
@@ -26,6 +29,7 @@ mtimes in proportion to risk. Check:
 - committed pack/session/package hashes;
 - destination absence and disjointness;
 - backup descriptor-bound verification where required;
+- additive effective Skill roots and `skill_backup_coverage.complete`;
 - activation and review state for every affected Skill.
 
 After apply, confirm that only reviewed create-only or internal immutable paths

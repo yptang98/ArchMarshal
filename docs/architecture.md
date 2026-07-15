@@ -8,14 +8,17 @@ The product surface is the Codex plugin, not a separate operator UI:
 Natural-language request in Codex
   -> manage-agent-workspace Skill
   -> preview/review/apply safety policy
-  -> version-matched Python transaction engine
+  -> content-locked Python transaction engine
   -> project, isolated user store, and append-only evidence
 ```
 
 The CLI is the deterministic engine boundary for the plugin, CI, and
 reproducible debugging. It is not a competing user experience. The installed
 plugin locates the matching engine in the configured full Git marketplace
-snapshot and fails closed when versions differ.
+snapshot and fails closed unless version, engine API, exact file set, and
+source-tree hash match `engine.lock.json`. It never falls back to an ambient
+Python installation. This is a coherence check, not a cryptographic publisher
+signature; users should still pin the marketplace to a reviewed commit.
 
 ## Layers
 

@@ -5,8 +5,8 @@
 <h1 align="center">ArchMarshal</h1>
 
 <p align="center">
-  <strong>A lightweight control plane for agent workspaces.</strong><br>
-  Keep skills modular, project memory lifecycle-managed, and agents fast as your workspace grows.
+  <strong>A safety-first Codex management plugin for projects and Skills.</strong><br>
+  Keep Skills modular, project files human-readable, and Codex sharper as your workspace grows.
 </p>
 
 <p align="center">
@@ -84,14 +84,17 @@ it is not the primary product experience.
 
 ```bash
 codex plugin marketplace add yptang98/ArchMarshal --ref <reviewed-full-commit-sha>
-codex plugin add archmarshal@personal
+codex plugin add archmarshal@archmarshal
 ```
 
 Start a new Codex task after installation so it loads the plugin Skill. The
 plugin locates the matching engine inside the configured full Git marketplace
-snapshot and refuses a version mismatch before mutation. Avoid an unpinned
-`main` marketplace when reproducibility matters, and do not use a sparse
-checkout that omits the repository `src/` directory.
+snapshot and verifies the plugin's version, engine API, exact source-file list,
+and source-tree hash before importing it. It never falls back to an ambient
+same-named Python package. Avoid an unpinned `main` marketplace when
+reproducibility matters, and do not use a sparse checkout that omits the
+repository `src/` directory. Maintainers can diagnose this boundary with
+`python plugins/archmarshal/scripts/invoke_archmarshal.py --bootstrap-status`.
 
 ### 2. Use ArchMarshal directly in Codex
 
@@ -134,6 +137,20 @@ For an existing project, preview adoption first:
 ```bash
 archmarshal adopt . --tag research --tag python --pretty
 ```
+
+If Skills live outside the normal `.agents`, `.codex/skills`,
+`.claude/skills`, `plugins`, or `skills` roots, the plugin supplies each
+project-relative root explicitly and preserves it in the managed workspace:
+
+```bash
+archmarshal adopt . --skill-root custom/agent-tools --pretty
+```
+
+The preview reports effective roots, every discovered package, and complete
+package-to-backup coverage. `--skill-root` is additive; it never disables the
+normal roots. Nonstandard explicit roots are preserved in the managed workspace
+while built-in roots remain convention-based. Every file in every discovered
+package is bound by path, size, mode, and hash in the exact reviewed plan.
 
 Then explicitly create the management overlay:
 
@@ -361,7 +378,8 @@ reproducible evidence when writing a session.
 ## Current Boundaries
 
 - No GUI.
-- No marketplace.
+- No claim of inclusion in Codex's public curated marketplace; installation
+  currently uses ArchMarshal's repository marketplace pinned to a reviewed commit.
 - No automatic third-party skill installation.
 - No automatic project directory rewrite.
 - No deletion of human-owned project or Skill files.

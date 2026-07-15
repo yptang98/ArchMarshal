@@ -13,12 +13,16 @@ into ArchMarshal operations; do not make the user assemble CLI commands.
 Use `../../scripts/invoke_archmarshal.py`, resolved relative to this Skill's
 directory. Run it with the active Python interpreter and pass ArchMarshal
 arguments as separate tokens. The wrapper uses this repository's `src/` when
-available, then the configured ArchMarshal Git marketplace snapshot, and only
-then a matching installed package.
+available, otherwise the uniquely named configured ArchMarshal Git marketplace
+snapshot. It verifies the engine version, API, exact file list, and source-tree
+hash against `engine.lock.json` before import. It never falls back to an ambient
+installed Python package.
 
 If the wrapper reports `archmarshal_engine_unavailable` or
-`archmarshal_engine_version_mismatch`, stop before mutation and explain the
-required reviewed installation. Never install or upgrade dependencies
+any `archmarshal_engine_*mismatch`, `archmarshal_engine_*invalid`, or
+`archmarshal_engine_lock_verification_failed` error, stop before mutation and
+explain the required reviewed, pinned installation. Use `--bootstrap-status`
+for a dependency-free identity check. Never install or upgrade dependencies
 automatically.
 
 ## Route the request
@@ -28,7 +32,9 @@ automatically.
   asks for project-level detail beyond durable state.
 - Manage a new project: preview `init`.
 - Manage an existing project or existing Skills: run `doctor`, then preview
-  `adopt`. Preserve the built-in verified backup requirement.
+  `adopt`. Inspect normal and project-specific Skill locations; supply every
+  nonstandard project-relative location with repeatable `--skill-root`.
+  Preserve the built-in verified backup requirement.
 - Start governed work: use `start` after inspecting whether initialization or
   adoption is still required.
 - Finish work: use `end` with `quick`, `standard`, or `reproducible` evidence
@@ -49,7 +55,8 @@ collision, handling partial state, or making any security claim.
 
 1. Inspect the target and run the relevant preview.
 2. Summarize proposed paths, backup scope, activation state, expected HEAD,
-   conflicts, and whether any existing bytes could change.
+   conflicts, effective Skill roots, discovered package count, complete backup
+   coverage, and whether any existing bytes could change.
 3. Apply only when the user's request authorizes that concrete change and every
    required exact plan/HEAD token is available. Ask when destination, evidence
    depth, replacement, or scope would materially change the result.
@@ -64,6 +71,9 @@ collision, handling partial state, or making any security claim.
 
 - Never delete, move, rename, normalize, or overwrite an existing user-owned
   project or Skill path.
+- Treat `--skill-root` as additive. Never point it outside the project or into
+  `.agent`, and never continue unless `skill_backup_coverage.complete` is true
+  for every discovered package.
 - Treat a collision, linked/reparse component, stale plan, stale HEAD, changed
   source, corrupt state, or uncertain ownership as a stop condition.
 - Preserve interrupted partial output for inspection; never retry by clearing
@@ -78,6 +88,9 @@ collision, handling partial state, or making any security claim.
 - State the current threat model honestly: static links/reparse points and
   cooperative concurrency are covered; hostile same-permission ancestor
   replacement is not handle-relative yet.
+- For closeout, report `workspace_owned`, `evidence_ready`, `recording_ready`,
+  and `execution_validated` separately. Review `session_preview`; never turn a
+  complete evidence capsule into an execution-success claim.
 
 Prefer concise outcome updates in the user's language. Expose raw commands only
 when the user asks for automation or debugging details.

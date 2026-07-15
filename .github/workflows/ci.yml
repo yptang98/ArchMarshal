@@ -71,6 +71,8 @@ jobs:
         run: ruff check src tests scripts plugins
       - name: Verify version contract
         run: python scripts/check_version_contract.py
+      - name: Verify Codex plugin engine lock
+        run: python scripts/build_plugin_engine_lock.py --check
       - name: Build wheel and sdist
         run: python -m build
       - name: Validate package metadata

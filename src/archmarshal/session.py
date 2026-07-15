@@ -15,7 +15,7 @@ import yaml
 from .closeout import closeout_workspace
 from .errors import ArchMarshalError, require_workspace_root
 from .io import load_yaml_safe, read_bytes_safe
-from .ownership import require_owned_workspace
+from .ownership import require_owned_workspace, valid_ownership_marker
 from .safety import (
     create_bytes_exclusive,
     create_text_exclusive,
@@ -76,6 +76,13 @@ def record_closeout(
     git = _git_snapshot(root_path)
     environment = _environment_snapshot(root_path)
     readiness_gaps = _readiness_gaps(level, summary, steps, script_records, commands)
+    workspace_owned = valid_ownership_marker(root_path / ".agent" / "ownership.json")
+    evidence_ready = not readiness_gaps and not script_errors
+    recording_blockers = list(script_errors)
+    if not workspace_owned:
+        recording_blockers.append(
+            "ArchMarshal root-bound ownership is required before closeout evidence can be recorded."
+        )
     closeout = closeout_workspace(root_path, used_skills)
     session = {
         "format": SESSION_FORMAT,
@@ -91,8 +98,10 @@ def record_closeout(
         "git": git,
         "environment": environment if level == "reproducible" else {},
         "reproducibility": {
-            "ready": not readiness_gaps,
-            "evidence_complete": not readiness_gaps,
+            "ready": evidence_ready and workspace_owned,
+            "evidence_complete": evidence_ready,
+            "workspace_owned": workspace_owned,
+            "recording_ready": evidence_ready and workspace_owned and not script_errors,
             "execution_observed": False,
             "gaps": readiness_gaps,
             "execution_validated": False,
@@ -166,11 +175,16 @@ def record_closeout(
         "mode": "propose_only",
         "level": level,
         "session_dir": session_dir.relative_to(root_path).as_posix(),
-        "recording_ready": not readiness_gaps,
-        "reproducibility_ready": not readiness_gaps,
-        "reproduction_evidence_ready": not readiness_gaps,
+        "workspace_owned": workspace_owned,
+        "evidence_ready": evidence_ready,
+        "recording_ready": evidence_ready and workspace_owned and not script_errors,
+        "reproducibility_ready": evidence_ready and workspace_owned and not script_errors,
+        "reproduction_evidence_ready": evidence_ready and workspace_owned,
+        "execution_validated": False,
         "reproducibility_gaps": readiness_gaps,
+        "recording_blockers": recording_blockers,
         "script_errors": script_errors,
+        "session_preview": session,
         "plan_digest": plan_digest,
         "apply_precondition": "--expect-plan <plan_digest>",
         "operations": operations,
@@ -180,7 +194,8 @@ def record_closeout(
             "Environment variables are not captured; known inline-secret patterns are blocked.",
             "User-selected summaries, steps, and script snapshots may still contain sensitive content and must be reviewed.",
             "Generated run scripts are references and must be reviewed before execution.",
-            "Readiness means required evidence is present; commands were not executed or validated.",
+            "Evidence readiness, recording authorization, and execution validation are reported separately.",
+            "Commands were not executed or validated; execution_validated remains false.",
             "Learning ignores this session unless COMMITTED.json and every declared file hash verify.",
         ],
     }
@@ -191,6 +206,12 @@ def record_closeout(
         payload["mode"] = "blocked"
         payload["notes"].append(
             "--apply was blocked because the requested recording level is missing required evidence."
+        )
+        return payload
+    if not workspace_owned and not apply:
+        payload["mode"] = "blocked"
+        payload["notes"].append(
+            "Adopt or initialize the project before recording closeout evidence. No project file was written."
         )
         return payload
     if not apply:

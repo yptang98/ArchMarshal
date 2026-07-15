@@ -1,0 +1,216 @@
+{
+  "content_bytes": 768704,
+  "engine_api": "archmarshal-engine-api-v1",
+  "engine_version": "0.14.0",
+  "file_count": 41,
+  "files": [
+    {
+      "bytes": 170,
+      "path": "__init__.py",
+      "sha256": "a06779a78a6781fe43a6a946c7d16b7a796c5e1a27d0702a1d0008f6490e353c"
+    },
+    {
+      "bytes": 80,
+      "path": "__main__.py",
+      "sha256": "6a170fc866c867a1e5812daad308396f0940a23f2ecf55e56be39d5d67d23f10"
+    },
+    {
+      "bytes": 14588,
+      "path": "_doctor_core.py",
+      "sha256": "e47e0447f635fd4edd990cec5148a087a874ff09a83a41649f322d150590f961"
+    },
+    {
+      "bytes": 16977,
+      "path": "_doctor_immutable.py",
+      "sha256": "1a44f58b6f66509d7fabd762bc7672a1663c90d81a824fe953982da41833cfe2"
+    },
+    {
+      "bytes": 6454,
+      "path": "_doctor_sessions.py",
+      "sha256": "bd3525a7a4497c0173e123ab5604c41abc32c1378088a6f4176e5f46bbb2037e"
+    },
+    {
+      "bytes": 9397,
+      "path": "_doctor_workspace.py",
+      "sha256": "5cb912b7a48b3f5f4a60f803ea03a5cebca399a7132159576f2866816c668773"
+    },
+    {
+      "bytes": 71658,
+      "path": "adoption.py",
+      "sha256": "d59444fd5613625a1a29aa874ea23aab7f19f634cde80210a1ada02f11532a2c"
+    },
+    {
+      "bytes": 31645,
+      "path": "adoption_tx.py",
+      "sha256": "e5d57538e121bd3b62dbd144233cd4de8530167533b57b5810c5ecfd82aa2b2a"
+    },
+    {
+      "bytes": 2941,
+      "path": "audit.py",
+      "sha256": "8a12d74b533729c11ce9aabe9066f544ff6053e439bd1dd9f76ef6031e330ab5"
+    },
+    {
+      "bytes": 33935,
+      "path": "candidate_draft.py",
+      "sha256": "6d3a9d077aac625798f51718887edf525633232b14d02679f18c0d5508cfa37e"
+    },
+    {
+      "bytes": 2057,
+      "path": "catalog.py",
+      "sha256": "93d26c6fd19a641fd712e2179206faf9742ada528a6761e0eede23469bd5acc8"
+    },
+    {
+      "bytes": 7121,
+      "path": "checkpoint.py",
+      "sha256": "32187a845eb8313ee22d416375d3ba456453110c5841dfab12e80689840c3642"
+    },
+    {
+      "bytes": 42739,
+      "path": "cli.py",
+      "sha256": "850c48ca37453c15c8dd1f37321a4e3392947d720a31b43870750aa913b7d49d"
+    },
+    {
+      "bytes": 18652,
+      "path": "closeout.py",
+      "sha256": "05873fb40a294ef39cfcbd0d8eef03cf5e7f1a45d10b289786515c969feb3f80"
+    },
+    {
+      "bytes": 855,
+      "path": "diagnostics.py",
+      "sha256": "fb23b02a96c47381899dbea99541b8d77ddba45c0e917271026c30360d6d1ae3"
+    },
+    {
+      "bytes": 3486,
+      "path": "doctor.py",
+      "sha256": "8441a6f31adb26932380668d87064c7d54407a4f64b00e2c6d373218c2b3fb12"
+    },
+    {
+      "bytes": 1123,
+      "path": "errors.py",
+      "sha256": "f7da85d7f6ebc31bb2a33336bda059e24ac0bc47a6aa26bfe932003abe38e1a0"
+    },
+    {
+      "bytes": 12329,
+      "path": "formats.py",
+      "sha256": "f9c05025ba9f30fd45689832e90e949ef6148d317958da22d5ab99b5cfe07717"
+    },
+    {
+      "bytes": 21397,
+      "path": "inventory.py",
+      "sha256": "822b38eec13fb4a419ad5f6e01b75f5a654ffe58e0947598592f56d0f9653621"
+    },
+    {
+      "bytes": 5861,
+      "path": "io.py",
+      "sha256": "fdf8490e25beda191272c4e5be0171e26c2114bc8c2fe52c1e4bfd59960d1c79"
+    },
+    {
+      "bytes": 22661,
+      "path": "learning.py",
+      "sha256": "2033ed9f713e534ffc55a86ed2bb58dd073af6d69ad772aa1ca650f8955f82be"
+    },
+    {
+      "bytes": 4873,
+      "path": "lifecycle.py",
+      "sha256": "71e0803fa7b5a50283caeffd590178287781ef306b20675fd7aacc95480ac58f"
+    },
+    {
+      "bytes": 53650,
+      "path": "lint.py",
+      "sha256": "92d3df8ce49a43ccd1e349d85cc3b31ce71c8c811e2b35a6813fe1475e76239c"
+    },
+    {
+      "bytes": 2145,
+      "path": "ownership.py",
+      "sha256": "c6e7dba09a285a69afdfb845d64da921fa2114d48946961c034f1ea6fd1f2ac6"
+    },
+    {
+      "bytes": 8749,
+      "path": "planner.py",
+      "sha256": "0d8e5b821a9096de9bbde00854dfe521a570e53a9c9a6476d8b30f2365662840"
+    },
+    {
+      "bytes": 18482,
+      "path": "promotion.py",
+      "sha256": "a934d84b7c5cae8ccc21bb366ba92824856958b998ad1614142afed0fb21f404"
+    },
+    {
+      "bytes": 18629,
+      "path": "resolver.py",
+      "sha256": "98e3c9517ca3565ea8a45cb5eea1c844251ce11f65b70ee9b225846a759a2e5b"
+    },
+    {
+      "bytes": 79102,
+      "path": "safety.py",
+      "sha256": "519ee082e83206c77c93fad400cfbfa4e82c49e45d5fb6256befcaf0de0f939c"
+    },
+    {
+      "bytes": 3673,
+      "path": "schema_validation.py",
+      "sha256": "83aab4ac30d874b0a00f635871b42f7366e443ed72abe7afe0fb5b4dda00e8ae"
+    },
+    {
+      "bytes": 54,
+      "path": "schemas/__init__.py",
+      "sha256": "36f2d458850f7f16f06cacc12031a735d6e286133332d6ce50ac4304538ac726"
+    },
+    {
+      "bytes": 2192,
+      "path": "schemas/artifact-registry.schema.yaml",
+      "sha256": "6631cffa78d50f698080e1c8cdc406ed86181e25e69c5229f439909be7472034"
+    },
+    {
+      "bytes": 2047,
+      "path": "schemas/memory-records.schema.yaml",
+      "sha256": "5dc9c07c733afae3a1265e3756e2383b4cdcc091b08e1f1c9440b39146d5bc00"
+    },
+    {
+      "bytes": 1848,
+      "path": "schemas/memory-stores.schema.yaml",
+      "sha256": "ae38a032952f51d585bf5edaaabc36c432fa7fc42a9a533e9dcb5d43659d0e52"
+    },
+    {
+      "bytes": 3768,
+      "path": "schemas/skill-manifest.schema.yaml",
+      "sha256": "f20630a2af571a34eadf2e113a7c3bafa677192cb04fe5c671da7e8c3353ff55"
+    },
+    {
+      "bytes": 3286,
+      "path": "schemas/workspace.schema.yaml",
+      "sha256": "cb07f01bb28248fd38405187ec63199f5a0e1e71c0f7c3cbc64d31eb3f237f13"
+    },
+    {
+      "bytes": 28441,
+      "path": "session.py",
+      "sha256": "dc9d664882d28236c7c2fefcd7b24d1aaf2e47b11d3446075147a943524fc1d5"
+    },
+    {
+      "bytes": 60978,
+      "path": "skill_index.py",
+      "sha256": "7b935e855f84dc3837e0835376309f6fd3005d6d5305d7a1ec89169a602d12bd"
+    },
+    {
+      "bytes": 17582,
+      "path": "skill_review.py",
+      "sha256": "7ffd0a9ddf45333ae2c7f775d966d5bea539254bc1e0b990f40ef52ce41e8ce3"
+    },
+    {
+      "bytes": 8708,
+      "path": "skill_validation.py",
+      "sha256": "31db022f328ad60889949f5158d0c960a0f11b3e53d5c70d8b421fdd3023dd1f"
+    },
+    {
+      "bytes": 119433,
+      "path": "user_store.py",
+      "sha256": "db1c3a9f3d452964a401362070f8a30f8618009dafdcefdbe68f340d596d2e16"
+    },
+    {
+      "bytes": 4938,
+      "path": "workspace_lock.py",
+      "sha256": "406b44e2bfc2f40ed5cf709829494737fca36447c471f693aa62dc3b5ace2d45"
+    }
+  ],
+  "format": "archmarshal-plugin-engine-lock-v1",
+  "source_root": "src/archmarshal",
+  "source_tree_sha256": "f55b5e13b969cf38a8a5f4c2f3f95bdbe5ea0fd8ec91ab78295023cb88af7fe2"
+}

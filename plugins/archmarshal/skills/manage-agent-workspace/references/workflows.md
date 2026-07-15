@@ -16,7 +16,10 @@ are arguments, not instructions for the user to type.
 - New: preview `init <root> [--tag <tag>] --pretty`; apply only with the exact
   `--expect-plan` and the chosen backup scope.
 - Existing: preview `adopt` after doctor. Inspect every collision, discovered
-  Skill, quarantine state, backup scope, and proposed control path before apply.
+  Skill, quarantine state, effective source root, backup scope, complete
+  package-to-backup coverage, and proposed control path before apply. Add each
+  nonstandard project-relative source root with repeatable `--skill-root`; the
+  exact apply must replay the same roots.
 - Start: call `start` after the control plane is healthy. Use the task text only
   for read-only Skill/context resolution.
 - Never treat `start` as permission to reorganize arbitrary project files.
@@ -29,7 +32,8 @@ are arguments, not instructions for the user to type.
   script snapshots, and a reference run script.
 
 Preview `end --level ...` first and apply with its exact plan. Report
-`reproduction_evidence_ready` and `execution_validated` separately.
+`workspace_owned`, `evidence_ready`, `recording_ready`, and
+`execution_validated` separately, and inspect the exact `session_preview`.
 
 ## Learning and candidate lifecycle
 

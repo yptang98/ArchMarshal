@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.14.0 - 2026-07-15
+
+### Codex plugin identity and distribution
+
+- Position ArchMarshal explicitly as a Codex management plugin and give its
+  repository marketplace the unique `archmarshal` identity. Installation now
+  uses `archmarshal@archmarshal` rather than a generic personal-marketplace
+  selector.
+- Add a generated plugin engine lock that binds the engine version, API, exact
+  source-file set, byte counts, and source-tree hash. The wrapper verifies this
+  lock before importing the engine, exposes a dependency-free bootstrap status,
+  rejects ambiguous marketplaces and tampered same-version source, and never
+  falls back to an ambient Python package.
+
+### Complete Skill discovery and backup coverage
+
+- Add repeatable, additive `--skill-root` support for project-relative
+  nonstandard Skill locations and discover plugin-bundled Skills under
+  `plugins/` by default. Effective source roots are recorded in the managed
+  plan, while nonstandard explicit roots are recorded in the managed workspace
+  so later starts preserve the discovery boundary without moving source content.
+- Upgrade adoption plans to v2. Exact preview/apply now binds effective roots
+  plus each planned backup file's path, bytes, portable mode, and SHA-256.
+  Adoption reports per-package coverage and stops unless every file in every
+  discovered Skill package is included in the verified backup. The published
+  backup manifest must also match the exact reviewed source records before any
+  control-plane target is created.
+- Extend package fingerprints to cover permission modes, so mode-only drift is
+  visible on platforms that preserve those bits. Existing source Skills and
+  project files remain byte-for-byte in place.
+
+### Honest closeout readiness
+
+- Report workspace ownership, evidence completeness, recording authorization,
+  and execution validation as separate closeout facts. Unowned projects no
+  longer appear ready for recording, the exact proposed session is visible for
+  review, and reference commands continue to report
+  `execution_validated: false`.
+
 ## 0.13.0 - 2026-07-15
 
 ### Codex-native plugin product

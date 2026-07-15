@@ -65,6 +65,93 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def fingerprint_regular_file(
+    root: Path,
+    path: Path,
+    *,
+    purpose: str = "File",
+    max_bytes: int | None = None,
+) -> dict[str, Any]:
+    """Fingerprint one in-root regular file through a no-follow descriptor."""
+    directory = root.resolve()
+    if not directory.is_dir() or is_link_or_reparse(root):
+        raise ArchMarshalError(
+            "fingerprint_root_invalid",
+            f"{purpose} root must be a real directory, not a symbolic link.",
+            details={"path": str(root)},
+        )
+    if is_link_or_reparse(path):
+        raise ArchMarshalError(
+            "fingerprint_symlink_unsupported",
+            f"{purpose} must not be a symbolic link or reparse point.",
+            details={"path": str(path)},
+        )
+    resolved = ensure_path_within(directory, path, purpose=purpose)
+    relative = resolved.relative_to(directory).as_posix()
+    try:
+        path_before = resolved.lstat()
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(resolved, flags)
+    except OSError as exc:
+        raise ArchMarshalError(
+            "fingerprint_source_changed",
+            f"{purpose} could not be opened as an unlinked regular file.",
+            details={"path": relative},
+        ) from exc
+    digest = hashlib.sha256()
+    byte_count = 0
+    with os.fdopen(descriptor, "rb") as source:
+        before = os.fstat(source.fileno())
+        if max_bytes is not None and before.st_size > max_bytes:
+            raise ArchMarshalError(
+                "fingerprint_limit_exceeded",
+                f"{purpose} exceeds the remaining {max_bytes}-byte fingerprint limit.",
+                details={"path": relative},
+            )
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            if max_bytes is not None and byte_count + len(chunk) > max_bytes:
+                raise ArchMarshalError(
+                    "fingerprint_limit_exceeded",
+                    f"{purpose} exceeded the remaining fingerprint limit while reading.",
+                    details={"path": relative},
+                )
+            digest.update(chunk)
+            byte_count += len(chunk)
+        after = os.fstat(source.fileno())
+    try:
+        path_after = resolved.lstat()
+    except OSError as exc:
+        raise ArchMarshalError(
+            "fingerprint_source_changed",
+            f"{purpose} disappeared while it was being fingerprinted.",
+            details={"path": relative},
+        ) from exc
+    descriptor_identity = (before.st_dev, before.st_ino)
+    if (
+        (path_before.st_dev, path_before.st_ino) != descriptor_identity
+        or (path_after.st_dev, path_after.st_ino) != descriptor_identity
+        or not stat.S_ISREG(before.st_mode)
+        or is_link_or_reparse(resolved)
+        or before.st_size != after.st_size
+        or before.st_mtime_ns != after.st_mtime_ns
+        or stat.S_IMODE(before.st_mode) != stat.S_IMODE(after.st_mode)
+        or stat.S_IMODE(path_before.st_mode) != stat.S_IMODE(path_after.st_mode)
+        or byte_count != after.st_size
+    ):
+        raise ArchMarshalError(
+            "fingerprint_source_changed",
+            f"{purpose} changed while it was being fingerprinted.",
+            details={"path": relative},
+        )
+    _reject_named_data_streams(resolved, purpose=purpose)
+    return {
+        "path": relative,
+        "bytes": byte_count,
+        "mode": stat.S_IMODE(after.st_mode) & 0o777,
+        "sha256": digest.hexdigest(),
+    }
+
+
 def is_link_or_reparse(path: Path) -> bool:
     """Detect POSIX links and Windows reparse points without following them."""
     try:
@@ -151,7 +238,7 @@ def fingerprint_directory(
 ) -> dict[str, Any]:
     """Return a deterministic content fingerprint without following links.
 
-    Relative paths, file sizes, and file bytes are covered by the digest.  The
+    Relative paths, file sizes, permission bits, and file bytes are covered by the digest.  The
     scan is bounded so a malformed or unexpectedly huge skill cannot make a
     routine start operation consume unbounded resources.
     """
@@ -227,6 +314,8 @@ def fingerprint_directory(
             or is_link_or_reparse(resolved)
             or before.st_size != after.st_size
             or before.st_mtime_ns != after.st_mtime_ns
+            or stat.S_IMODE(before.st_mode) != stat.S_IMODE(after.st_mode)
+            or stat.S_IMODE(path_before.st_mode) != stat.S_IMODE(path_after.st_mode)
             or byte_count != after.st_size
         ):
             raise ArchMarshalError(
@@ -237,7 +326,12 @@ def fingerprint_directory(
         _reject_named_data_streams(resolved, purpose=purpose)
         total_bytes += byte_count
         records.append(
-            {"path": relative, "bytes": byte_count, "sha256": digest_builder.hexdigest()}
+            {
+                "path": relative,
+                "bytes": byte_count,
+                "mode": stat.S_IMODE(after.st_mode) & 0o777,
+                "sha256": digest_builder.hexdigest(),
+            }
         )
 
     aggregate = hashlib.sha256()
@@ -461,9 +555,7 @@ def create_backup(
                 "Backup source resolves outside the workspace root.",
                 details={"path": str(item), "resolved_path": str(resolved)},
             ) from exc
-        if any(part in EXCLUDED_BACKUP_PARTS for part in Path(relative).parts):
-            continue
-        if relative.startswith(".agent/backups/"):
+        if backup_relative_is_excluded(relative):
             continue
         if relative not in selected:
             if len(selected) >= MAX_BACKUP_FILES:
@@ -1609,6 +1701,12 @@ def files_for_full_backup(root: Path) -> list[Path]:
     return _scan_full_backup(root)[0]
 
 
+def backup_relative_is_excluded(relative: Path | str) -> bool:
+    """Return whether the backup policy intentionally omits a relative path."""
+    path = Path(*PurePosixPath(str(relative).replace("\\", "/")).parts)
+    return _excluded_backup_relative(path)
+
+
 def _scan_full_backup(root: Path) -> tuple[list[Path], list[dict[str, Any]], int]:
     """Scan an exact portable full-workspace snapshot without following links."""
     root = root.resolve()
@@ -1785,12 +1883,14 @@ def _walk_files_no_links(
 
 __all__ = [
     "create_backup",
+    "backup_relative_is_excluded",
     "create_bytes_exclusive",
     "create_text_exclusive",
     "ensure_path_within",
     "ensure_managed_path",
     "ensure_unlinked_path",
     "fingerprint_directory",
+    "fingerprint_regular_file",
     "files_below_no_links",
     "files_for_full_backup",
     "fsync_directory",

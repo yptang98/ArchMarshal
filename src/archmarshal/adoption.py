@@ -4,8 +4,9 @@ import hashlib
 import json
 import re
 import subprocess
+import unicodedata
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 import yaml
@@ -15,15 +16,20 @@ from .errors import ArchMarshalError, require_workspace_root
 from .io import load_yaml_safe
 from .ownership import ownership_skill_index_mode, valid_ownership_marker, workspace_id
 from .safety import (
+    MAX_BACKUP_CONTENT_BYTES,
+    MAX_BACKUP_FILES,
     MAX_DIRECTORY_SCAN_FILES,
+    backup_relative_is_excluded,
     create_backup,
     ensure_managed_path,
     ensure_path_within,
     files_below_no_links,
     files_for_full_backup,
     fingerprint_directory,
+    fingerprint_regular_file,
     is_link_or_reparse,
     sha256_file,
+    verify_backup,
 )
 from .skill_index import (
     disabled_skill_index_plan,
@@ -37,8 +43,24 @@ SKILL_ROOT_CANDIDATES = (
     ".agents",
     ".codex/skills",
     ".claude/skills",
+    "plugins",
     "skills",
 )
+SKILL_PATH_FIELDS = (
+    "global_skills",
+    "functional_skills",
+    "common_project_skills",
+    "project_skills",
+    "generated_skills",
+)
+WINDOWS_RESERVED_SKILL_ROOT_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *{f"COM{index}" for index in range(1, 10)},
+    *{f"LPT{index}" for index in range(1, 10)},
+}
 RESERVED_FILES = (
     "AGENTS.md",
     ".agent/ownership.json",
@@ -87,6 +109,7 @@ def plan_adoption(
     tags: list[str] | None = None,
     backup_scope: str = "managed",
     project_initialization: bool = False,
+    skill_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     root_path = require_workspace_root(root)
     built = _build_adoption(
@@ -94,6 +117,7 @@ def plan_adoption(
         tags or [],
         backup_scope,
         project_initialization=project_initialization,
+        skill_roots=skill_roots,
     )
     return _public_plan(built, applied=False)
 
@@ -106,6 +130,7 @@ def adopt_workspace(
     backup_scope: str = "managed",
     expected_plan: str | None = None,
     project_initialization: bool = False,
+    skill_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     root_path = require_workspace_root(root)
     if apply:
@@ -118,6 +143,7 @@ def adopt_workspace(
                 backup_scope=backup_scope,
                 expected_plan=expected_plan,
                 project_initialization=project_initialization,
+                skill_roots=skill_roots,
                 held=held,
             )
     return _adopt_workspace_locked(
@@ -127,6 +153,7 @@ def adopt_workspace(
         backup_scope=backup_scope,
         expected_plan=expected_plan,
         project_initialization=project_initialization,
+        skill_roots=skill_roots,
         held=None,
     )
 
@@ -139,6 +166,7 @@ def _adopt_workspace_locked(
     backup_scope: str,
     expected_plan: str | None,
     project_initialization: bool,
+    skill_roots: list[str] | None,
     held: WorkspaceMutationLock | None,
 ) -> dict[str, Any]:
     built = _build_adoption(
@@ -146,6 +174,7 @@ def _adopt_workspace_locked(
         tags or [],
         backup_scope,
         project_initialization=project_initialization,
+        skill_roots=skill_roots,
     )
     if not apply:
         return _public_plan(built, applied=False)
@@ -210,6 +239,21 @@ def _adopt_workspace_locked(
         ),
         scope=f"{built['backup_scope']}_workspace",
     )
+    backup_verification = verify_backup(root_path / backup["path"])
+    actual_backup_records = sorted(
+        backup_verification["manifest"]["files"],
+        key=lambda item: str(item["path"]).casefold(),
+    )
+    if actual_backup_records != built["backup_records"]:
+        raise ArchMarshalError(
+            "backup_plan_mismatch",
+            "The verified backup does not match the exact reviewed adoption sources.",
+            details={
+                "backup": backup["path"],
+                "expected_file_count": len(built["backup_records"]),
+                "actual_file_count": len(actual_backup_records),
+            },
+        )
     if held is not None:
         held.verify()
 
@@ -218,7 +262,7 @@ def _adopt_workspace_locked(
         if built["skill_index_plan"].get("disabled")
         else plan_skill_index(
             root_path,
-            _discover_skills(root_path),
+            _discover_skills(root_path, built["additional_skill_roots"])[0],
             created_at=(built["skill_index_plan"].get("generation") or {}).get("created_at"),
         )
     )
@@ -276,6 +320,7 @@ def _build_adoption(
     backup_scope: str,
     *,
     project_initialization: bool = False,
+    skill_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     if backup_scope not in {"managed", "full"}:
         raise ValueError("backup_scope must be 'managed' or 'full'")
@@ -294,7 +339,9 @@ def _build_adoption(
     reserved_conflicts = [
         relative for relative in RESERVED_FILES[1:] if (root / relative).exists() and not configured
     ]
-    skills = _discover_skills(root)
+    skills, effective_skill_roots, additional_skill_roots = _discover_skills(
+        root, skill_roots
+    )
     manage_index = not configured or overlay_enabled
     skill_index_plan = (
         plan_skill_index(
@@ -337,7 +384,12 @@ def _build_adoption(
     writes: dict[Path, str] = {}
 
     if not workspace_file.exists():
-        writes[workspace_file] = _workspace_yaml(root, normalized_tags, now)
+        writes[workspace_file] = _workspace_yaml(
+            root,
+            normalized_tags,
+            now,
+            source_skill_roots=additional_skill_roots,
+        )
     ownership = root / ".agent" / "ownership.json"
     ownership_index_mode = ownership_skill_index_mode(ownership)
     index = root / ".agent" / "INDEX.md"
@@ -404,6 +456,14 @@ def _build_adoption(
         backup_files = files_for_full_backup(root)
     else:
         backup_files = _managed_backup_files(root, skills)
+    backup_records = _backup_source_records(root, backup_files)
+    backup_coverage = _skill_backup_coverage(root, skills, backup_records)
+    if not backup_coverage["complete"]:
+        raise ArchMarshalError(
+            "skill_backup_coverage_incomplete",
+            "The adoption backup plan does not completely cover every discovered Skill package.",
+            details={"packages": backup_coverage["packages"]},
+        )
 
     for target in writes:
         ensure_managed_path(root, target, purpose="Adoption target")
@@ -418,10 +478,14 @@ def _build_adoption(
         "backup_scope": backup_scope,
         "tags": normalized_tags,
         "skills": skills,
+        "effective_skill_roots": effective_skill_roots,
+        "additional_skill_roots": additional_skill_roots,
+        "backup_coverage": backup_coverage,
         "review_required": review_required,
         "skill_index_plan": skill_index_plan,
         "writes": writes,
         "backup_files": backup_files,
+        "backup_records": backup_records,
         "conflicts": reserved_conflicts,
         "blocked": blocked,
         "transaction_status": transaction_status,
@@ -483,7 +547,7 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
                 },
             ]
         )
-    backup_records = _backup_source_records(root, built["backup_files"])
+    backup_records = built["backup_records"]
     plan_digest = _adoption_plan_digest(built)
     public_skills = [
         _public_discovered_skill(built, skill, tracked_changes, index_plan)
@@ -542,9 +606,16 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
         "transaction": built["transaction_status"],
         "skill_index": index_plan,
         "backup_scope": built["backup_scope"],
+        "skill_discovery": {
+            "effective_roots": built["effective_skill_roots"],
+            "additional_roots": built["additional_skill_roots"],
+            "root_count": len(built["effective_skill_roots"]),
+            "discovered_package_count": len(public_skills),
+        },
         "backup_file_count": len(backup_records),
         "backup_file_preview": backup_records[:100],
         "backup_file_preview_truncated": len(backup_records) > 100,
+        "skill_backup_coverage": built["backup_coverage"],
         "project_tags": built["tags"],
         "discovered_skills": public_skills,
         "skill_reviews_required": skill_reviews_required,
@@ -565,7 +636,7 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
             "Existing user-owned files are never overwritten, even with --apply.",
             "Only ArchMarshal's internal HEAD pointer may be atomically replaced after backup and CAS validation.",
             "Existing skills stay in place; overlays provide routing metadata without changing SKILL.md.",
-            "A verified backup is created before the first managed file is added.",
+            "Every discovered Skill package is included in the exact verified backup before the first managed file is added.",
             (
                 "Configured overlay projects are incrementally scanned for newly added source skills."
                 if built["configured"] and built["overlay_enabled"]
@@ -694,6 +765,8 @@ def _public_next_actions(
         command_args = ["archmarshal", command_name, str(built["root"])]
         for tag in built["tags"]:
             command_args.extend(["--tag", tag])
+        for skill_root in built["additional_skill_roots"]:
+            command_args.extend(["--skill-root", skill_root])
         if built["backup_scope"] != "managed":
             command_args.extend(["--backup-scope", built["backup_scope"]])
         command_args.extend(["--expect-plan", plan_digest, "--apply", "--pretty"])
@@ -767,8 +840,10 @@ def _public_next_actions(
 def _adoption_plan_digest(built: dict[str, Any]) -> str:
     root: Path = built["root"]
     intent = {
-        "format": "archmarshal-adoption-plan-v1",
+        "format": "archmarshal-adoption-plan-v2",
         "backup_scope": built["backup_scope"],
+        "effective_skill_roots": built["effective_skill_roots"],
+        "additional_skill_roots": built["additional_skill_roots"],
         "configured": built["configured"],
         "overlay_enabled": built["overlay_enabled"],
         "project_initialization": built["project_initialization"],
@@ -783,7 +858,8 @@ def _adoption_plan_digest(built: dict[str, Any]) -> str:
                 built["writes"].items(), key=lambda item: item[0].as_posix()
             )
         ],
-        "backup_sources": _backup_source_records(root, built["backup_files"]),
+        "backup_sources": built["backup_records"],
+        "skill_backup_coverage": built["backup_coverage"],
         "skill_index": _logical_skill_plan(built["skill_index_plan"]),
     }
     canonical = json.dumps(
@@ -797,16 +873,33 @@ def _adoption_plan_digest(built: dict[str, Any]) -> str:
 
 def _backup_source_records(root: Path, files: Iterable[Path]) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
+    total_bytes = 0
     for path in files:
-        resolved = path.resolve()
-        if not resolved.is_file():
+        if not path.exists() and not is_link_or_reparse(path):
             continue
-        records.append(
-            {
-                "path": resolved.relative_to(root).as_posix(),
-                "bytes": resolved.stat().st_size,
-            }
+        try:
+            relative = path.resolve().relative_to(root).as_posix()
+        except ValueError as exc:
+            raise ArchMarshalError(
+                "backup_source_escape",
+                "An adoption backup source resolves outside the project root.",
+                details={"path": str(path)},
+            ) from exc
+        if backup_relative_is_excluded(relative):
+            continue
+        if len(records) >= MAX_BACKUP_FILES:
+            raise ArchMarshalError(
+                "backup_limit_exceeded",
+                f"Adoption backup planning exceeds the {MAX_BACKUP_FILES}-file limit.",
+            )
+        record = fingerprint_regular_file(
+            root,
+            path,
+            purpose="Adoption backup source",
+            max_bytes=MAX_BACKUP_CONTENT_BYTES - total_bytes,
         )
+        total_bytes += int(record["bytes"])
+        records.append(record)
     return sorted(records, key=lambda item: item["path"].casefold())
 
 
@@ -850,15 +943,19 @@ def _skill_evidence_timestamp(root: Path, skills: list[dict[str, Any]]) -> str:
     )
 
 
-def _discover_skills(root: Path) -> list[dict[str, Any]]:
+def _discover_skills(
+    root: Path,
+    additional_roots: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    effective_roots, normalized_additional = _effective_skill_roots(
+        root, additional_roots or []
+    )
     skill_docs: set[Path] = set()
     root_skill = root / "SKILL.md"
     if root_skill.is_file():
         skill_docs.add(root_skill)
-    for relative in SKILL_ROOT_CANDIDATES:
-        candidate = root / relative
-        if not candidate.exists():
-            continue
+    for relative in effective_roots:
+        candidate = root if relative == "." else root / PurePosixPath(relative)
         for path in files_below_no_links(candidate, purpose="Skill discovery"):
             if path.name != "SKILL.md":
                 continue
@@ -993,6 +1090,7 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
         skills.append(
             {
                 "source": source,
+                "package_files": package["files"],
                 "source_declared_status": source_declared_status,
                 "source_manifest": (
                     source_manifest.relative_to(root).as_posix()
@@ -1004,7 +1102,192 @@ def _discover_skills(root: Path) -> list[dict[str, Any]]:
                 "source_drift": source_drift,
             }
         )
-    return skills
+    return skills, effective_roots, normalized_additional
+
+
+def _effective_skill_roots(root: Path, additional_roots: list[str]) -> tuple[list[str], list[str]]:
+    candidates: list[tuple[str, bool, str]] = [
+        (value, False, "default") for value in SKILL_ROOT_CANDIDATES
+    ]
+    declared_typed, declared_source = _declared_skill_roots(root)
+    candidates.extend((value, False, "workspace") for value in declared_typed)
+    candidates.extend((value, True, "workspace_source") for value in declared_source)
+    candidates.extend((value, True, "explicit") for value in additional_roots)
+
+    effective: dict[str, str] = {}
+    additional: dict[str, str] = {}
+    for value, required, source in candidates:
+        relative = _normalize_skill_root(root, value, required=required, source=source)
+        if relative is None:
+            continue
+        key = _portable_skill_root_key(relative)
+        previous = effective.get(key)
+        if previous is not None and previous != relative:
+            raise ArchMarshalError(
+                "skill_root_portable_collision",
+                "Skill roots collide under portable case/Unicode path rules.",
+                details={"first": previous, "second": relative},
+            )
+        effective[key] = relative
+        if source == "explicit" and previous is None:
+            additional[key] = relative
+    effective_values = _collapse_skill_roots(effective.values())
+    effective_keys = {_portable_skill_root_key(value) for value in effective_values}
+    additional_values = [
+        value
+        for value in _collapse_skill_roots(additional.values())
+        if _portable_skill_root_key(value) in effective_keys
+    ]
+    return effective_values, additional_values
+
+
+def _collapse_skill_roots(values: Iterable[str]) -> list[str]:
+    ordered = sorted(
+        set(values),
+        key=lambda item: (
+            len(PurePosixPath(item).parts),
+            _portable_skill_root_key(item),
+            item,
+        ),
+    )
+    kept: list[str] = []
+    for value in ordered:
+        parts = PurePosixPath(value).parts if value != "." else ()
+        portable_parts = tuple(_portable_skill_root_key(part) for part in parts)
+        redundant = False
+        for parent in kept:
+            parent_parts = PurePosixPath(parent).parts if parent != "." else ()
+            portable_parent = tuple(_portable_skill_root_key(part) for part in parent_parts)
+            if portable_parts[: len(portable_parent)] != portable_parent:
+                continue
+            if parts[: len(parent_parts)] != parent_parts:
+                raise ArchMarshalError(
+                    "skill_root_portable_collision",
+                    "Skill roots overlap only under portable case/Unicode path rules.",
+                    details={"first": parent, "second": value},
+                )
+            redundant = True
+            break
+        if not redundant:
+            kept.append(value)
+    return sorted(kept, key=lambda item: (_portable_skill_root_key(item), item))
+
+
+def _declared_skill_roots(root: Path) -> tuple[list[str], list[str]]:
+    workspace_file = root / ".agent" / "workspace.yaml"
+    if not workspace_file.exists():
+        return [], []
+    owned = valid_ownership_marker(root / ".agent" / "ownership.json")
+    loaded = load_yaml_safe(workspace_file)
+    if loaded.error or not isinstance(loaded.data, dict):
+        if owned:
+            raise ArchMarshalError(
+                "skill_root_config_invalid",
+                "The owned workspace configuration cannot be read safely for Skill discovery.",
+                details={"path": ".agent/workspace.yaml", "error": loaded.error},
+            )
+        return [], []
+    paths = loaded.data.get("paths")
+    if not isinstance(paths, dict):
+        if owned:
+            raise ArchMarshalError(
+                "skill_root_config_invalid",
+                "The owned workspace configuration has no valid paths mapping.",
+                details={"path": ".agent/workspace.yaml"},
+            )
+        return [], []
+
+    def values(field: str, *, strict: bool = False) -> list[str]:
+        value = paths.get(field)
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, list):
+            if all(isinstance(item, str) for item in value):
+                return value
+        if strict:
+            raise ArchMarshalError(
+                "skill_root_config_invalid",
+                "Owned source_skill_roots must contain only project-relative strings.",
+                details={"path": ".agent/workspace.yaml", "field": field},
+            )
+        return []
+
+    typed = [item for field in SKILL_PATH_FIELDS for item in values(field)]
+    return typed, values("source_skill_roots", strict=owned)
+
+
+def _normalize_skill_root(
+    root: Path,
+    value: str,
+    *,
+    required: bool,
+    source: str,
+) -> str | None:
+    if not isinstance(value, str):
+        raise ArchMarshalError(
+            "skill_root_invalid", "Skill roots must be project-relative strings."
+        )
+    normalized = value.strip().replace("\\", "/")
+    if not normalized or "\x00" in normalized:
+        raise ArchMarshalError("skill_root_invalid", "Skill roots must not be empty.")
+    path = PurePosixPath(normalized)
+    if path.is_absolute() or re.match(r"^[A-Za-z]:/", normalized) or ".." in path.parts:
+        raise ArchMarshalError(
+            "skill_root_outside_project",
+            "Skill roots must stay inside the project root.",
+            details={"root": value, "source": source},
+        )
+    parts = tuple(part for part in path.parts if part not in {"", "."})
+    relative = PurePosixPath(*parts).as_posix() if parts else "."
+    if unicodedata.normalize("NFC", relative) != relative or any(
+        _unsafe_skill_root_component(part) for part in parts
+    ):
+        raise ArchMarshalError(
+            "skill_root_not_portable",
+            "Skill roots must use portable Unicode-normalized path components.",
+            details={"root": value, "source": source},
+        )
+    if parts and parts[0].casefold() == ".agent":
+        if source == "workspace":
+            return None
+        raise ArchMarshalError(
+            "skill_root_managed_state",
+            "Source Skill roots must not point into ArchMarshal's .agent state.",
+            details={"root": relative, "source": source},
+        )
+    candidate = root if relative == "." else root / path
+    if not candidate.exists():
+        if required:
+            raise ArchMarshalError(
+                "skill_root_missing",
+                "An explicit or source Skill root does not exist.",
+                details={"root": relative, "source": source},
+            )
+        return None
+    ensure_managed_path(root, candidate, purpose="Skill discovery root")
+    if not candidate.is_dir() or is_link_or_reparse(candidate):
+        raise ArchMarshalError(
+            "skill_root_invalid",
+            "Skill roots must be real, unlinked directories.",
+            details={"root": relative, "source": source},
+        )
+    return relative
+
+
+def _unsafe_skill_root_component(part: str) -> bool:
+    return (
+        part in {"", ".", ".."}
+        or part.endswith((" ", "."))
+        or ":" in part
+        or part.split(".", 1)[0].rstrip(" .").upper()
+        in WINDOWS_RESERVED_SKILL_ROOT_NAMES
+    )
+
+
+def _portable_skill_root_key(value: str) -> str:
+    return unicodedata.normalize("NFC", value).casefold()
 
 
 def _classify_skill(source: str) -> tuple[str, str, str]:
@@ -1138,6 +1421,8 @@ def _workspace_yaml(
     root: Path,
     tags: list[str],
     now: datetime,
+    *,
+    source_skill_roots: list[str],
 ) -> str:
     created_on = _git_creation_date(root) or now.date().isoformat()
     code_roots = [name for name in ("src", "app", "packages", "lib") if (root / name).exists()]
@@ -1177,6 +1462,7 @@ def _workspace_yaml(
             "project_root": ".",
             "code_roots": code_roots,
             "agent_root": ".agent",
+            "source_skill_roots": source_skill_roots,
             "global_skills": [".agent/skill-overlays/global"],
             "functional_skills": [".agent/skill-overlays/functional"],
             "common_project_skills": [".agent/skill-overlays/common-project"],
@@ -1396,6 +1682,77 @@ def _managed_backup_files(root: Path, skills: list[dict[str, Any]]) -> list[Path
                 if path.is_file()
             )
     return sorted(files)
+
+
+def _skill_backup_coverage(
+    root: Path,
+    skills: list[dict[str, Any]],
+    backup_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    by_path = {
+        str(record["path"]): record
+        for record in backup_records
+        if isinstance(record, dict) and isinstance(record.get("path"), str)
+    }
+    packages: list[dict[str, Any]] = []
+    all_complete = True
+    for skill in skills:
+        source = str(skill["source"])
+        package_files = skill.get("package_files")
+        if not isinstance(package_files, list):
+            package_files = []
+        expected_paths = []
+        for record in package_files:
+            if not isinstance(record, dict) or not isinstance(record.get("path"), str):
+                continue
+            expected_paths.append(
+                record["path"] if source == "." else f"{source}/{record['path']}"
+            )
+        covered = [by_path[path] for path in expected_paths if path in by_path]
+        missing = sorted(set(expected_paths) - set(by_path), key=str.casefold)
+        manifest_source = skill.get("manifest", {}).get("source", {})
+        expected_count = (
+            manifest_source.get("package_file_count")
+            if isinstance(manifest_source, dict)
+            else None
+        )
+        complete = (
+            isinstance(expected_count, int)
+            and expected_count == len(expected_paths)
+            and not missing
+            and len(covered) == len(expected_paths)
+        )
+        all_complete = all_complete and complete
+        coverage_bytes = json.dumps(
+            covered,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        packages.append(
+            {
+                "source": source,
+                "package_sha256": manifest_source.get("package_sha256")
+                if isinstance(manifest_source, dict)
+                else None,
+                "expected_file_count": expected_count,
+                "planned_backup_file_count": len(covered),
+                "backup_records_sha256": hashlib.sha256(coverage_bytes).hexdigest(),
+                "missing": missing,
+                "complete": complete,
+                "boundary": "workspace-root-entrypoint-only"
+                if source == "."
+                else "skill-directory",
+            }
+        )
+    return {
+        "format": "archmarshal-skill-backup-coverage-v1",
+        "complete": all_complete,
+        "discovered_package_count": len(skills),
+        "covered_package_count": sum(item["complete"] for item in packages),
+        "packages": sorted(packages, key=lambda item: str(item["source"]).casefold()),
+        "source_mutation": False,
+    }
 
 
 def _is_archmarshal_workspace(path: Path) -> bool:

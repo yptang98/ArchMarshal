@@ -619,6 +619,7 @@ def _main_impl(argv: list[str] | None = None) -> int:
             tags=args.tag,
             backup_scope=args.backup_scope,
             expected_plan=args.expect_plan,
+            skill_roots=args.skill_root,
         )
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
@@ -631,6 +632,7 @@ def _main_impl(argv: list[str] | None = None) -> int:
             tags=args.tag,
             backup_scope=args.backup_scope,
             expected_plan=args.expect_plan,
+            skill_roots=args.skill_root,
         )
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
@@ -645,6 +647,7 @@ def _main_impl(argv: list[str] | None = None) -> int:
                 tags=args.tag,
                 backup_scope=args.backup_scope,
                 expected_plan=args.expect_plan,
+                skill_roots=args.skill_root,
             )
             payload = start_workspace(
                 root,
@@ -652,6 +655,7 @@ def _main_impl(argv: list[str] | None = None) -> int:
                 user_store=args.user_store,
                 tags=args.tag,
                 backup_scope=args.backup_scope,
+                skill_roots=args.skill_root,
             )
             payload["adoption"] = adoption
             _mark_start_apply(payload, adoption)
@@ -667,6 +671,7 @@ def _main_impl(argv: list[str] | None = None) -> int:
                     user_store=args.user_store,
                     tags=args.tag,
                     backup_scope=args.backup_scope,
+                    skill_roots=args.skill_root,
                 ),
                 args.pretty,
             )
@@ -775,6 +780,7 @@ def _start_main_impl(argv: list[str] | None = None) -> int:
         user_store=args.user_store,
         tags=args.tag,
         backup_scope=args.backup_scope,
+        skill_roots=args.skill_root,
     )
     if args.apply:
         payload["adoption"] = adopt_workspace(
@@ -783,6 +789,7 @@ def _start_main_impl(argv: list[str] | None = None) -> int:
             tags=args.tag,
             backup_scope=args.backup_scope,
             expected_plan=args.expect_plan,
+            skill_roots=args.skill_root,
         )
         payload = start_workspace(
             root,
@@ -790,6 +797,7 @@ def _start_main_impl(argv: list[str] | None = None) -> int:
             user_store=args.user_store,
             tags=args.tag,
             backup_scope=args.backup_scope,
+            skill_roots=args.skill_root,
         ) | {"adoption": payload["adoption"]}
         _mark_start_apply(payload, payload["adoption"])
         if payload["adoption"]["mode"] in {
@@ -859,6 +867,15 @@ def _add_adoption_arguments(parser: argparse.ArgumentParser) -> None:
         help="Create only missing management overlay files after a verified backup.",
     )
     parser.add_argument("--tag", action="append", default=[], help="Project tag. Repeat as needed.")
+    parser.add_argument(
+        "--skill-root",
+        action="append",
+        default=[],
+        help=(
+            "Additional project-relative source Skill root. Repeat as needed; "
+            "defaults and workspace-declared roots remain in scope."
+        ),
+    )
     parser.add_argument(
         "--expect-plan",
         help="Exact plan digest from a reviewed preview; required before any adoption write.",

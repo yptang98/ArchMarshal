@@ -34,6 +34,7 @@ def test_codex_plugin_manifest_marketplace_and_skill_are_discoverable() -> None:
     assert manifest["skills"] == "./skills/"
     assert manifest["interface"]["displayName"] == "ArchMarshal"
     assert manifest["interface"]["defaultPrompt"]
+    assert marketplace["name"] == "archmarshal"
     assert marketplace["plugins"] == [
         {
             "name": "archmarshal",
@@ -97,7 +98,7 @@ def test_codex_plugin_wrapper_finds_engine_in_configured_marketplace(
     (source / "archmarshal").mkdir(parents=True)
     (source / "archmarshal/__init__.py").write_text("", encoding="utf-8")
     listing = json.dumps(
-        {"marketplaces": [{"name": "personal", "root": str(marketplace)}]}
+        {"marketplaces": [{"name": "archmarshal", "root": str(marketplace)}]}
     )
     monkeypatch.setattr(wrapper.shutil, "which", lambda command: command)
     monkeypatch.setattr(

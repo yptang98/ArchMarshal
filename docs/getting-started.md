@@ -9,13 +9,14 @@ maintainers and CI.
 
 ```bash
 codex plugin marketplace add yptang98/ArchMarshal --ref <reviewed-full-commit-sha>
-codex plugin add archmarshal@personal
+codex plugin add archmarshal@archmarshal
 ```
 
 Start a new Codex task, then ask: `Use ArchMarshal to safely organize this
 project and its Skills; inspect and preview first.` The plugin uses the matching
-engine in the configured full marketplace snapshot and fails closed on a
-version mismatch.
+engine in the configured full marketplace snapshot and fails closed unless its
+version, API, exact file list, and source-tree hash match the installed plugin.
+It does not use an unrelated ambient Python package with the same name.
 
 ## 2. Initialize or adopt
 
@@ -46,6 +47,19 @@ For an existing project, preview the management overlay:
 ```text
 archmarshal adopt . --tag research --pretty
 ```
+
+For a nonstandard Skill location, add one or more project-relative roots:
+
+```text
+archmarshal adopt . --skill-root custom/agent-tools --pretty
+```
+
+This option adds to the normal Skill roots. Review `skill_discovery` and require
+`skill_backup_coverage.complete: true`; the exact apply must replay the same
+roots. ArchMarshal stores nonstandard explicit roots in the new workspace so
+later starts continue to see nonstandard explicit roots without relocating the
+source Skills; built-in roots remain convention-based and need no persisted
+declaration.
 
 After reviewing the file list and conflicts, apply it:
 
@@ -148,9 +162,11 @@ archmarshal-end . --level reproducible --summary "Benchmark reproduced" \
 The commands preview unless both `--apply` and the exact `--expect-plan` are
 present. Applied records go into a new date-organized history directory and are
 trusted by learning only after a final `COMMITTED.json` verifies every declared
-file. Reproducible mode snapshots key scripts and does not claim readiness while
-required evidence is missing; even a ready record is reference-only until its
-commands are actually validated by a future execution feature.
+file. Preview reports `workspace_owned`, `evidence_ready`, `recording_ready`,
+and `execution_validated` separately and exposes the exact `session_preview`.
+Reproducible mode snapshots key scripts and does not claim readiness while
+required evidence is missing; even a recordable evidence capsule remains
+reference-only because `execution_validated` is false.
 
 Existing v1 closeouts have no commit marker. Learning reports them through
 `legacy_unverified_session_count` but does not trust them automatically; an
