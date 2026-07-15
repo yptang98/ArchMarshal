@@ -348,6 +348,35 @@ def test_candidate_to_user_store_to_new_project_is_reversible_and_source_safe(
     init = plan_user_store_initialization(store)
     apply_user_store_initialization(store, init, expected_plan=init["plan_digest"])
 
+    draft = _common_draft(tmp_path / "drafts")
+    with pytest.raises(ArchMarshalError) as invalid_decision:
+        review_learning_candidate(
+            source, pack, preference_candidate, store, decision="invalid"
+        )
+    assert invalid_decision.value.code == "learning_decision_invalid"
+    with pytest.raises(ArchMarshalError) as missing_candidate:
+        review_learning_candidate(
+            source, pack, "candidate.missing", store, decision="defer"
+        )
+    assert missing_candidate.value.code == "learning_candidate_missing"
+    with pytest.raises(ArchMarshalError) as wrong_location:
+        review_learning_candidate(
+            source, source / ".agent", preference_candidate, store, decision="defer"
+        )
+    assert wrong_location.value.code == "learning_pack_location_invalid"
+    with pytest.raises(ArchMarshalError) as missing_draft:
+        promote_learning_candidate(source, pack, skill_candidate, store)
+    assert missing_draft.value.code == "learning_promotion_draft_required"
+    with pytest.raises(ArchMarshalError) as preference_draft:
+        promote_learning_candidate(
+            source, pack, preference_candidate, store, draft=draft
+        )
+    assert preference_draft.value.code == "learning_promotion_draft_invalid"
+    preference_preview = promote_learning_candidate(
+        source, pack, preference_candidate, store
+    )
+    assert preference_preview["candidate_type"] == "preference"
+
     decision_preview = review_learning_candidate(
         source,
         pack,
@@ -371,7 +400,6 @@ def test_candidate_to_user_store_to_new_project_is_reversible_and_source_safe(
     )
     ancestor = decision["user_store"]["head"]
 
-    draft = _common_draft(tmp_path / "drafts")
     source_before = fingerprint_directory(source, purpose="source project safety check")
     draft_before = fingerprint_directory(draft, purpose="draft safety check")
     promotion_preview = promote_learning_candidate(
