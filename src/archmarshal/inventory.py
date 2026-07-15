@@ -12,6 +12,7 @@ from .safety import (
     ensure_managed_path,
     files_below_no_links,
     fingerprint_directory,
+    fingerprint_directory_matches,
     sha256_file,
 )
 from .skill_index import load_skill_index, skill_index_summary
@@ -337,6 +338,7 @@ def _finalize_skill_manifest(
                 skill_dir,
                 purpose="Skill package",
                 entrypoint_only=skill_dir.resolve() == root,
+                include_modes=True,
             )
         except ArchMarshalError as exc:
             manifest["_fingerprint_error"] = exc.to_dict()
@@ -349,7 +351,9 @@ def _finalize_skill_manifest(
                 recorded_package_hash = source.get("package_sha256")
                 if recorded_package_hash:
                     manifest["_source_drift"] = (
-                        "unchanged" if recorded_package_hash == package["sha256"] else "changed"
+                        "unchanged"
+                        if fingerprint_directory_matches(package, recorded_package_hash)
+                        else "changed"
                     )
                 else:
                     recorded_hash = source.get("skill_sha256")

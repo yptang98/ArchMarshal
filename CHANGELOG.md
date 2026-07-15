@@ -27,9 +27,11 @@
   discovered Skill package is included in the verified backup. The published
   backup manifest must also match the exact reviewed source records before any
   control-plane target is created.
-- Extend package fingerprints to cover permission modes, so mode-only drift is
-  visible on platforms that preserve those bits. Existing source Skills and
-  project files remain byte-for-byte in place.
+- Extend current project Skill package fingerprints to cover permission modes,
+  so mode-only drift is visible on platforms that preserve those bits. Legacy
+  v1 package and Skill-index content digests remain readable and migrate
+  naturally on a later adoption. Existing source Skills and project files
+  remain byte-for-byte in place.
 
 ### Honest closeout readiness
 

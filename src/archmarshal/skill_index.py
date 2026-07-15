@@ -21,6 +21,7 @@ from .safety import (
     create_bytes_exclusive,
     ensure_managed_path,
     fingerprint_directory,
+    fingerprint_directory_matches,
     is_link_or_reparse,
     sha256_file,
 )
@@ -1253,8 +1254,12 @@ def _verify_source_preconditions(root: Path, preconditions: list[dict[str, str]]
                     source_dir,
                     purpose="Skill source precondition",
                     entrypoint_only=source == ".",
+                    include_modes=True,
                 )
-                if package["sha256"] != precondition["package_sha256"]:
+                if not fingerprint_directory_matches(
+                    package,
+                    precondition["package_sha256"],
+                ):
                     failures.append({"source": source, "reason": "package_changed"})
             else:
                 skill_md = source_dir / "SKILL.md"

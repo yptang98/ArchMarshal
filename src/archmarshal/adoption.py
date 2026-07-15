@@ -1004,6 +1004,7 @@ def _discover_skills(
             source_dir,
             purpose="Skill package",
             entrypoint_only=source_dir.resolve() == root,
+            include_modes=True,
         )
         validation = validate_skill_package(
             source_dir,

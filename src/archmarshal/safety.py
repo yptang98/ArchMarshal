@@ -235,12 +235,15 @@ def fingerprint_directory(
     *,
     purpose: str = "Directory",
     entrypoint_only: bool = False,
+    include_modes: bool = False,
 ) -> dict[str, Any]:
     """Return a deterministic content fingerprint without following links.
 
-    Relative paths, file sizes, permission bits, and file bytes are covered by the digest.  The
-    scan is bounded so a malformed or unexpectedly huge skill cannot make a
-    routine start operation consume unbounded resources.
+    Relative paths, file sizes, and file bytes are covered by the legacy digest.
+    Callers that manage executable project content can opt into permission-bit
+    coverage with ``include_modes``.  The scan is bounded so a malformed or
+    unexpectedly huge skill cannot make a routine start operation consume
+    unbounded resources.
     """
     directory = root.resolve()
     if not directory.is_dir() or is_link_or_reparse(root):
@@ -325,14 +328,14 @@ def fingerprint_directory(
             )
         _reject_named_data_streams(resolved, purpose=purpose)
         total_bytes += byte_count
-        records.append(
-            {
-                "path": relative,
-                "bytes": byte_count,
-                "mode": stat.S_IMODE(after.st_mode) & 0o777,
-                "sha256": digest_builder.hexdigest(),
-            }
-        )
+        record: dict[str, Any] = {
+            "path": relative,
+            "bytes": byte_count,
+            "sha256": digest_builder.hexdigest(),
+        }
+        if include_modes:
+            record["mode"] = stat.S_IMODE(after.st_mode) & 0o777
+        records.append(record)
 
     aggregate = hashlib.sha256()
     for record in records:
@@ -348,6 +351,39 @@ def fingerprint_directory(
         "content_bytes": total_bytes,
         "files": records,
     }
+
+
+def fingerprint_directory_matches(fingerprint: dict[str, Any], expected: str) -> bool:
+    """Match a mode-aware fingerprint against its current or legacy digest.
+
+    Project Skill fingerprints bind permission modes in current generations.  A
+    legacy digest did not, so existing reviewed index generations remain
+    readable until a normal re-adoption publishes a mode-aware generation.
+    """
+    if fingerprint.get("sha256") == expected:
+        return True
+    records = fingerprint.get("files")
+    if not isinstance(records, list) or not records or not all(
+        isinstance(record, dict) and "mode" in record for record in records
+    ):
+        return False
+    aggregate = hashlib.sha256()
+    for record in records:
+        legacy_record = {
+            "path": record.get("path"),
+            "bytes": record.get("bytes"),
+            "sha256": record.get("sha256"),
+        }
+        aggregate.update(
+            json.dumps(
+                legacy_record,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        aggregate.update(b"\n")
+    return aggregate.hexdigest() == expected
 
 
 def ensure_path_within(root: Path, path: Path, *, purpose: str) -> Path:

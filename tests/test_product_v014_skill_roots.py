@@ -10,6 +10,7 @@ from archmarshal.adoption import adopt_workspace, plan_adoption
 from archmarshal.errors import ArchMarshalError
 from archmarshal.safety import (
     fingerprint_directory,
+    fingerprint_directory_matches,
     fingerprint_regular_file,
     verify_backup,
 )
@@ -210,7 +211,29 @@ def test_linked_explicit_skill_root_fails_closed_when_supported(tmp_path: Path) 
     with pytest.raises(ArchMarshalError) as raised:
         plan_adoption(root, skill_roots=["linked"])
 
-    assert raised.value.code in {"managed_path_escape", "skill_root_invalid"}
+    assert raised.value.code in {
+        "managed_path_escape",
+        "skill_root_invalid",
+        "unsafe_managed_link",
+    }
+
+
+def test_mode_aware_skill_fingerprint_does_not_change_legacy_contract(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    package = _skill(root)
+
+    legacy = fingerprint_directory(package, purpose="legacy package")
+    mode_aware = fingerprint_directory(
+        package,
+        purpose="managed Skill package",
+        include_modes=True,
+    )
+
+    assert all("mode" not in record for record in legacy["files"])
+    assert all("mode" in record for record in mode_aware["files"])
+    assert legacy["sha256"] != mode_aware["sha256"]
+    assert fingerprint_directory_matches(mode_aware, legacy["sha256"])
 
 
 def test_full_backup_still_reports_complete_skill_package_coverage(tmp_path: Path) -> None:
