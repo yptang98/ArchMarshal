@@ -32,22 +32,22 @@ def test_install_prompt_is_copyable_safe_and_codex_native() -> None:
         "https://github.com/yptang98/ArchMarshal",
         "codex plugin marketplace add yptang98/ArchMarshal --ref",
         "codex plugin add archmarshal@archmarshal",
-        "完整 40 位 SHA",
+        "full 40-character commit SHA",
         "GitHub Actions CI",
         "CODEX_HOME",
         "backups/archmarshal/",
-        "不要删除、移动或改写用户本地 checkout",
-        "不要备份整个 Codex 配置或任何凭据",
+        "Never delete, move, or rewrite a user-owned checkout",
+        "Do not back up the complete Codex configuration or any credentials",
         "scripts/run_archmarshal.py",
         "--bootstrap-status",
         "dependency_imported=false",
-        "只读 `doctor`",
-        "不要污染系统 Python",
-        "只安装它们的 wheel 依赖闭包",
+        "run read-only `doctor`",
+        "do not modify the system Python environment",
+        "Install only their wheel dependency closure",
         "pip check",
         "archmarshal-runtime-v1",
         "current.json",
-        "不要在安装任务中接管或整理当前项目",
+        "Do not adopt or reorganize the current project during installation",
     )
     for phrase in required:
         assert phrase in prompt
@@ -91,3 +91,10 @@ def test_readme_primary_flow_is_plugin_first_not_cli_dump() -> None:
     assert "skill-review.json" not in readme
     assert "learning-plan.json" not in readme
     assert readme.count("## Install with one Codex prompt") == 1
+
+
+def test_primary_public_docs_are_english_only() -> None:
+    han = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
+
+    for path in (README, INSTALL_PROMPT, GETTING_STARTED):
+        assert han.search(path.read_text(encoding="utf-8")) is None, path

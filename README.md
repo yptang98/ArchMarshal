@@ -31,21 +31,21 @@ project, and verifies the installed plugin before reporting success.
 
 <!-- BEGIN INSTALL PROMPT -->
 ```text
-请在当前 Codex 环境中安装或安全更新 ArchMarshal 管理插件，来源只能是 https://github.com/yptang98/ArchMarshal 。
+Install or safely update the ArchMarshal management plugin in the current Codex environment. The only allowed source is https://github.com/yptang98/ArchMarshal.
 
-这是一次 Codex 插件安装任务，不是项目整理任务。安装期间不要运行 ArchMarshal 管理当前项目，不要在当前项目中 clone、创建虚拟环境、写计划文件或修改任何项目/Skill 文件。只允许修改 Codex 自己管理的 marketplace、plugin cache，以及 CODEX_HOME 下专用于 ArchMarshal 的备份或隔离运行时目录。
+This is a Codex plugin installation task, not a project-governance task. During installation, do not run ArchMarshal against the current project. Do not clone into the current project, create a virtual environment there, save plan files there, or modify any project or Skill file. Changes are limited to Codex-managed marketplace state, the plugin cache, and ArchMarshal-specific backup or isolated-runtime directories under CODEX_HOME.
 
-请按以下安全约束执行，不要把步骤转交给我手工完成：
+Complete the work yourself under these safety constraints; do not hand the steps back to me:
 
-1. 先确认本机存在可用的 `codex plugin`、Git，以及 Python 3.10–3.13。复用本机已有 Git/GitHub 认证；绝不索取、打印、复制或写入 token、密码、cookie、SSH 私钥和完整 Codex 配置。
-2. 从远端默认分支解析当前提交为完整 40 位 SHA（例如使用 `git ls-remote`），并确认该 SHA 的 GitHub Actions CI 已成功。只安装这个完整 SHA，不安装未固定的 `main`，也不要使用文档中的占位符。
-3. 在安装前读取 `codex plugin marketplace list --json` 和 `codex plugin list --available --json`。目标 marketplace 必须唯一命名为 `archmarshal`，目标插件必须是 `archmarshal@archmarshal`。如果同名项指向其他仓库、来源不明或存在多个候选，立即停止且不要改动。
-4. 如果这是首次安装，执行 `codex plugin marketplace add yptang98/ArchMarshal --ref`，并把第 2 步实际解析、核验过的完整 SHA 作为紧随 `--ref` 的参数；然后执行：
+1. Confirm that `codex plugin`, Git, and Python 3.10–3.13 are available. Reuse existing Git/GitHub authentication. Never request, print, copy, or write tokens, passwords, cookies, SSH private keys, or the complete Codex configuration.
+2. Resolve the remote default branch HEAD to a full 40-character commit SHA, for example with `git ls-remote`, and confirm that GitHub Actions CI succeeded for that exact SHA. Install only that full SHA. Do not install an unpinned `main` branch or use a documentation placeholder.
+3. Before changing anything, inspect `codex plugin marketplace list --json` and `codex plugin list --available --json`. The marketplace must be uniquely named `archmarshal`, and the plugin must be `archmarshal@archmarshal`. If the same name points elsewhere, its origin is uncertain, or multiple candidates exist, stop without changing anything.
+4. For a first installation, run `codex plugin marketplace add yptang98/ArchMarshal --ref` with the resolved and verified SHA from step 2 as the argument immediately after `--ref`. Then run:
    `codex plugin add archmarshal@archmarshal`
-5. 如果已安装且就是同一 SHA/版本，不做重复变更。如果需要更新：先识别它是用户本地 checkout 还是 Codex 管理的 Git 快照。不要删除、移动或改写用户本地 checkout；这种情况只验证并报告。对于 Codex 管理的快照，必须先把旧的仓库身份、完整 ref、版本和相关路径记录到 CODEX_HOME 下带 UTC 时间戳的 `backups/archmarshal/` 目录，并备份现有 ArchMarshal marketplace 快照与插件缓存。不要备份整个 Codex 配置或任何凭据。只有在旧版本可恢复、备份校验通过时，才通过 `codex plugin` 命令移除旧插件/marketplace，再用新的完整 SHA 重新添加。任一步失败都停止并恢复旧的已知良好版本，不留下“半安装”状态。
-6. 安装后再次查询插件列表，要求 `archmarshal@archmarshal` 同时为 installed 和 enabled。找到已安装插件内的 `scripts/run_archmarshal.py`，用合适的 Python 运行 `--bootstrap-status`；只有输出同时满足 `mode=ready`、`verified=true`、`marketplace=archmarshal`、`dependency_imported=false`、插件与 engine 版本一致，才算身份校验成功。
-7. 再使用同一个 launcher 对一个位于系统临时目录、尚不存在的探测路径运行只读 `doctor`。不得指向当前项目。若缺少 Python 依赖，不要污染系统 Python；在 CODEX_HOME 的 `runtimes/archmarshal/` 下以实际完整 commit SHA 为目录名创建隔离虚拟环境（要求复制解释器而不是创建解释器符号链接）。只读取已固定 SHA 中 `pyproject.toml` 声明的依赖，只安装它们的 wheel 依赖闭包，不把 ArchMarshal engine 另装成环境包，不接受额外包、任意 URL 或源码构建；保留 pip 安装报告并运行 `pip check`。然后用该解释器重新验证。验证成功后，以原子替换方式写入 `CODEX_HOME/runtimes/archmarshal/current.json`。该 JSON 只能包含 `format`、`commit`、`engine_version`、`python` 四个字段：`format` 固定为 `archmarshal-runtime-v1`，其余字段分别使用本次实际完整 SHA、实际 engine 版本和隔离环境解释器的绝对路径。launcher 会校验版本、SHA 和解释器边界后供后续调用。若无法安全建立隔离运行时，就明确报告未完成，不要声称安装成功。
-8. 最后报告：安装或更新结果、完整 commit SHA、插件/engine 版本、是否创建备份及其路径、bootstrap 与只读 doctor 的验证结果。不要在安装任务中接管或整理当前项目。提醒我新建一个 Codex 任务后直接用自然语言调用 ArchMarshal。
+5. If the same SHA and version are already installed, make no redundant changes. If an update is needed, first determine whether the existing marketplace is a user-owned local checkout or a Codex-managed Git snapshot. Never delete, move, or rewrite a user-owned checkout; only verify and report it. For a Codex-managed snapshot, first record the old repository identity, full ref, version, and related paths in a UTC-timestamped `backups/archmarshal/` directory under CODEX_HOME, then back up the existing ArchMarshal marketplace snapshot and plugin cache. Do not back up the complete Codex configuration or any credentials. Remove and re-add the old plugin and marketplace through `codex plugin` commands only after the old version is recoverable and the backup verifies. Re-add the new version with the new full SHA. If any step fails, stop and restore the last known-good version instead of leaving a partial installation.
+6. Query the plugin list again. Require `archmarshal@archmarshal` to be both installed and enabled. Locate `scripts/run_archmarshal.py` inside the installed plugin and run it with `--bootstrap-status` using an appropriate Python interpreter. Identity verification succeeds only when the result has `mode=ready`, `verified=true`, `marketplace=archmarshal`, `dependency_imported=false`, and matching plugin and engine versions.
+7. Use the same launcher to run read-only `doctor` against a path in the system temporary directory that does not yet exist. Never point this probe at the current project. If Python dependencies are missing, do not modify the system Python environment. Create an isolated environment below `CODEX_HOME/runtimes/archmarshal/`, using the actual full commit SHA as the directory name and copying the interpreter instead of creating an interpreter symlink. Read dependency declarations only from `pyproject.toml` at the pinned SHA. Install only their wheel dependency closure; do not install the ArchMarshal engine itself as an environment package, accept extra packages or arbitrary URLs, or build from source. Keep the pip installation report and run `pip check`, then repeat verification with that interpreter. After successful verification, atomically replace `CODEX_HOME/runtimes/archmarshal/current.json`. This JSON object may contain only `format`, `commit`, `engine_version`, and `python`: set `format` to `archmarshal-runtime-v1`, and set the other values to the actual full SHA, actual engine version, and absolute path of the isolated interpreter. The launcher will validate the version, SHA shape, and interpreter boundary before later use. If a safe isolated runtime cannot be established, report the installation as incomplete; do not claim success.
+8. Report the installation or update result, full commit SHA, plugin and engine versions, whether a backup was created and where, and the bootstrap and read-only doctor results. Do not adopt or reorganize the current project during installation. Remind me to start a new Codex task and invoke ArchMarshal directly in natural language.
 ```
 <!-- END INSTALL PROMPT -->
 
@@ -63,12 +63,12 @@ Start a new Codex task after installation. There is no separate ArchMarshal app
 or command window to learn. Ask for the outcome:
 
 ```text
-用 ArchMarshal 检查这个项目和已有 Skills，先只诊断，不修改文件。
-用 ArchMarshal 安全接管这个已有项目；先备份并给我看精确计划。
-用 ArchMarshal 初始化这个新项目，标签是 research、python。
-项目结束了，用 ArchMarshal 做认真整理，记录关键步骤和脚本。
-做可复现级整理：保留完整证据、命令和参考运行脚本。
-从最近几个项目提炼可复用 Skill 和我的偏好，但不要自动启用。
+Use ArchMarshal to inspect this project and its existing Skills. Diagnose only; do not modify files.
+Use ArchMarshal to safely adopt this existing project. Back it up first and show me the exact plan.
+Use ArchMarshal to initialize this new project with the tags research and python.
+Close this project with a careful record of the key steps and scripts.
+Create a reproducible closeout with complete evidence, commands, and a reference run script.
+Extract reusable Skills and my project preferences from recent projects, but do not activate them automatically.
 ```
 
 Codex loads the ArchMarshal Skill, chooses the matching workflow, and invokes

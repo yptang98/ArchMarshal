@@ -22,22 +22,22 @@ Start a new Codex task after installation so the plugin Skill is loaded.
 For a new project:
 
 ```text
-用 ArchMarshal 初始化并管理这个新项目，标签是 research、python。先预览。
+Use ArchMarshal to initialize and manage this new project with the tags research and python. Preview first.
 ```
 
 For an existing project and existing Skills:
 
 ```text
-用 ArchMarshal 安全接管这个已有项目和它的 Skills。先只诊断，确认完整备份范围和冲突，再给我精确计划。
+Use ArchMarshal to safely adopt this existing project and its Skills. Diagnose first, confirm complete backup coverage and conflicts, then show me the exact plan.
 ```
 
 For an already managed project:
 
 ```text
-用 ArchMarshal 开始本次工作，任务是准备发布。先检查健康状态和 Skill 漂移。
+Use ArchMarshal to start this work session for release preparation. Check health and Skill drift first.
 ```
 
-Codex invokes the plugin wrapper internally. New-project initialization creates
+Codex invokes the plugin launcher internally. New-project initialization creates
 only missing control-plane/scaffold paths. Existing-project adoption leaves all
 source files in place and puts routing metadata under `.agent/skill-overlays/`.
 Nonstandard project-relative Skill roots can be included explicitly; they add
@@ -72,19 +72,19 @@ Project files should remain grouped by purpose and lifecycle:
 Quick closeout:
 
 ```text
-用 ArchMarshal 粗略整理本次项目：记录结果和必要的轻量证据。
+Use ArchMarshal for a quick closeout that records the outcome and essential lightweight evidence.
 ```
 
 Standard closeout:
 
 ```text
-用 ArchMarshal 认真整理本次项目：记录有序步骤、关键脚本和哈希。
+Use ArchMarshal for a standard closeout that records ordered steps, key scripts, and hashes.
 ```
 
 Reproducible closeout:
 
 ```text
-用 ArchMarshal 做可复现级整理：保存环境与依赖指纹、精确命令、关键脚本快照和参考运行脚本，并把未实际验证的部分明确标出来。
+Use ArchMarshal for a reproducible closeout. Preserve environment and dependency fingerprints, exact commands, key-script snapshots, and a reference run script, and clearly identify anything not execution-validated.
 ```
 
 All modes preview first. Applied sessions use a new date-organized directory
@@ -97,7 +97,7 @@ a separate fact.
 After repeated committed sessions:
 
 ```text
-用 ArchMarshal 从这些项目中提炼重复出现的 Skill 和我的项目偏好，只生成候选，不要自动启用或修改全局 Skills。
+Use ArchMarshal to extract repeated Skills and my project preferences from these projects. Produce review candidates only; do not activate them or modify global Skills automatically.
 ```
 
 Learning, candidate decision, draft creation, and promotion are separate review

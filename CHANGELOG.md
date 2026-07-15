@@ -14,6 +14,9 @@
   duplicated quick-start numbering and misleading UI/global-state boundaries,
   and explicitly distinguish documented CostMarshal compatibility from a
   future first-class bridge.
+- Keep the public README, standalone installation prompt, and getting-started
+  guide English-only, with a regression check that rejects Han-script content
+  in those primary distribution documents.
 
 ### Isolated plugin runtime selection
 
