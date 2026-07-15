@@ -26,7 +26,20 @@ def validate_skill_package(skill_dir: Path, *, enforce_folder_name: bool = True)
 
     if is_link_or_reparse(directory) or not directory.is_dir():
         errors.append(_issue("skill_directory_invalid", "Skill directory is missing or linked."))
-    elif is_link_or_reparse(skill_md) or not skill_md.is_file():
+        return {
+            "format": "archmarshal-skill-validation-v1",
+            "valid": False,
+            "frontmatter": {"name": None, "description": None},
+            "resources": {
+                resource_name: {"present": False, "referenced": False}
+                for resource_name in ("scripts", "references", "assets")
+            },
+            "agents_metadata": {"present": False, "valid": None},
+            "scripts_executed": False,
+            "errors": errors,
+            "warnings": warnings,
+        }
+    if is_link_or_reparse(skill_md) or not skill_md.is_file():
         errors.append(_issue("skill_entrypoint_invalid", "SKILL.md is missing or linked."))
     else:
         try:
@@ -119,15 +132,19 @@ def validate_skill_package(skill_dir: Path, *, enforce_folder_name: bool = True)
     agents_dir = directory / "agents"
     agents_file = agents_dir / "openai.yaml"
     agents_dir_linked = is_link_or_reparse(agents_dir)
-    agents_present = agents_file.exists() or agents_dir_linked or is_link_or_reparse(agents_file)
+    agents_dir_exists = agents_dir.exists() or agents_dir_linked
+    agents_dir_valid = agents_dir_exists and not agents_dir_linked and agents_dir.is_dir()
+    agents_file_linked = is_link_or_reparse(agents_file) if agents_dir_valid else False
+    agents_file_exists = agents_file.exists() if agents_dir_valid else False
+    agents_present = agents_dir_exists or agents_file_exists or agents_file_linked
     agents_metadata = {"present": agents_present, "valid": None}
-    if agents_dir_linked or (agents_dir.exists() and not agents_dir.is_dir()):
+    if agents_dir_linked or (agents_dir_exists and not agents_dir_valid):
         errors.append(
             _issue("skill_agents_metadata_invalid", "agents/ must be a real local directory.")
         )
         agents_metadata["valid"] = False
-    elif agents_file.exists() or is_link_or_reparse(agents_file):
-        if is_link_or_reparse(agents_file) or not agents_file.is_file():
+    elif agents_file_exists or agents_file_linked:
+        if agents_file_linked or not agents_file.is_file():
             errors.append(
                 _issue("skill_agents_metadata_invalid", "agents/openai.yaml must be a regular file.")
             )
