@@ -13,6 +13,8 @@
 - Updated the Codex Skill workflow to show all proposed management directories
   first and request a preserve-or-exclude decision when artifact boundaries are
   present.
+- Fixed the Skill manifest schema contract for generated portable package
+  boundaries so newly adopted overlays validate and lint consistently.
 
 ## 0.14.1 - 2026-07-16
 

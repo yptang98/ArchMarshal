@@ -1,5 +1,5 @@
 {
-  "content_bytes": 796014,
+  "content_bytes": 796083,
   "engine_api": "archmarshal-engine-api-v1",
   "engine_version": "0.15.0",
   "file_count": 41,
@@ -170,9 +170,9 @@
       "sha256": "ae38a032952f51d585bf5edaaabc36c432fa7fc42a9a533e9dcb5d43659d0e52"
     },
     {
-      "bytes": 3768,
+      "bytes": 3837,
       "path": "schemas/skill-manifest.schema.yaml",
-      "sha256": "f20630a2af571a34eadf2e113a7c3bafa677192cb04fe5c671da7e8c3353ff55"
+      "sha256": "99e7951e1ecd9cc785f0357b6a4f0f5a0842096dc09c90680e1de732611f753c"
     },
     {
       "bytes": 3286,
@@ -212,5 +212,5 @@
   ],
   "format": "archmarshal-plugin-engine-lock-v1",
   "source_root": "src/archmarshal",
-  "source_tree_sha256": "136691fbeb5078b64d7443551cf3c98ac23b3cb6a89b4b5a783d0d00d7d70d8c"
+  "source_tree_sha256": "db145a925c3600a63cb069b5fdf83dfc51734ad5445fbef53decc43eef7a9acb"
 }

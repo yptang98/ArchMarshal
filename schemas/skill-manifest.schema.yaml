@@ -184,6 +184,9 @@ properties:
       package_content_bytes:
         type: integer
         minimum: 0
+      package_boundary:
+        enum:
+          - portable-source-v1
       original_manifest:
         type:
           - string
