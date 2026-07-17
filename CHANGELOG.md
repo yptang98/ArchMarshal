@@ -17,6 +17,8 @@
   strategy, UTC/local/IANA timezone, timestamp format, and date partition.
   Checkpoint, closeout, learning, catalog, workspace YAML, registry, and INDEX
   now consume the same validated runtime layout.
+- Bundled the portable IANA timezone database so confirmed timezone policies
+  behave consistently on Windows as well as Unix-like systems.
 - Made new-project Skill scaffold paths dynamic so confirmed `.codex`,
   `.claude`, or other safe in-project conventions work without a parallel
   `.agents/skills` hierarchy.
