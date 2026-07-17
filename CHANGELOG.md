@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.1 - 2026-07-18
+
+- Registered `archmarshal-adoption-plan-v4` as the current readable and
+  writable adoption-plan format so doctor and migration diagnostics agree with
+  the layout-aware planner introduced in 0.16.0.
+
 ## 0.16.0 - 2026-07-18
 
 ### User-layout-first project governance

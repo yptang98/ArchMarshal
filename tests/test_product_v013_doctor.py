@@ -112,8 +112,10 @@ def test_format_registry_records_versions_owners_migrations_and_bounds() -> None
 
     package, package_status = find_format("archmarshal-user-skill-package-v1")
     session, session_status = find_format("archmarshal-session-v1")
+    adoption, adoption_status = find_format("archmarshal-adoption-plan-v4")
     assert (package.family, package_status) == ("user_skill_package", "legacy")
     assert (session.family, session_status) == ("session", "legacy")
+    assert (adoption.family, adoption_status) == ("adoption_plan", "current")
     assert find_format("archmarshal-user-skill-package-v99")[1] == "unsupported"
     assert find_format("totally-unknown")[1] == "unknown"
     assert find_format(None)[1] == "missing"

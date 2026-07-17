@@ -1,13 +1,13 @@
 {
-  "content_bytes": 858432,
+  "content_bytes": 858476,
   "engine_api": "archmarshal-engine-api-v1",
-  "engine_version": "0.16.0",
+  "engine_version": "0.16.1",
   "file_count": 43,
   "files": [
     {
       "bytes": 170,
       "path": "__init__.py",
-      "sha256": "6ea77ca9e3865aeb4d5708b51af1652efbba2b847e5212d8d1be165db2c898ea"
+      "sha256": "a3fe21d78a0661c55a99315d807fb291d4d502ab6a818007723c68a47dbb7ea2"
     },
     {
       "bytes": 80,
@@ -90,9 +90,9 @@
       "sha256": "f7da85d7f6ebc31bb2a33336bda059e24ac0bc47a6aa26bfe932003abe38e1a0"
     },
     {
-      "bytes": 12676,
+      "bytes": 12720,
       "path": "formats.py",
-      "sha256": "90c8b05d32943d052f9c36b49c78a1f8fcf7f509c6b6a7a7df9fce9a63bbc63c"
+      "sha256": "668e63e7f718a0d82cad282f69d2c6a053d405325a1846eee998fd0086c71b9e"
     },
     {
       "bytes": 23288,
@@ -222,5 +222,5 @@
   ],
   "format": "archmarshal-plugin-engine-lock-v1",
   "source_root": "src/archmarshal",
-  "source_tree_sha256": "b9dd540cb43268d37629c419534a6a9857e0ae527c20fce8a51842c2cd20cdaf"
+  "source_tree_sha256": "6754a1564a8c0ade3205a1cf6166f3622f7bc132768729df1d3baaa5f53be557"
 }
