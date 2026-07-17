@@ -102,6 +102,12 @@ overlay's tags and triggers. Supported fields from an existing source
 invalid recognized value disables the generated metadata and marks it for
 review instead of guessing an active configuration.
 
+Skill frontmatter accepts the portable `name` and `description` fields plus the
+common compatibility fields `license`, `allowed-tools`, and `metadata`.
+Compatibility values are type- and size-bounded, remain part of the exact
+package fingerprint, and are never interpreted by ArchMarshal as executable
+permissions. Unknown frontmatter fields still fail closed.
+
 Adoption is a durable create-only transaction. Its reviewed plan digest binds
 the exact control-file bytes, source preconditions, backup scope, persistent
 exact-package selection, preserved artifact boundaries, and proposed skill-index
@@ -116,11 +122,13 @@ Recovery apply is a second compare-and-swap: the active transaction id and plan
 digest must still equal the reviewed recovery preview while the lock is held.
 
 `archmarshal init` is an explicit specialization of this same transaction for
-new-project structure. It adds only missing `.agents/skills/README.md`,
-`.agents/skills/project/.gitkeep`, and
-`.agents/skills/generated/.gitkeep` targets. It does not reinterpret or rewrite
-an existing Skill directory. Ordinary `adopt` remains control-plane-only so an
-existing project is not expanded merely because ArchMarshal inspected it.
+new-project structure. It adds a guide plus project/generated `.gitkeep`
+targets under the effective confirmed Skill save paths. The default is
+`.agents/skills/`, but an existing project convention, explicit current choice,
+or confirmed user profile can select another in-project location. It does not
+reinterpret or rewrite an existing Skill directory. Ordinary `adopt` remains
+control-plane-only so an existing project is not expanded merely because
+ArchMarshal inspected it.
 
 `ownership.json` is root-bound and declares whether the immutable Skill index is
 required. That declaration must agree with the workspace management mode and
@@ -229,8 +237,43 @@ materials do not drift into hidden implicit locations.
 
 Project file naming is also governed. The default strategy is
 `time_topic_kind`: UTC timestamp first, then a short task/content slug, then the
-artifact kind. This makes raw history sortable by time and recognizable by
-project content.
+artifact kind. A confirmed project can instead use `date_topic_kind`,
+`topic_kind`, or `preserve`, an IANA/local timezone, and `none`, `YYYY`,
+`YYYY/MM`, or `YYYY/MM/DD` date partitioning. `preserve` never guesses a new
+name; an operation that needs one returns `requires_user_input`.
+
+### User-layout policy
+
+Adoption builds one field-auditable layout plan with this priority:
+
+```text
+recognized project configuration
+  > explicit choices for this preview
+  > promoted confirmed user profile
+  > read-only detected evidence
+  > ArchMarshal defaults
+```
+
+The public plan records `foundation`, `quality`, `decision`, `source`,
+`requires_confirmation`, an effective profile, per-field provenance, evidence,
+issues, and suggestions. A nonstandard but safe confirmed layout is
+`reasonable`; ArchMarshal does not treat its own defaults as an aesthetic
+standard. Objective management risks produce `suggest_only` recommendations
+without moving content. Traversal, linked/reparse paths, VCS/cache/dependency or
+runtime boundaries, and file/directory conflicts are unsafe and block apply.
+
+Detection is never a user preference by itself. An exact-plan apply may adopt
+the reviewed mapping locally, but learning ignores it unless the user later
+records an explicitly confirmed profile. Only the same confirmed layout with
+committed evidence from multiple projects can become a
+`preferred.workspace_layout` candidate, and promotion remains a separate
+reviewed user-store transaction.
+
+`WorkspaceLayout` is the runtime policy consumed by checkpoints, closeout,
+learning, and catalog. This prevents each lifecycle writer from inventing a
+different path or timezone interpretation. `.agent/INDEX.md` and the registry
+are rendered from the same effective mapping so a human sees where every new
+managed artifact will go.
 
 ## Historical Artifact Layer
 
@@ -242,7 +285,7 @@ reports, plans, checkpoints, and history should remain retrievable through
 explicit-only paths so later agents can reproduce detail without reloading every
 artifact by default.
 
-Default explicit-only directories:
+Default explicit-only directories (projects may map these roles elsewhere):
 
 - `.agent/reports/`
 - `.agent/history/`

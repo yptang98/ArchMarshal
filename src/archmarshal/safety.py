@@ -23,13 +23,19 @@ if os.name == "nt":
             ("stream_name", ctypes.c_wchar * 296),
         ]
 
+
 EXCLUDED_BACKUP_PARTS = {
     ".git",
     ".hg",
     ".svn",
     ".tox",
     ".venv",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
     "__pycache__",
+    "build",
+    "dist",
     "node_modules",
     "venv",
 }
@@ -52,9 +58,9 @@ WINDOWS_RESERVED_NAMES = {
 
 def workspace_root_id(root: Path | str) -> str:
     root_path = Path(root).resolve(strict=False)
-    return hashlib.sha256(
-        f"archmarshal-workspace-v1\x00{root_path}".encode("utf-8")
-    ).hexdigest()[:32]
+    return hashlib.sha256(f"archmarshal-workspace-v1\x00{root_path}".encode("utf-8")).hexdigest()[
+        :32
+    ]
 
 
 def sha256_file(path: Path) -> str:
@@ -237,6 +243,7 @@ def fingerprint_directory(
     entrypoint_only: bool = False,
     include_modes: bool = False,
     excluded_parts: Iterable[str] | None = None,
+    excluded_directories: Iterable[Path] | None = None,
 ) -> dict[str, Any]:
     """Return a deterministic content fingerprint without following links.
 
@@ -268,6 +275,7 @@ def fingerprint_directory(
             purpose=purpose,
             max_files=MAX_SKILL_FILES + 1,
             excluded_parts=frozenset(excluded_parts or ()),
+            excluded_directories=excluded_directories,
             excluded_found=preserved_paths,
         )
     for path in paths:
@@ -370,8 +378,10 @@ def fingerprint_directory_matches(fingerprint: dict[str, Any], expected: str) ->
     if fingerprint.get("sha256") == expected:
         return True
     records = fingerprint.get("files")
-    if not isinstance(records, list) or not records or not all(
-        isinstance(record, dict) and "mode" in record for record in records
+    if (
+        not isinstance(records, list)
+        or not records
+        or not all(isinstance(record, dict) and "mode" in record for record in records)
     ):
         return False
     aggregate = hashlib.sha256()
@@ -632,18 +642,12 @@ def create_backup(
         descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
         temporary_identity = _descriptor_identity(descriptor)
         with os.fdopen(descriptor, "w+b") as raw_archive:
-            with zipfile.ZipFile(
-                raw_archive, "w", compression=zipfile.ZIP_DEFLATED
-            ) as archive:
+            with zipfile.ZipFile(raw_archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 for relative, path in sorted(selected.items()):
                     digest = hashlib.sha256()
                     byte_count = 0
                     path_before = path.lstat()
-                    flags = (
-                        os.O_RDONLY
-                        | getattr(os, "O_BINARY", 0)
-                        | getattr(os, "O_NOFOLLOW", 0)
-                    )
+                    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
                     try:
                         source_descriptor = os.open(path, flags)
                     except OSError as exc:
@@ -682,10 +686,8 @@ def create_backup(
                         after = os.fstat(source.fileno())
                     path_after = path.lstat()
                     if (
-                        (path_before.st_dev, path_before.st_ino)
-                        != (before.st_dev, before.st_ino)
-                        or (path_after.st_dev, path_after.st_ino)
-                        != (before.st_dev, before.st_ino)
+                        (path_before.st_dev, path_before.st_ino) != (before.st_dev, before.st_ino)
+                        or (path_after.st_dev, path_after.st_ino) != (before.st_dev, before.st_ino)
                         or not stat.S_ISREG(before.st_mode)
                         or is_link_or_reparse(path)
                         or before.st_size != after.st_size
@@ -708,8 +710,8 @@ def create_backup(
                     )
                     actual_total_bytes += byte_count
                 if scope == "full_workspace":
-                    rescanned_files, rescanned_directories, rescanned_root_mode = (
-                        _scan_full_backup(root)
+                    rescanned_files, rescanned_directories, rescanned_root_mode = _scan_full_backup(
+                        root
                     )
                     if (
                         {path.relative_to(root).as_posix() for path in rescanned_files}
@@ -770,11 +772,7 @@ def verify_backup(path: Path | str) -> dict[str, Any]:
         if is_link_or_reparse(archive_path):
             raise OSError("archive path is linked or reparse-backed")
         path_before = archive_path.lstat()
-        flags = (
-            os.O_RDONLY
-            | getattr(os, "O_BINARY", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
-        )
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(archive_path, flags)
     except OSError as exc:
         raise ArchMarshalError(
@@ -863,7 +861,7 @@ def verify_backup(path: Path | str) -> dict[str, Any]:
                     raise ArchMarshalError(
                         "backup_limit_exceeded",
                         f"Backup declares more than {MAX_BACKUP_FILES} filesystem entries.",
-                )
+                    )
                 directory_records = directory_value
             seen: set[str] = set()
             portable_seen: set[str] = set()
@@ -871,7 +869,8 @@ def verify_backup(path: Path | str) -> dict[str, Any]:
             for record in records:
                 if not isinstance(record, dict):
                     raise ArchMarshalError(
-                        "backup_manifest_invalid", "Backup manifest contains a non-object file record."
+                        "backup_manifest_invalid",
+                        "Backup manifest contains a non-object file record.",
                     )
                 relative = _safe_backup_relative(str(record.get("path", "")))
                 if scope == "full_workspace" and _excluded_backup_relative(
@@ -1161,9 +1160,7 @@ def restore_backup(
             "requested": rebind_workspace,
             "performed": False,
             "source_root": rebind_plan.get("source_root") if rebind_plan else None,
-            "new_workspace_id": rebind_plan.get("new_workspace_id")
-            if rebind_plan
-            else None,
+            "new_workspace_id": rebind_plan.get("new_workspace_id") if rebind_plan else None,
         },
         "plan_digest": plan_digest,
         "apply_precondition": "--expect-plan <plan_digest> --apply",
@@ -1199,8 +1196,7 @@ def restore_backup(
             archive_descriptor_metadata.st_ino,
         )
         if (
-            (archive_path_metadata.st_dev, archive_path_metadata.st_ino)
-            != descriptor_identity
+            (archive_path_metadata.st_dev, archive_path_metadata.st_ino) != descriptor_identity
             or (archive_path_after.st_dev, archive_path_after.st_ino) != descriptor_identity
             or is_link_or_reparse(archive_path)
         ):
@@ -1236,10 +1232,7 @@ def restore_backup(
                 or is_link_or_reparse(parent)
                 or is_link_or_reparse(extraction_root)
                 or not extraction_root.is_dir()
-                or (
-                    os.name != "nt"
-                    and (stat.S_IMODE(target_metadata.st_mode) & 0o777) != 0o700
-                )
+                or (os.name != "nt" and (stat.S_IMODE(target_metadata.st_mode) & 0o777) != 0o700)
             ):
                 raise ArchMarshalError(
                     "restore_destination_replaced",
@@ -1256,9 +1249,7 @@ def restore_backup(
                 ),
             ):
                 relative = _safe_backup_relative(directory_record["path"])
-                directory_target = extraction_root.joinpath(
-                    *PurePosixPath(relative).parts
-                )
+                directory_target = extraction_root.joinpath(*PurePosixPath(relative).parts)
                 ensure_path_within(
                     resolved_target,
                     directory_target,
@@ -1274,10 +1265,9 @@ def restore_backup(
                 for record in records:
                     current_target_metadata = extraction_root.lstat()
                     if (
-                        (current_target_metadata.st_dev, current_target_metadata.st_ino)
-                        != target_identity
-                        or is_link_or_reparse(extraction_root)
-                    ):
+                        current_target_metadata.st_dev,
+                        current_target_metadata.st_ino,
+                    ) != target_identity or is_link_or_reparse(extraction_root):
                         raise ArchMarshalError(
                             "restore_destination_replaced",
                             "Private restore staging was replaced during extraction; writing was stopped.",
@@ -1294,9 +1284,10 @@ def restore_backup(
                     )
                     digest = hashlib.sha256()
                     byte_count = 0
-                    with archive.open(f"files/{relative}", "r") as source, target.open(
-                        "xb"
-                    ) as output:
+                    with (
+                        archive.open(f"files/{relative}", "r") as source,
+                        target.open("xb") as output,
+                    ):
                         for chunk in iter(lambda: source.read(1024 * 1024), b""):
                             output.write(chunk)
                             digest.update(chunk)
@@ -1326,9 +1317,11 @@ def restore_backup(
                     *PurePosixPath(directory_record["path"]).parts
                 )
                 os.chmod(directory_target, directory_record["mode"])
-                if os.name != "nt" and (
-                    stat.S_IMODE(directory_target.lstat().st_mode) & 0o777
-                ) != directory_record["mode"]:
+                if (
+                    os.name != "nt"
+                    and (stat.S_IMODE(directory_target.lstat().st_mode) & 0o777)
+                    != directory_record["mode"]
+                ):
                     raise ArchMarshalError(
                         "restore_mode_failed",
                         "A restored directory mode could not be reproduced safely.",
@@ -1457,18 +1450,11 @@ def _apply_published_root_mode(
             )
         return
 
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(target_root, flags)
     try:
         before = os.fstat(descriptor)
-        if (
-            not stat.S_ISDIR(before.st_mode)
-            or (before.st_dev, before.st_ino) != expected_identity
-        ):
+        if not stat.S_ISDIR(before.st_mode) or (before.st_dev, before.st_ino) != expected_identity:
             raise ArchMarshalError(
                 "restore_destination_replaced",
                 "Published restore destination changed before final mode application.",
@@ -1509,7 +1495,13 @@ def _publish_directory_exclusive(source: Path, destination: Path) -> None:
             "This platform cannot atomically publish a restore without replacement.",
             details={"staging": str(source)},
         )
-    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
     renameat2.restype = ctypes.c_int
     result = renameat2(
         -100,
@@ -1543,9 +1535,7 @@ def _plan_restored_workspace_rebind(
     records = verification["manifest"].get("files") or []
     matches = [record for record in records if record.get("path") == relative]
     source_root = verification["manifest"].get("project_root")
-    record_paths = {
-        str(record.get("path")) for record in records if isinstance(record, dict)
-    }
+    record_paths = {str(record.get("path")) for record in records if isinstance(record, dict)}
     required_control_files = {
         ".agent/ownership.json",
         ".agent/workspace.yaml",
@@ -1556,8 +1546,7 @@ def _plan_restored_workspace_rebind(
         verification["manifest"].get("scope") != "full_workspace"
         or not records
         or any(
-            not isinstance(record.get("mode"), int)
-            or isinstance(record.get("mode"), bool)
+            not isinstance(record.get("mode"), int) or isinstance(record.get("mode"), bool)
             for record in records
         )
         or not required_control_files.issubset(record_paths)
@@ -1633,9 +1622,7 @@ def _plan_restored_workspace_rebind(
         "old_sha256": matches[0]["sha256"],
         "new_sha256": hashlib.sha256(new_bytes).hexdigest(),
         "new_marker": new_marker,
-        "backup_path": (
-            f".agent/backups/ownership-rebind-{verification['sha256'][:12]}.zip"
-        ),
+        "backup_path": (f".agent/backups/ownership-rebind-{verification['sha256'][:12]}.zip"),
         "source_mutation": False,
     }
 
@@ -1733,11 +1720,7 @@ def _is_sha256(value: str) -> bool:
 
 
 def _is_portable_mode(value: Any) -> bool:
-    return (
-        isinstance(value, int)
-        and not isinstance(value, bool)
-        and 0 <= value <= 0o777
-    )
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 0o777
 
 
 def files_for_full_backup(

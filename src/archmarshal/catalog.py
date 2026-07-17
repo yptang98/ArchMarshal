@@ -7,6 +7,7 @@ from .diagnostics import severity_counts
 from .errors import require_workspace_root
 from .inventory import collect_inventory
 from .lint import lint_workspace
+from .workspace_layout import load_workspace_layout
 
 
 def catalog_projects(
@@ -18,6 +19,7 @@ def catalog_projects(
     projects: list[dict[str, Any]] = []
     for value in roots:
         root = require_workspace_root(value)
+        layout = load_workspace_layout(root)
         inventory = collect_inventory(root)
         workspace = inventory.workspace
         project_tags = [str(item) for item in workspace.get("tags") or []]
@@ -33,6 +35,7 @@ def catalog_projects(
                 "adopted_on": workspace.get("adopted_on"),
                 "tags": project_tags,
                 "management_mode": workspace.get("management_mode"),
+                "layout_profile": layout.to_dict(),
                 "skill_count": len(inventory.skills),
                 "artifact_count": len(inventory.artifacts),
                 "diagnostics": severity_counts(lint_workspace(root)),

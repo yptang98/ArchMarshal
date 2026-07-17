@@ -44,13 +44,22 @@ the separately authorized installation prompt, outside every project root.
 - Inspect health or safety: run `doctor`; add `--user-store` only when the user
   placed that store in scope. Use `inventory`, `lint`, or `audit` when the user
   asks for project-level detail beyond durable state.
-- Manage a new project: preview `init`.
+- Manage a new project: preview `init`. If the user supplied a confirmed user
+  store, let the preview inherit only its promoted
+  `preferred.workspace_layout` profile; never treat detection as a global
+  preference.
 - Manage an existing project or existing Skills: run `doctor`, then preview
   `adopt`. If the user already named Skills that ArchMarshal must not manage,
   preview `adopt` with repeatable exact `--exclude-skill` paths before any
   broad inventory or doctor pass. Inspect normal and project-specific Skill locations; supply every
   nonstandard project-relative location with repeatable `--skill-root`.
   Preserve the built-in verified backup requirement.
+- Respect the user's project layout before proposing ArchMarshal defaults.
+  Report `layout.foundation`, `quality`, `decision`, `source`,
+  `requires_confirmation`, every effective mapped path, and field provenance.
+  A safe nonstandard layout is reasonable. Objective risks receive suggestions
+  only; traversal, linked paths, VCS/cache/dependency/runtime boundaries, and
+  file conflicts block apply.
 - Start governed work: use `start` after inspecting whether initialization or
   adoption is still required.
 - Finish work: use `end` with `quick`, `standard`, or `reproducible` evidence
@@ -73,8 +82,11 @@ collision, handling partial state, or making any security claim.
 2. Summarize proposed paths, backup scope, activation state, expected HEAD,
    conflicts, effective Skill roots, every `prepared_management_packages`
    directory, every excluded package, preserved artifact boundaries, complete
-   backup coverage, and whether any existing bytes could change. Do not describe
-   a package as accepted for management before showing this boundary.
+   backup coverage, effective layout and naming policy, layout evidence and
+   recommendations, and whether any existing bytes could change. Do not
+   describe a package as accepted for management before showing this boundary.
+   Project configuration has priority over current explicit choices, then a
+   confirmed user profile, then read-only detection, then defaults.
 3. If `boundary_confirmation_required` is true and the user has not already
    chosen a policy, ask whether to preserve the reported cache/repository
    artifacts and manage the remaining Skill source, or exclude that entire
@@ -83,6 +95,7 @@ collision, handling partial state, or making any security claim.
 4. Apply only when the user's request authorizes that concrete change and every
    required exact plan/HEAD token is available. Ask when destination, evidence
    depth, replacement, or scope would materially change the result.
+   A detected layout requires confirmation through the exact reviewed plan.
 5. Save complete reviewed preview JSON in a system temporary directory or a
    user-approved path outside the project. Do not add plan files to the project
    merely to drive apply.
@@ -105,6 +118,9 @@ collision, handling partial state, or making any security claim.
 - Preserve `.git`, `.hg`, `.svn`, caches, virtual environments, dependency
   trees, and build/runtime artifacts reported by the preview. They are outside
   the managed package fingerprint and backup. Do not delete or move them.
+- Treat nested Skill packages as module boundaries. An excluded child Skill
+  must not contribute bytes to a managed parent package fingerprint, backup,
+  index, or learning evidence.
 - Treat a collision, linked/reparse component, stale plan, stale HEAD, changed
   source, corrupt state, or uncertain ownership as a stop condition.
 - Preserve interrupted partial output for inspection; never retry by clearing
@@ -116,6 +132,9 @@ collision, handling partial state, or making any security claim.
 - Keep global Skills lightweight. Promote reusable project behavior into the
   isolated user store only from repeated committed evidence and an exact
   accepted decision.
+- Promote a layout habit only when the same explicitly confirmed profile is
+  evidenced in multiple projects. Never learn a detected or single-project
+  layout automatically.
 - State the current threat model honestly: static links/reparse points and
   cooperative concurrency are covered; hostile same-permission ancestor
   replacement is not handle-relative yet.

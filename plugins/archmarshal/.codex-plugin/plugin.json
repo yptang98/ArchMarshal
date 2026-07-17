@@ -1,6 +1,6 @@
 {
   "name": "archmarshal",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Codex-native, safety-first governance for projects, Skills, memory, and reproducible closeouts.",
   "author": {
     "name": "yptang98",
@@ -14,12 +14,13 @@
   "interface": {
     "displayName": "ArchMarshal",
     "shortDescription": "Safely govern Codex projects and reusable Skills.",
-    "longDescription": "ArchMarshal is a Codex-native management plugin that organizes project and Skill lifecycles without rewriting existing user content. It provides review-first adoption, bounded health diagnostics, date/tag project organization, evidence-based closeout, and deliberate reusable-Skill learning.",
+    "longDescription": "ArchMarshal is a Codex-native management plugin that preserves confirmed user layouts while organizing project and Skill lifecycles without rewriting existing content. It provides review-first adoption, bounded health diagnostics, date/tag project organization, evidence-based closeout, and deliberate reusable-Skill and habit learning.",
     "developerName": "yptang98",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
     "defaultPrompt": [
       "Safely organize this project and its Skills with ArchMarshal.",
+      "Preserve my existing project layout and show every mapped path before adoption.",
       "Show every Skill directory ArchMarshal would manage and exclude the packages I name.",
       "Audit this project's ArchMarshal health without changing files.",
       "Close this project with reproducible evidence and reusable Skill candidates.",

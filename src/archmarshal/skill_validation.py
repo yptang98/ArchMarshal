@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -12,8 +14,17 @@ from .safety import is_link_or_reparse
 MAX_SKILL_MD_BYTES = 512 * 1024
 MAX_SKILL_MD_LINES = 500
 MAX_DESCRIPTION_LENGTH = 2048
+MAX_LICENSE_LENGTH = 1024
+MAX_ALLOWED_TOOLS_LENGTH = 4096
+MAX_ALLOWED_TOOL_COUNT = 64
+MAX_METADATA_BYTES = 16 * 1024
+MAX_METADATA_DEPTH = 4
+MAX_METADATA_ITEMS = 128
+MAX_METADATA_KEY_LENGTH = 128
+MAX_METADATA_STRING_LENGTH = 2048
 SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-ALLOWED_FRONTMATTER_FIELDS = {"name", "description"}
+COMPATIBILITY_FRONTMATTER_FIELDS = {"license", "allowed-tools", "metadata"}
+ALLOWED_FRONTMATTER_FIELDS = {"name", "description", *COMPATIBILITY_FRONTMATTER_FIELDS}
 
 
 def validate_skill_package(skill_dir: Path, *, enforce_folder_name: bool = True) -> dict[str, Any]:
@@ -29,7 +40,7 @@ def validate_skill_package(skill_dir: Path, *, enforce_folder_name: bool = True)
         return {
             "format": "archmarshal-skill-validation-v1",
             "valid": False,
-            "frontmatter": {"name": None, "description": None},
+            "frontmatter": {"name": None, "description": None, "extensions": []},
             "resources": {
                 resource_name: {"present": False, "referenced": False}
                 for resource_name in ("scripts", "references", "assets")
@@ -91,7 +102,9 @@ def validate_skill_package(skill_dir: Path, *, enforce_folder_name: bool = True)
         )
     if not isinstance(description, str) or not description.strip():
         errors.append(
-            _issue("skill_description_missing", "Skill frontmatter requires a non-empty description.")
+            _issue(
+                "skill_description_missing", "Skill frontmatter requires a non-empty description."
+            )
         )
     elif len(description) > MAX_DESCRIPTION_LENGTH:
         errors.append(
@@ -146,7 +159,9 @@ def validate_skill_package(skill_dir: Path, *, enforce_folder_name: bool = True)
     elif agents_file_exists or agents_file_linked:
         if agents_file_linked or not agents_file.is_file():
             errors.append(
-                _issue("skill_agents_metadata_invalid", "agents/openai.yaml must be a regular file.")
+                _issue(
+                    "skill_agents_metadata_invalid", "agents/openai.yaml must be a regular file."
+                )
             )
             agents_metadata["valid"] = False
         else:
@@ -170,6 +185,7 @@ def validate_skill_package(skill_dir: Path, *, enforce_folder_name: bool = True)
         "frontmatter": {
             "name": name if isinstance(name, str) else None,
             "description": description if isinstance(description, str) else None,
+            "extensions": sorted(COMPATIBILITY_FRONTMATTER_FIELDS & set(frontmatter)),
         },
         "resources": resources,
         "agents_metadata": agents_metadata,
@@ -183,8 +199,12 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], list[dict[str, str]]]
     errors: list[dict[str, str]] = []
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
-        return {}, [_issue("skill_frontmatter_missing", "SKILL.md must start with YAML frontmatter.")]
-    closing = next((index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"), None)
+        return {}, [
+            _issue("skill_frontmatter_missing", "SKILL.md must start with YAML frontmatter.")
+        ]
+    closing = next(
+        (index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"), None
+    )
     if closing is None:
         return {}, [_issue("skill_frontmatter_unclosed", "SKILL.md frontmatter is not closed.")]
     try:
@@ -198,10 +218,91 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], list[dict[str, str]]]
         errors.append(
             _issue(
                 "skill_frontmatter_extra_fields",
-                "Only name and description are allowed in SKILL.md frontmatter: " + ", ".join(unknown),
+                "Unsupported SKILL.md frontmatter fields: "
+                + ", ".join(unknown)
+                + ". Supported fields are: "
+                + ", ".join(sorted(ALLOWED_FRONTMATTER_FIELDS)),
             )
         )
+    errors.extend(_validate_compatibility_frontmatter(data))
     return data, errors
+
+
+def _validate_compatibility_frontmatter(data: dict[str, Any]) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    if "license" in data:
+        license_value = data["license"]
+        if (
+            not isinstance(license_value, str)
+            or not license_value.strip()
+            or len(license_value) > MAX_LICENSE_LENGTH
+        ):
+            errors.append(
+                _issue(
+                    "skill_frontmatter_license_invalid",
+                    f"Skill frontmatter license must be a non-empty string of at most {MAX_LICENSE_LENGTH} characters.",
+                )
+            )
+    if "allowed-tools" in data and not _allowed_tools_valid(data["allowed-tools"]):
+        errors.append(
+            _issue(
+                "skill_frontmatter_allowed_tools_invalid",
+                "Skill frontmatter allowed-tools must be a non-empty string or a bounded list of non-empty strings.",
+            )
+        )
+    if "metadata" in data and not _metadata_valid(data["metadata"]):
+        errors.append(
+            _issue(
+                "skill_frontmatter_metadata_invalid",
+                "Skill frontmatter metadata must be a bounded mapping of portable scalar, list, and mapping values.",
+            )
+        )
+    return errors
+
+
+def _allowed_tools_valid(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip()) and len(value) <= MAX_ALLOWED_TOOLS_LENGTH
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_ALLOWED_TOOL_COUNT:
+        return False
+    if not all(isinstance(item, str) and item.strip() for item in value):
+        return False
+    return sum(len(item) for item in value) <= MAX_ALLOWED_TOOLS_LENGTH
+
+
+def _metadata_valid(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    budget = [0]
+    if not _portable_metadata_value(value, depth=0, budget=budget):
+        return False
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return len(encoded.encode("utf-8")) <= MAX_METADATA_BYTES
+
+
+def _portable_metadata_value(value: object, *, depth: int, budget: list[int]) -> bool:
+    budget[0] += 1
+    if budget[0] > MAX_METADATA_ITEMS or depth > MAX_METADATA_DEPTH:
+        return False
+    if value is None or isinstance(value, bool):
+        return True
+    if isinstance(value, str):
+        return len(value) <= MAX_METADATA_STRING_LENGTH
+    if isinstance(value, int):
+        return -(2**63) <= value <= 2**63 - 1
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, list):
+        return all(_portable_metadata_value(item, depth=depth + 1, budget=budget) for item in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str)
+            and bool(key.strip())
+            and len(key) <= MAX_METADATA_KEY_LENGTH
+            and _portable_metadata_value(item, depth=depth + 1, budget=budget)
+            for key, item in value.items()
+        )
+    return False
 
 
 def _issue(code: str, message: str) -> dict[str, str]:

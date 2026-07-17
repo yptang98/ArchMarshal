@@ -6,7 +6,7 @@ import os
 import platform
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,7 @@ from .safety import (
     sha256_file,
     unique_path,
 )
+from .workspace_layout import load_workspace_layout
 from .workspace_lock import workspace_mutation_lock
 
 CLOSEOUT_LEVELS = ("quick", "standard", "reproducible")
@@ -50,6 +51,7 @@ def record_closeout(
     expected_plan: str | None = None,
 ) -> dict[str, Any]:
     root_path = require_workspace_root(root)
+    layout = load_workspace_layout(root_path)
     if level not in CLOSEOUT_LEVELS:
         raise ValueError(f"level must be one of: {', '.join(CLOSEOUT_LEVELS)}")
     shell = shell or ("powershell" if os.name == "nt" else "bash")
@@ -71,7 +73,7 @@ def record_closeout(
         used_skills=used_skills,
     )
     script_errors.extend(sensitive_errors)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(layout.effective_timezone)
     topic = _human_slug(summary, fallback="project-closeout")[:48]
     git = _git_snapshot(root_path)
     environment = _environment_snapshot(root_path)
@@ -121,7 +123,46 @@ def record_closeout(
     }
     files = _session_files(session, shell)
     session_key = _session_intent_digest(session, shell)[:12]
-    base_dir = root_path / ".agent" / "history" / now.strftime("%Y/%m/%d")
+    if layout.preserves_names:
+        return {
+            "tool": "archmarshal",
+            "stage": "record_closeout",
+            "root": str(root_path),
+            "mode": "requires_user_input",
+            "level": level,
+            "session_dir": None,
+            "layout_profile": layout.to_dict(),
+            "workspace_owned": workspace_owned,
+            "evidence_ready": evidence_ready,
+            "recording_ready": False,
+            "reproducibility_ready": False,
+            "reproduction_evidence_ready": evidence_ready and workspace_owned,
+            "execution_validated": False,
+            "reproducibility_gaps": readiness_gaps,
+            "recording_blockers": [
+                *recording_blockers,
+                "The confirmed preserve naming policy requires an explicit closeout directory name.",
+            ],
+            "script_errors": script_errors,
+            "session_preview": session,
+            "plan_digest": None,
+            "apply_precondition": "Provide an explicit reviewed filename before apply.",
+            "operations": [],
+            "notes": [
+                "No project file was written.",
+                "ArchMarshal did not guess a name because the workspace naming strategy is preserve.",
+            ],
+        }
+    base_dir = layout.save_dir(
+        "history",
+        now,
+        default_partition="YYYY/MM/DD",
+    )
+    # The directory name is intentionally derived only from reviewed session
+    # intent.  The closeout API replays a plan digest without accepting a
+    # reviewed timestamp, so adding wall-clock seconds here would make every
+    # safe preview impossible to apply.  Date partitioning still uses the
+    # configured effective timezone.
     session_dir = unique_path(base_dir / f"{topic}-{level}-{session_key}")
     ensure_managed_path(root_path, session_dir, purpose="Closeout session directory")
     planned_records = _planned_session_records(files, script_records, level=level)
@@ -175,6 +216,7 @@ def record_closeout(
         "mode": "propose_only",
         "level": level,
         "session_dir": session_dir.relative_to(root_path).as_posix(),
+        "layout_profile": layout.to_dict(),
         "workspace_owned": workspace_owned,
         "evidence_ready": evidence_ready,
         "recording_ready": evidence_ready and workspace_owned and not script_errors,
@@ -189,7 +231,7 @@ def record_closeout(
         "apply_precondition": "--expect-plan <plan_digest>",
         "operations": operations,
         "notes": [
-            "Closeout writes only to a new date-organized session directory.",
+            "Closeout writes only to a new session directory selected by the confirmed workspace layout.",
             "No existing project or skill file is overwritten, moved, renamed, or deleted.",
             "Environment variables are not captured; known inline-secret patterns are blocked.",
             "User-selected summaries, steps, and script snapshots may still contain sensitive content and must be reviewed.",
@@ -432,8 +474,7 @@ def _session_commit_bytes(recorded_on: str, records: list[dict[str, Any]]) -> by
         "source_mutation": False,
     }
     content = (
-        json.dumps(commit, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        + "\n"
+        json.dumps(commit, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode("utf-8")
     if len(content) > MAX_SESSION_COMMIT_BYTES:
         raise ArchMarshalError(
@@ -453,8 +494,10 @@ def _safe_session_relative(value: object) -> str:
 
 
 def _is_sha256(value: object) -> bool:
-    return isinstance(value, str) and len(value) == 64 and all(
-        character in "0123456789abcdef" for character in value
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
     )
 
 
@@ -606,7 +649,9 @@ def _run_script(commands: list[str], shell: str) -> str:
     warning = "Generated reference script. Review every command before running."
     if shell == "powershell":
         return "\n".join([f"# {warning}", '$ErrorActionPreference = "Stop"', "", *commands, ""])
-    return "\n".join(["#!/usr/bin/env bash", f"# {warning}", "set -euo pipefail", "", *commands, ""])
+    return "\n".join(
+        ["#!/usr/bin/env bash", f"# {warning}", "set -euo pipefail", "", *commands, ""]
+    )
 
 
 def _script_records(root: Path, scripts: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -628,7 +673,9 @@ def _script_records(root: Path, scripts: list[str]) -> tuple[list[dict[str, Any]
             continue
         size = candidate.stat().st_size
         if size > MAX_SNAPSHOT_BYTES:
-            errors.append(f"Script exceeds the {MAX_SNAPSHOT_BYTES}-byte snapshot limit: {relative}")
+            errors.append(
+                f"Script exceeds the {MAX_SNAPSHOT_BYTES}-byte snapshot limit: {relative}"
+            )
             continue
         suffix = hashlib.sha256(relative.encode("utf-8")).hexdigest()[:8]
         records.append(
@@ -696,7 +743,8 @@ def _is_environment_reference(value: str) -> bool:
     normalized = value.strip("\"'")
     return (
         normalized.startswith(("$", "%", "${", "$env:"))
-        or normalized.endswith("%") and normalized.startswith("%")
+        or normalized.endswith("%")
+        and normalized.startswith("%")
     )
 
 
@@ -725,7 +773,13 @@ def _git_snapshot(root: Path) -> dict[str, Any]:
 
 def _environment_snapshot(root: Path) -> dict[str, Any]:
     dependency_files = []
-    for name in ("pyproject.toml", "requirements.txt", "uv.lock", "poetry.lock", "package-lock.json"):
+    for name in (
+        "pyproject.toml",
+        "requirements.txt",
+        "uv.lock",
+        "poetry.lock",
+        "package-lock.json",
+    ):
         path = root / name
         if path.is_file():
             dependency_files.append(

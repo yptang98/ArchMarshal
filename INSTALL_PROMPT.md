@@ -11,7 +11,7 @@ This is a Codex plugin installation task, not a project-governance task. During 
 
 Complete the work yourself under these safety constraints; do not hand the steps back to me:
 
-1. Confirm that `codex plugin`, Git, and Python 3.10–3.13 are available. Reuse existing Git/GitHub authentication. Never request, print, copy, or write tokens, passwords, cookies, SSH private keys, or the complete Codex configuration.
+1. Confirm that `codex plugin`, Git, and Python 3.10-3.13 are available. Reuse existing Git/GitHub authentication. Never request, print, copy, or write tokens, passwords, cookies, SSH private keys, or the complete Codex configuration.
 2. Resolve the remote default branch HEAD to a full 40-character commit SHA, for example with `git ls-remote`, and confirm that GitHub Actions CI succeeded for that exact SHA. Install only that full SHA. Do not install an unpinned `main` branch or use a documentation placeholder.
 3. Before changing anything, inspect `codex plugin marketplace list --json` and `codex plugin list --available --json`. The marketplace must be uniquely named `archmarshal`, and the plugin must be `archmarshal@archmarshal`. If the same name points elsewhere, its origin is uncertain, or multiple candidates exist, stop without changing anything.
 4. For a first installation, run `codex plugin marketplace add yptang98/ArchMarshal --ref` with the resolved and verified SHA from step 2 as the argument immediately after `--ref`. Then run:

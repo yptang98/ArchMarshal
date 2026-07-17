@@ -1,6 +1,6 @@
 # Product Readiness
 
-ArchMarshal 0.15 is a safety-hardened alpha, not yet a stable product. This page
+ArchMarshal 0.16 is a safety-hardened alpha, not yet a stable product. This page
 separates implemented behavior from design intent so users can decide what to
 trust.
 

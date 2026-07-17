@@ -1,4 +1,4 @@
 interface:
   display_name: "Manage with ArchMarshal"
-  short_description: "Safely govern projects and reusable Skills"
-  default_prompt: "Use $manage-agent-workspace to safely organize this project and its Skills."
+  short_description: "Preserve layouts; govern projects and Skills"
+  default_prompt: "Use $manage-agent-workspace to preserve this project's confirmed layout while safely organizing its files and Skills."

@@ -23,6 +23,7 @@ from .safety import (
 )
 from .session import verify_committed_session
 from .skill_index import load_skill_index, skill_index_exclusions
+from .workspace_layout import WorkspaceLayout, load_workspace_layout
 from .workspace_lock import workspace_mutation_lock
 
 LEARNING_FORMAT = "archmarshal-learning-candidates-v3"
@@ -71,13 +72,20 @@ def learn_from_projects(
     skill_metadata: dict[tuple[str, str, str], dict[str, Any]] = {}
     excluded_sources_by_project: dict[str, set[str]] = {}
     excluded_skill_keys_by_project: dict[str, set[tuple[str, str]]] = {}
+    layouts: dict[str, WorkspaceLayout] = {}
+    layout_observations: dict[str, dict[str, Any]] = {}
     for root in project_roots:
+        layout = load_workspace_layout(root)
+        layouts[str(root)] = layout
         excluded_sources = set(skill_index_exclusions(root))
         excluded_sources_by_project[str(root)] = excluded_sources
         loaded_index = load_skill_index(root)
         excluded_skill_keys: set[tuple[str, str]] = set()
         for record in (loaded_index.get("generation") or {}).get("skills", []):
-            if not isinstance(record, dict) or str(record.get("source") or "") not in excluded_sources:
+            if (
+                not isinstance(record, dict)
+                or str(record.get("source") or "") not in excluded_sources
+            ):
                 continue
             manifest = record.get("manifest")
             source = manifest.get("source") if isinstance(manifest, dict) else None
@@ -90,9 +98,7 @@ def learn_from_projects(
             skill_id = str(skill.get("id") or "")
             if skill_id:
                 implementation_hash = str(
-                    skill.get("_current_package_sha256")
-                    or skill.get("_current_skill_sha256")
-                    or ""
+                    skill.get("_current_package_sha256") or skill.get("_current_skill_sha256") or ""
                 )
                 if not implementation_hash:
                     seed = f"{root}:{skill.get('_skill_dir')}"
@@ -105,9 +111,29 @@ def learn_from_projects(
                     "workspace_id": workspace_id(root),
                     "implementation_sha256": implementation_hash,
                 }
-        loaded_sessions, legacy_count = _load_sessions(root)
+        loaded_sessions, legacy_count = _load_sessions(root, layout)
         sessions.extend(loaded_sessions)
         legacy_unverified_session_count += legacy_count
+        confirmed_profile = _confirmed_workspace_layout_profile(root)
+        if confirmed_profile is not None and loaded_sessions:
+            digest = _canonical_digest(confirmed_profile)
+            observation = layout_observations.setdefault(
+                digest,
+                {
+                    "profile": confirmed_profile,
+                    "workspace_ids": set(),
+                    "evidence_refs": [],
+                },
+            )
+            observation["workspace_ids"].add(workspace_id(root))
+            observation["evidence_refs"].extend(
+                {
+                    "workspace_id": workspace_id(root),
+                    "session": session["_session_path"],
+                    "commit_sha256": session.get("_session_commit_sha256"),
+                }
+                for session in loaded_sessions
+            )
 
     skill_observations: dict[tuple[str, str], set[str]] = {}
     skill_details: dict[tuple[str, str], dict[str, Any]] = {}
@@ -148,16 +174,12 @@ def learn_from_projects(
             implementation = usage.get("package_sha256")
             source_path = usage.get("path")
             if (
-                (
-                    isinstance(source_path, str)
-                    and source_path in excluded_sources_by_project.get(project, set())
-                )
-                or (
-                    isinstance(skill_id, str)
-                    and isinstance(implementation, str)
-                    and (skill_id, implementation)
-                    in excluded_skill_keys_by_project.get(project, set())
-                )
+                isinstance(source_path, str)
+                and source_path in excluded_sources_by_project.get(project, set())
+            ) or (
+                isinstance(skill_id, str)
+                and isinstance(implementation, str)
+                and (skill_id, implementation) in excluded_skill_keys_by_project.get(project, set())
             ):
                 excluded_skill_usage_count += 1
                 continue
@@ -271,6 +293,32 @@ def learn_from_projects(
         )[:50]
         if len(observed_sessions) >= 2
     ]
+    for digest, observation in sorted(layout_observations.items()):
+        workspace_ids = sorted(observation["workspace_ids"])
+        if len(workspace_ids) < 2:
+            continue
+        evidence_refs = sorted(
+            observation["evidence_refs"],
+            key=lambda item: (str(item["workspace_id"]), str(item["session"])),
+        )
+        preference_candidates.append(
+            {
+                "candidate_id": f"candidate.preference.layout.{digest[:24]}",
+                "candidate_type": "preference",
+                "key": "preferred.workspace_layout",
+                "value": {
+                    "confirmed": True,
+                    "profile": observation["profile"],
+                },
+                "observed_projects": len(workspace_ids),
+                "observed_sessions": len(evidence_refs),
+                "evidence_refs": evidence_refs,
+                "status": "candidate",
+                "promotion_policy": "human_review_required",
+                "reason": "The same explicitly confirmed layout was used in multiple projects.",
+            }
+        )
+    preference_candidates = preference_candidates[:50]
     profile = {
         "format": LEARNING_FORMAT,
         "generated_at": generated_at.isoformat(),
@@ -333,6 +381,7 @@ def learn_from_projects(
         "mode": "propose_only",
         "primary_root": str(primary),
         "source_projects": [str(item) for item in project_roots],
+        "source_layouts": {str(item): layouts[str(item)].to_dict() for item in project_roots},
         "generated_at": generated_at.isoformat(),
         "target": target_relative,
         "candidate_pack_sha256": profile_digest,
@@ -368,6 +417,7 @@ def learn_from_projects(
             "Learning reads only ArchMarshal session manifests, not raw project history.",
             "Candidates never mutate existing skills or global policy.",
             "Skill packages in the current exact exclusion policy do not contribute learning candidates.",
+            "Only explicitly confirmed layouts repeated across multiple projects can become layout preference candidates; detected layouts are ignored.",
             "Promotion to a shared skill or user preference requires explicit human review.",
             "Usage lists are capped so the global layer can remain lightweight.",
             "Legacy v1 sessions are counted but remain untrusted until an explicit migration exists.",
@@ -386,6 +436,27 @@ def learn_from_projects(
         payload["mode"] = "candidate_pack_created"
         payload["created"] = pack_dir.relative_to(primary).as_posix()
     return payload
+
+
+def _confirmed_workspace_layout_profile(root: Path) -> dict[str, Any] | None:
+    workspace_file = root / ".agent" / "workspace.yaml"
+    loaded = load_yaml_safe(workspace_file)
+    if loaded.error or not isinstance(loaded.data, dict):
+        return None
+    metadata = loaded.data.get("layout")
+    if not isinstance(metadata, dict) or metadata.get("confirmed") is not True:
+        return None
+    save_paths = loaded.data.get("save_paths")
+    naming = loaded.data.get("naming")
+    paths = loaded.data.get("paths")
+    if not isinstance(save_paths, dict) or not isinstance(naming, dict):
+        return None
+    skill_roots = paths.get("source_skill_roots", []) if isinstance(paths, dict) else []
+    return {
+        "save_paths": save_paths,
+        "naming": naming,
+        "skill_roots": list(skill_roots) if isinstance(skill_roots, list) else [],
+    }
 
 
 def verify_learning_pack(pack_dir: Path | str) -> dict[str, Any]:
@@ -413,7 +484,9 @@ def verify_learning_pack(pack_dir: Path | str) -> dict[str, Any]:
             raise ValueError(loaded_marker.error)
         commit = json.loads(loaded_marker.data.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-        raise ArchMarshalError("learning_pack_invalid", "Candidate commit marker is invalid.") from exc
+        raise ArchMarshalError(
+            "learning_pack_invalid", "Candidate commit marker is invalid."
+        ) from exc
     result = load_yaml_safe(candidate_file)
     if (
         not isinstance(commit, dict)
@@ -457,8 +530,12 @@ def verify_learning_pack(pack_dir: Path | str) -> dict[str, Any]:
     }
 
 
-def _load_sessions(root: Path) -> tuple[list[dict[str, Any]], int]:
-    history = root / ".agent" / "history"
+def _load_sessions(
+    root: Path,
+    layout: WorkspaceLayout | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    active_layout = layout or load_workspace_layout(root)
+    history = active_layout.configured_dir("history")
     if not history.exists():
         return [], 0
     sessions: list[dict[str, Any]] = []
@@ -491,9 +568,7 @@ def _load_sessions(root: Path) -> tuple[list[dict[str, Any]], int]:
             {
                 **session,
                 "_project_root": str(root),
-                "_session_path": (marker.parent / "session.yaml")
-                .relative_to(root)
-                .as_posix(),
+                "_session_path": (marker.parent / "session.yaml").relative_to(root).as_posix(),
                 "_session_commit_sha256": verified["commit_sha256"],
             }
         )
@@ -502,9 +577,7 @@ def _load_sessions(root: Path) -> tuple[list[dict[str, Any]], int]:
 
 def _canonical_digest(value: object) -> str:
     return hashlib.sha256(
-        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
-            "utf-8"
-        )
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
 
 
@@ -547,9 +620,7 @@ def _reviewed_pack_dir(
     relative = PurePosixPath(target)
     if relative.is_absolute() or ".." in relative.parts:
         raise ArchMarshalError("learning_plan_invalid", "Saved learning target is not relative.")
-    expected_parent = PurePosixPath(
-        ".agent/inbox/learning"
-    ) / generated_at.strftime("%Y/%m/%d")
+    expected_parent = PurePosixPath(".agent/inbox/learning") / generated_at.strftime("%Y/%m/%d")
     expected_name = f"{generated_at.strftime('%H%M%S')}-{profile_digest[:12]}"
     suffix = relative.name.removeprefix(expected_name)
     if (
@@ -574,7 +645,9 @@ def _verify_reviewed_learning_plan(
     *,
     expected_plan: str,
 ) -> None:
-    actual = _canonical_digest({key: value for key, value in reviewed.items() if key != "plan_digest"})
+    actual = _canonical_digest(
+        {key: value for key, value in reviewed.items() if key != "plan_digest"}
+    )
     if reviewed.get("plan_digest") != actual or expected_plan != actual:
         raise ArchMarshalError(
             "learning_plan_digest_mismatch",

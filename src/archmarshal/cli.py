@@ -65,7 +65,7 @@ def _main_impl(argv: list[str] | None = None) -> int:
     _add_adoption_arguments(init_parser)
     start_parser = _add_root_command(subparsers, "start", "Start ArchMarshal project governance.")
     _add_adoption_arguments(start_parser)
-    _add_resolution_arguments(start_parser, task_required=False)
+    _add_resolution_arguments(start_parser, task_required=False, include_user_store=False)
     _add_root_command(
         subparsers,
         "adoption-status",
@@ -622,6 +622,8 @@ def _main_impl(argv: list[str] | None = None) -> int:
             skill_roots=args.skill_root,
             exclude_skills=args.exclude_skill,
             manage_skills=args.manage_skill,
+            user_store=args.user_store,
+            **_layout_arguments(args),
         )
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
@@ -637,6 +639,8 @@ def _main_impl(argv: list[str] | None = None) -> int:
             skill_roots=args.skill_root,
             exclude_skills=args.exclude_skill,
             manage_skills=args.manage_skill,
+            user_store=args.user_store,
+            **_layout_arguments(args),
         )
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
@@ -654,6 +658,8 @@ def _main_impl(argv: list[str] | None = None) -> int:
                 skill_roots=args.skill_root,
                 exclude_skills=args.exclude_skill,
                 manage_skills=args.manage_skill,
+                user_store=args.user_store,
+                **_layout_arguments(args),
             )
             payload = start_workspace(
                 root,
@@ -664,6 +670,7 @@ def _main_impl(argv: list[str] | None = None) -> int:
                 skill_roots=args.skill_root,
                 exclude_skills=args.exclude_skill,
                 manage_skills=args.manage_skill,
+                **_layout_arguments(args),
             )
             payload["adoption"] = adoption
             _mark_start_apply(payload, adoption)
@@ -682,6 +689,7 @@ def _main_impl(argv: list[str] | None = None) -> int:
                     skill_roots=args.skill_root,
                     exclude_skills=args.exclude_skill,
                     manage_skills=args.manage_skill,
+                    **_layout_arguments(args),
                 ),
                 args.pretty,
             )
@@ -778,7 +786,7 @@ def _start_main_impl(argv: list[str] | None = None) -> int:
     parser.add_argument("root", nargs="?", default=".", help="Workspace root to inspect.")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
     _add_adoption_arguments(parser)
-    _add_resolution_arguments(parser, task_required=False)
+    _add_resolution_arguments(parser, task_required=False, include_user_store=False)
     args = parser.parse_args(argv)
     from .adoption import adopt_workspace
     from .lifecycle import start_workspace
@@ -793,6 +801,7 @@ def _start_main_impl(argv: list[str] | None = None) -> int:
         skill_roots=args.skill_root,
         exclude_skills=args.exclude_skill,
         manage_skills=args.manage_skill,
+        **_layout_arguments(args),
     )
     if args.apply:
         payload["adoption"] = adopt_workspace(
@@ -804,6 +813,8 @@ def _start_main_impl(argv: list[str] | None = None) -> int:
             skill_roots=args.skill_root,
             exclude_skills=args.exclude_skill,
             manage_skills=args.manage_skill,
+            user_store=args.user_store,
+            **_layout_arguments(args),
         )
         payload = start_workspace(
             root,
@@ -814,6 +825,7 @@ def _start_main_impl(argv: list[str] | None = None) -> int:
             skill_roots=args.skill_root,
             exclude_skills=args.exclude_skill,
             manage_skills=args.manage_skill,
+            **_layout_arguments(args),
         ) | {"adoption": payload["adoption"]}
         _mark_start_apply(payload, payload["adoption"])
         if payload["adoption"]["mode"] in {
@@ -920,12 +932,48 @@ def _add_adoption_arguments(parser: argparse.ArgumentParser) -> None:
         default="managed",
         help="Back up managed metadata/skills (default) or the full project before adoption.",
     )
+    parser.add_argument(
+        "--save-path",
+        action="append",
+        default=[],
+        help=(
+            "Confirmed project-relative destination as kind=path. Kinds: checkpoints, "
+            "reports, plans, history, knowledge, artifacts, skills.project, "
+            "skills.generated. Repeat as needed."
+        ),
+    )
+    parser.add_argument(
+        "--naming-strategy",
+        choices=("time_topic_kind", "date_topic_kind", "topic_kind", "preserve"),
+        help="Confirmed naming strategy for newly created project-management files.",
+    )
+    parser.add_argument(
+        "--timezone",
+        help="UTC, local, or an IANA timezone such as Asia/Shanghai.",
+    )
+    parser.add_argument(
+        "--date-partition",
+        choices=("none", "YYYY", "YYYY/MM", "YYYY/MM/DD"),
+        help="Confirmed date-directory partition for newly recorded project files.",
+    )
+    parser.add_argument(
+        "--timestamp-format",
+        help="Filename-only strftime pattern, for example %%Y%%m%%d-%%H%%M%%S.",
+    )
+    parser.add_argument(
+        "--user-store",
+        help=(
+            "Optional isolated ArchMarshal user store. Only a promoted, explicitly "
+            "confirmed preferred.workspace_layout profile may influence adoption."
+        ),
+    )
 
 
 def _add_resolution_arguments(
     parser: argparse.ArgumentParser,
     *,
     task_required: bool,
+    include_user_store: bool = True,
 ) -> None:
     parser.add_argument(
         "--task",
@@ -933,10 +981,21 @@ def _add_resolution_arguments(
         default=None,
         help="Task description used for read-only Skill and context resolution.",
     )
-    parser.add_argument(
-        "--user-store",
-        help="Optional isolated ArchMarshal user Skill store to resolve alongside the project.",
-    )
+    if include_user_store:
+        parser.add_argument(
+            "--user-store",
+            help="Optional isolated ArchMarshal user Skill store to resolve alongside the project.",
+        )
+
+
+def _layout_arguments(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "save_paths": list(args.save_path),
+        "naming_strategy": args.naming_strategy,
+        "naming_timezone": args.timezone,
+        "date_partition": args.date_partition,
+        "timestamp_format": args.timestamp_format,
+    }
 
 
 def _add_user_store_plan_arguments(

@@ -70,7 +70,8 @@ def plan_skill_index(
     loaded = load_skill_index(root)
     expected_head = loaded["head"]
     previous_records = {
-        str(record["source"]): record for record in (loaded.get("generation") or {}).get("skills", [])
+        str(record["source"]): record
+        for record in (loaded.get("generation") or {}).get("skills", [])
     }
     previous_exclusions = _generation_exclusions(loaded.get("generation"))
     desired_exclusions = (
@@ -849,9 +850,7 @@ def _validate_planned_transition(
             details={"parent": generation.get("parent"), "expected_head": expected_head},
         )
     parent_chain = _load_history_chain(root, expected_head) if expected_head else []
-    _validate_history_transitions(
-        [{"digest": digest, "generation": generation}, *parent_chain]
-    )
+    _validate_history_transitions([{"digest": digest, "generation": generation}, *parent_chain])
 
 
 def _validate_history_transitions(chain: list[dict[str, Any]]) -> None:
@@ -916,9 +915,7 @@ def _validate_history_transitions(chain: list[dict[str, Any]]) -> None:
                     "Skill index rollback snapshot does not match its declared target.",
                     details={"digest": item["digest"], "target": target},
                 )
-            if child_exclusions != _generation_exclusions(
-                chain[target_index]["generation"]
-            ):
+            if child_exclusions != _generation_exclusions(chain[target_index]["generation"]):
                 raise ArchMarshalError(
                     "skill_index_history_invalid",
                     "Skill index rollback selection does not match its declared target.",
@@ -1178,7 +1175,8 @@ def _validate_generation(generation: object, head: str) -> None:
                     "Skill index generation contains an invalid rollback record.",
                 )
         elif (
-            kind not in {
+            kind
+            not in {
                 "initialized",
                 "added",
                 "modified",
@@ -1229,9 +1227,7 @@ def _validate_generation(generation: object, head: str) -> None:
         skill_dir = source_metadata.get("skill_dir") if isinstance(source_metadata, dict) else None
         skill_md = source_metadata.get("skill_md") if isinstance(source_metadata, dict) else None
         package_hash = (
-            source_metadata.get("package_sha256")
-            if isinstance(source_metadata, dict)
-            else None
+            source_metadata.get("package_sha256") if isinstance(source_metadata, dict) else None
         )
         if (
             skill_dir != source
@@ -1257,14 +1253,28 @@ def _validate_generation(generation: object, head: str) -> None:
         ) from exc
 
 
+def _source_is_nested(candidate: str, parent: str) -> bool:
+    candidate_parts = () if candidate == "." else PurePosixPath(candidate).parts
+    parent_parts = () if parent == "." else PurePosixPath(parent).parts
+    return (
+        candidate != parent
+        and len(candidate_parts) > len(parent_parts)
+        and candidate_parts[: len(parent_parts)] == parent_parts
+    )
+
+
 def _source_preconditions(
     records: list[dict[str, Any]],
     *,
     include_removed: bool,
     excluded_packages: list[str] | None = None,
-) -> list[dict[str, str]]:
-    preconditions: list[dict[str, str]] = []
+) -> list[dict[str, Any]]:
+    preconditions: list[dict[str, Any]] = []
     excluded_keys = {_portable_source_key(item) for item in (excluded_packages or [])}
+    package_boundaries = {
+        str(record["source"]) for record in records if record.get("state") == "active"
+    }
+    package_boundaries.update(excluded_packages or [])
     for record in records:
         source = str(record["source"])
         if _portable_source_key(source) in excluded_keys:
@@ -1272,20 +1282,28 @@ def _source_preconditions(
         if record.get("state") == "active":
             source_metadata = record["manifest"].get("source")
             package_hash = (
-                source_metadata.get("package_sha256")
-                if isinstance(source_metadata, dict)
-                else None
+                source_metadata.get("package_sha256") if isinstance(source_metadata, dict) else None
             )
             item = {
-                    "source": source,
-                    "state": "active",
-                    "package_sha256": str(package_hash or ""),
-                }
+                "source": source,
+                "state": "active",
+                "package_sha256": str(package_hash or ""),
+            }
             if (
                 isinstance(source_metadata, dict)
                 and source_metadata.get("package_boundary") == "portable-source-v1"
             ):
                 item["package_boundary"] = "portable-source-v1"
+            nested = sorted(
+                (
+                    candidate
+                    for candidate in package_boundaries
+                    if _source_is_nested(candidate, source)
+                ),
+                key=str.casefold,
+            )
+            if nested:
+                item["nested_skill_boundaries"] = nested
             preconditions.append(item)
         elif include_removed:
             preconditions.append({"source": source, "state": "absent"})
@@ -1295,7 +1313,7 @@ def _source_preconditions(
 def _validate_source_preconditions(
     plan: dict[str, Any],
     generation: dict[str, Any],
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     policy = plan.get("source_precondition_policy")
     if policy not in {"active-match", "active-match-and-removed-absent"}:
         raise ArchMarshalError(
@@ -1314,7 +1332,7 @@ def _validate_source_preconditions(
         include_removed=policy == "active-match-and-removed-absent",
         excluded_packages=_generation_exclusions(generation),
     )
-    normalized: list[dict[str, str]] = []
+    normalized: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in preconditions:
         if not isinstance(item, dict):
@@ -1326,16 +1344,34 @@ def _validate_source_preconditions(
         state = item.get("state")
         package_hash = item.get("package_sha256")
         package_boundary = item.get("package_boundary")
+        nested_boundaries = item.get("nested_skill_boundaries")
         source_key = _portable_source_key(source) if isinstance(source, str) else ""
         if (
             not isinstance(source, str)
             or not _is_safe_source(source)
             or source_key in seen
             or state not in {"active", "absent"}
-            or (state == "active" and (not isinstance(package_hash, str) or not _is_sha256(package_hash)))
+            or (
+                state == "active"
+                and (not isinstance(package_hash, str) or not _is_sha256(package_hash))
+            )
             or (state == "absent" and package_hash is not None)
             or package_boundary not in {None, "portable-source-v1"}
             or (state == "absent" and package_boundary is not None)
+            or (
+                nested_boundaries is not None
+                and (
+                    state != "active"
+                    or not isinstance(nested_boundaries, list)
+                    or not all(
+                        isinstance(value, str)
+                        and _is_safe_source(value)
+                        and _source_is_nested(value, source)
+                        for value in nested_boundaries
+                    )
+                    or nested_boundaries != sorted(set(nested_boundaries), key=str.casefold)
+                )
+            )
         ):
             raise ArchMarshalError(
                 "skill_index_plan_invalid",
@@ -1347,6 +1383,8 @@ def _validate_source_preconditions(
             normalized_item["package_sha256"] = str(package_hash)
             if package_boundary is not None:
                 normalized_item["package_boundary"] = str(package_boundary)
+            if nested_boundaries is not None:
+                normalized_item["nested_skill_boundaries"] = list(nested_boundaries)
         normalized.append(normalized_item)
         seen.add(source_key)
     if normalized != expected:
@@ -1357,7 +1395,7 @@ def _validate_source_preconditions(
     return normalized
 
 
-def _verify_source_preconditions(root: Path, preconditions: list[dict[str, str]]) -> None:
+def _verify_source_preconditions(root: Path, preconditions: list[dict[str, Any]]) -> None:
     failures: list[dict[str, str]] = []
     for precondition in preconditions:
         source = precondition["source"]
@@ -1375,6 +1413,10 @@ def _verify_source_preconditions(root: Path, preconditions: list[dict[str, str]]
                         if precondition.get("package_boundary") == "portable-source-v1"
                         else ()
                     ),
+                    excluded_directories=[
+                        root / PurePosixPath(value)
+                        for value in precondition.get("nested_skill_boundaries", [])
+                    ],
                 )
                 if not fingerprint_directory_matches(
                     package,
@@ -1610,8 +1652,7 @@ def _record_lock_recovery(
     _write_exclusive_bytes(
         path,
         (
-            json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            + "\n"
+            json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
         ).encode("utf-8"),
     )
     _fsync_directory_chain(recovery_root, state_root)

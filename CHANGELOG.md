@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.16.0 - 2026-07-18
+
+### User-layout-first project governance
+
+- Added one auditable layout policy for `init`, `adopt`, and `start`, with
+  explicit foundation, quality, decision, source, confirmation state,
+  effective mappings, per-field provenance, evidence, issues, suggestions, and
+  a human-review path map.
+- Established project configuration, explicit current choices, promoted user
+  profiles, read-only detection, and defaults as the layout precedence chain.
+  Safe nonstandard layouts are preserved; objective risks receive suggestions
+  only; unsafe traversal, link/reparse, VCS/cache/dependency/runtime, and file
+  collision destinations block with zero writes.
+- Added repeatable project/Skill save-path choices plus configurable naming
+  strategy, UTC/local/IANA timezone, timestamp format, and date partition.
+  Checkpoint, closeout, learning, catalog, workspace YAML, registry, and INDEX
+  now consume the same validated runtime layout.
+- Made new-project Skill scaffold paths dynamic so confirmed `.codex`,
+  `.claude`, or other safe in-project conventions work without a parallel
+  `.agents/skills` hierarchy.
+
+### Lightweight habit learning and Skill boundaries
+
+- Added review-only `preferred.workspace_layout` candidates when the same
+  explicitly confirmed layout has committed evidence in multiple projects.
+  Detected and single-project layouts are never promoted automatically.
+- Isolated nested Skill packages as module boundaries. An excluded child Skill
+  no longer contributes bytes to a managed parent's fingerprint, backup,
+  source precondition, inventory drift, index, or learning evidence.
+- Extended preserved generated-artifact boundaries to common test/type/lint
+  caches and `build`/`dist`, while keeping their contents uninspected during
+  Skill adoption.
+- Aligned post-adoption inventory fingerprints with adoption's preserved
+  artifact policy and retained bounded compatibility for common Skill
+  frontmatter extensions.
+
+### Codex plugin and documentation
+
+- Updated the Codex Skill to lead with the user's layout, show all mapped and
+  managed boundaries before apply, and learn only reviewed repeated habits.
+- Kept the primary README English and ASCII-only to avoid mojibake in legacy
+  renderers, and documented direct natural-language layout requests in Codex.
+
 ## 0.15.0 - 2026-07-16
 
 - Added repeatable exact Skill-package exclusions with immutable persistence,
@@ -15,6 +58,9 @@
   present.
 - Fixed the Skill manifest schema contract for generated portable package
   boundaries so newly adopted overlays validate and lint consistently.
+- Added bounded compatibility for common Skill frontmatter extensions:
+  `license`, `allowed-tools`, and `metadata`; unknown fields still fail closed
+  and tool declarations never grant ArchMarshal execution permissions.
 
 ## 0.14.1 - 2026-07-16
 

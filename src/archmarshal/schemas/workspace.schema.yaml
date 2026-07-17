@@ -7,6 +7,24 @@ required:
   - paths
 additionalProperties: false
 properties:
+  layout:
+    type: object
+    additionalProperties: false
+    properties:
+      foundation:
+        enum:
+          - confirmed
+          - detected
+          - none
+      source:
+        enum:
+          - project_config
+          - cli
+          - confirmed_user_profile
+          - detected
+          - archmarshal_default
+      confirmed:
+        type: boolean
   workspace:
     type: object
     required:
@@ -76,11 +94,27 @@ properties:
           strategy:
             enum:
               - time_topic_kind
+              - date_topic_kind
+              - topic_kind
+              - preserve
           timezone:
+            type: string
+            minLength: 1
+            maxLength: 128
+          date_partition:
             enum:
-              - UTC
+              - none
+              - YYYY
+              - YYYY/MM
+              - YYYY/MM/DD
           timestamp_format:
             type: string
+            minLength: 1
+            maxLength: 128
+          filename_template:
+            type: string
+            minLength: 1
+            maxLength: 256
           max_slug_words:
             type: integer
             minimum: 1

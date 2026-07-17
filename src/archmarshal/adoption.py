@@ -14,6 +14,7 @@ import yaml
 from .adoption_tx import adoption_transaction_status, apply_adoption_transaction
 from .errors import ArchMarshalError, require_workspace_root
 from .io import load_yaml_safe
+from .layout_policy import build_layout_plan, workspace_layout_metadata
 from .ownership import ownership_skill_index_mode, valid_ownership_marker, workspace_id
 from .safety import (
     EXCLUDED_BACKUP_PARTS,
@@ -82,18 +83,6 @@ MANAGED_PLACEHOLDERS = (
     ".agent/plans/.gitkeep",
     ".agent/reports/.gitkeep",
 )
-PROJECT_SKILL_SCAFFOLD = (
-    (
-        ".agents/skills/README.md",
-        "# Project Skills\n\n"
-        "- `project/`: human-reviewed, project-specific Skills.\n"
-        "- `generated/`: generated Skill drafts that still require review.\n\n"
-        "ArchMarshal creates only this missing scaffold. It never moves or rewrites "
-        "an existing Skill package.\n",
-    ),
-    (".agents/skills/project/.gitkeep", ""),
-    (".agents/skills/generated/.gitkeep", ""),
-)
 MANAGED_BACKUP_EXCLUDED_AGENT_ROOTS = frozenset(
     {
         "backups",
@@ -114,6 +103,12 @@ def plan_adoption(
     skill_roots: list[str] | None = None,
     exclude_skills: list[str] | None = None,
     manage_skills: list[str] | None = None,
+    save_paths: list[str] | None = None,
+    naming_strategy: str | None = None,
+    naming_timezone: str | None = None,
+    date_partition: str | None = None,
+    timestamp_format: str | None = None,
+    user_store: Path | str | None = None,
 ) -> dict[str, Any]:
     root_path = require_workspace_root(root)
     built = _build_adoption(
@@ -124,6 +119,12 @@ def plan_adoption(
         skill_roots=skill_roots,
         exclude_skills=exclude_skills,
         manage_skills=manage_skills,
+        save_paths=save_paths,
+        naming_strategy=naming_strategy,
+        naming_timezone=naming_timezone,
+        date_partition=date_partition,
+        timestamp_format=timestamp_format,
+        user_store=user_store,
     )
     return _public_plan(built, applied=False)
 
@@ -139,6 +140,12 @@ def adopt_workspace(
     skill_roots: list[str] | None = None,
     exclude_skills: list[str] | None = None,
     manage_skills: list[str] | None = None,
+    save_paths: list[str] | None = None,
+    naming_strategy: str | None = None,
+    naming_timezone: str | None = None,
+    date_partition: str | None = None,
+    timestamp_format: str | None = None,
+    user_store: Path | str | None = None,
 ) -> dict[str, Any]:
     root_path = require_workspace_root(root)
     if apply:
@@ -154,6 +161,12 @@ def adopt_workspace(
                 skill_roots=skill_roots,
                 exclude_skills=exclude_skills,
                 manage_skills=manage_skills,
+                save_paths=save_paths,
+                naming_strategy=naming_strategy,
+                naming_timezone=naming_timezone,
+                date_partition=date_partition,
+                timestamp_format=timestamp_format,
+                user_store=user_store,
                 held=held,
             )
     return _adopt_workspace_locked(
@@ -166,6 +179,12 @@ def adopt_workspace(
         skill_roots=skill_roots,
         exclude_skills=exclude_skills,
         manage_skills=manage_skills,
+        save_paths=save_paths,
+        naming_strategy=naming_strategy,
+        naming_timezone=naming_timezone,
+        date_partition=date_partition,
+        timestamp_format=timestamp_format,
+        user_store=user_store,
         held=None,
     )
 
@@ -181,6 +200,12 @@ def _adopt_workspace_locked(
     skill_roots: list[str] | None,
     exclude_skills: list[str] | None,
     manage_skills: list[str] | None,
+    save_paths: list[str] | None,
+    naming_strategy: str | None,
+    naming_timezone: str | None,
+    date_partition: str | None,
+    timestamp_format: str | None,
+    user_store: Path | str | None,
     held: WorkspaceMutationLock | None,
 ) -> dict[str, Any]:
     built = _build_adoption(
@@ -191,6 +216,12 @@ def _adopt_workspace_locked(
         skill_roots=skill_roots,
         exclude_skills=exclude_skills,
         manage_skills=manage_skills,
+        save_paths=save_paths,
+        naming_strategy=naming_strategy,
+        naming_timezone=naming_timezone,
+        date_partition=date_partition,
+        timestamp_format=timestamp_format,
+        user_store=user_store,
     )
     if not apply:
         return _public_plan(built, applied=False)
@@ -344,6 +375,12 @@ def _build_adoption(
     skill_roots: list[str] | None = None,
     exclude_skills: list[str] | None = None,
     manage_skills: list[str] | None = None,
+    save_paths: list[str] | None = None,
+    naming_strategy: str | None = None,
+    naming_timezone: str | None = None,
+    date_partition: str | None = None,
+    timestamp_format: str | None = None,
+    user_store: Path | str | None = None,
 ) -> dict[str, Any]:
     if backup_scope not in {"managed", "full"}:
         raise ValueError("backup_scope must be 'managed' or 'full'")
@@ -352,10 +389,17 @@ def _build_adoption(
     timestamp = now.strftime("%Y%m%d-%H%M%S")
     workspace_file = root / ".agent" / "workspace.yaml"
     ensure_managed_path(root, root / ".agent", purpose="ArchMarshal control directory")
-    scaffold_writes: dict[Path, str] = {}
-    scaffold_existing: list[str] = []
-    if project_initialization:
-        scaffold_writes, scaffold_existing = _project_skill_scaffold_writes(root)
+    default_skill_parent = root / ".agents"
+    if (
+        project_initialization
+        and default_skill_parent.exists()
+        and not default_skill_parent.is_dir()
+    ):
+        raise ArchMarshalError(
+            "project_initialization_path_conflict",
+            "Project Skill scaffold has a file/directory path conflict.",
+            details={"path": str(default_skill_parent), "target": ".agents/skills"},
+        )
     configured = _is_archmarshal_workspace(workspace_file)
     overlay_enabled = _workspace_uses_overlays(workspace_file) if configured else True
     transaction_status = adoption_transaction_status(root)
@@ -372,6 +416,28 @@ def _build_adoption(
         skill_roots,
         excluded_packages=skill_selection["excluded_packages"],
     )
+    naming_overrides = {
+        "strategy": naming_strategy,
+        "timezone": naming_timezone,
+        "date_partition": date_partition,
+        "timestamp_format": timestamp_format,
+    }
+    layout = build_layout_plan(
+        root,
+        configured=configured,
+        save_path_overrides=save_paths,
+        naming_overrides=naming_overrides,
+        user_store=user_store,
+        effective_skill_roots=effective_skill_roots,
+    )
+    scaffold_writes: dict[Path, str] = {}
+    scaffold_existing: list[str] = []
+    scaffold_paths: list[str] = []
+    if project_initialization and not layout["issues"]:
+        scaffold_writes, scaffold_existing, scaffold_paths = _project_skill_scaffold_writes(
+            root,
+            layout,
+        )
     manage_index = not configured or overlay_enabled
     skill_selection["persistence"] = (
         "immutable_skill_index" if manage_index else "current_preview_only"
@@ -380,7 +446,11 @@ def _build_adoption(
         plan_skill_index(
             root,
             skills,
-            created_at=_skill_evidence_timestamp(root, skills),
+            created_at=_skill_evidence_timestamp(
+                root,
+                skills,
+                excluded_packages=skill_selection["excluded_packages"],
+            ),
             excluded_packages=skill_selection["excluded_packages"],
         )
         if manage_index
@@ -403,6 +473,7 @@ def _build_adoption(
     reserved_conflicts.extend(overlay_conflicts)
     transaction_active = transaction_status.get("state") != "none"
     review_required = indexed_review_required or legacy_review_required or transaction_active
+    review_required = review_required or layout["requires_confirmation"]
     normalized_tags = _normalize_tags(tags)
     if not normalized_tags and configured:
         existing_workspace = load_yaml_safe(workspace_file)
@@ -423,6 +494,7 @@ def _build_adoption(
             normalized_tags,
             now,
             source_skill_roots=additional_skill_roots,
+            layout=layout,
         )
     ownership = root / ".agent" / "ownership.json"
     ownership_index_mode = ownership_skill_index_mode(ownership)
@@ -435,9 +507,16 @@ def _build_adoption(
     if not ownership.exists():
         writes[ownership] = _ownership_json(root, index_required=overlay_enabled)
     if not index.exists():
-        writes[index] = _index_markdown(root, skills, normalized_tags, now)
+        writes[index] = _index_markdown(
+            root,
+            skills,
+            normalized_tags,
+            now,
+            layout=layout,
+            excluded_packages=skill_selection["excluded_packages"],
+        )
     if not registry.exists():
-        writes[registry] = _registry_yaml(skills)
+        writes[registry] = _registry_yaml(skills, layout=layout)
     if not memory_stores.exists():
         writes[memory_stores] = yaml.safe_dump(
             {"memory_stores": []}, sort_keys=False, allow_unicode=True
@@ -450,7 +529,17 @@ def _build_adoption(
         writes[backup_ignore] = "*\n!.gitignore\n"
     if not agents.exists():
         writes[agents] = _agents_markdown()
+    internal_placeholder_roots = {
+        ".agent/archive",
+        ".agent/cache",
+        ".agent/context-modules",
+        ".agent/inbox",
+    }
+    mapped_project_roots = set(layout["effective_profile"]["save_paths"]["project_files"].values())
     for relative in MANAGED_PLACEHOLDERS:
+        parent = PurePosixPath(relative).parent.as_posix()
+        if parent not in internal_placeholder_roots and parent not in mapped_project_roots:
+            continue
         placeholder = root / relative
         if not placeholder.exists():
             writes[placeholder] = ""
@@ -482,6 +571,10 @@ def _build_adoption(
     if required_index_missing:
         reserved_conflicts.append(".agent/skill-overlays/.archmarshal/HEAD")
 
+    reserved_conflicts.extend(
+        f"layout:{issue['code']}:{issue.get('field', '')}" for issue in layout["issues"]
+    )
+
     blocked = bool(reserved_conflicts) or transaction_active
     if blocked:
         writes = {}
@@ -490,17 +583,18 @@ def _build_adoption(
         backup_files = files_for_full_backup(
             root,
             excluded_directories=[
-                root / PurePosixPath(item)
-                for item in skill_selection["excluded_packages"]
+                root / PurePosixPath(item) for item in skill_selection["excluded_packages"]
             ],
         )
     else:
-        backup_files = _managed_backup_files(root, skills)
+        backup_files = _managed_backup_files(
+            root,
+            skills,
+            excluded_packages=skill_selection["excluded_packages"],
+        )
     backup_records = _backup_source_records(root, backup_files)
     backup_coverage = _skill_backup_coverage(root, skills, backup_records)
-    backup_coverage["excluded_package_count"] = len(
-        skill_selection["excluded_packages"]
-    )
+    backup_coverage["excluded_package_count"] = len(skill_selection["excluded_packages"])
     backup_coverage["excluded_packages"] = list(skill_selection["excluded_packages"])
     if not backup_coverage["complete"]:
         raise ArchMarshalError(
@@ -519,6 +613,7 @@ def _build_adoption(
         "overlay_enabled": overlay_enabled,
         "project_initialization": project_initialization,
         "scaffold_existing": scaffold_existing,
+        "scaffold_paths": scaffold_paths,
         "backup_scope": backup_scope,
         "backup_archive_scope": (
             "managed_workspace"
@@ -539,12 +634,21 @@ def _build_adoption(
         "conflicts": reserved_conflicts,
         "blocked": blocked,
         "transaction_status": transaction_status,
+        "layout": layout,
+        "layout_arguments": {
+            "save_paths": list(save_paths or []),
+            "naming_strategy": naming_strategy,
+            "naming_timezone": naming_timezone,
+            "date_partition": date_partition,
+            "timestamp_format": timestamp_format,
+            "user_store": str(Path(user_store).resolve()) if user_store is not None else None,
+        },
     }
 
 
 def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
     root: Path = built["root"]
-    scaffold_paths = {relative for relative, _content in PROJECT_SKILL_SCAFFOLD}
+    scaffold_paths = set(built["scaffold_paths"])
     operations = [
         {
             "action": "create",
@@ -606,11 +710,7 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
     preserved_artifacts = [
         {
             "skill": skill["source"],
-            "path": (
-                artifact
-                if skill["source"] == "."
-                else f"{skill['source']}/{artifact}"
-            ),
+            "path": (artifact if skill["source"] == "." else f"{skill['source']}/{artifact}"),
             "policy": "preserve_unmanaged",
             "contents_inspected": False,
             "source_mutation": False,
@@ -669,6 +769,23 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
         "plan_digest": plan_digest,
         "apply_precondition": "--expect-plan <plan_digest>",
         "transaction": built["transaction_status"],
+        "layout": built["layout"],
+        "human_review": {
+            "entrypoint": ".agent/INDEX.md",
+            "mapped_paths": [
+                {
+                    "role": f"{section}.{role}",
+                    "path": path,
+                    "source": built["layout"]["field_provenance"].get(
+                        f"save_paths.{section}.{role}"
+                    ),
+                }
+                for section, values in built["layout"]["effective_profile"]["save_paths"].items()
+                for role, path in values.items()
+            ],
+            "skill_packages": [skill["source"] for skill in public_skills],
+            "excluded_skill_packages": built["skill_selection"]["records"],
+        },
         "skill_index": index_plan,
         "backup_scope": built["backup_scope"],
         "backup_archive_scope": built["backup_archive_scope"],
@@ -713,6 +830,8 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
             "Existing skills stay in place; overlays provide routing metadata without changing SKILL.md.",
             "Every managed Skill source file is included in the exact verified backup before the first managed file is added.",
             "Excluded Skill packages and preserved cache/repository artifacts remain outside ArchMarshal management; their contents are not read, backed up, indexed, learned from, or modified.",
+            "Project save paths and naming follow project config, explicit CLI choices, a confirmed user profile, detected layout, then defaults in that priority order.",
+            "Detected paths require exact-plan confirmation; detection alone is never promoted to a user habit.",
             (
                 "Configured overlay projects are incrementally scanned for newly added source skills."
                 if built["configured"] and built["overlay_enabled"]
@@ -722,10 +841,33 @@ def _public_plan(built: dict[str, Any], *, applied: bool) -> dict[str, Any]:
     }
 
 
-def _project_skill_scaffold_writes(root: Path) -> tuple[dict[Path, str], list[str]]:
+def _project_skill_scaffold_writes(
+    root: Path,
+    layout: dict[str, Any],
+) -> tuple[dict[Path, str], list[str], list[str]]:
+    skill_paths = layout["effective_profile"]["save_paths"]["skills"]
+    project = PurePosixPath(skill_paths["project"])
+    generated = PurePosixPath(skill_paths["generated"])
+    guide = (
+        project.parent / "README.md"
+        if project.parent == generated.parent
+        else PurePosixPath(".agent/SKILL_PATHS.md")
+    )
+    scaffold = (
+        (
+            guide.as_posix(),
+            "# Project Skills\n\n"
+            f"- Human-reviewed project Skills: `{project.as_posix()}/`.\n"
+            f"- Generated Skill drafts: `{generated.as_posix()}/`.\n\n"
+            "ArchMarshal creates only missing scaffold files. It never moves or rewrites "
+            "an existing Skill package.\n",
+        ),
+        ((project / ".gitkeep").as_posix(), ""),
+        ((generated / ".gitkeep").as_posix(), ""),
+    )
     writes: dict[Path, str] = {}
     existing: list[str] = []
-    for relative, content in PROJECT_SKILL_SCAFFOLD:
+    for relative, content in scaffold:
         target = root / relative
         current = root
         parts = Path(relative).parts
@@ -751,7 +893,7 @@ def _project_skill_scaffold_writes(root: Path) -> tuple[dict[Path, str], list[st
             existing.append(relative)
         else:
             writes[target] = content
-    return writes, sorted(existing)
+    return writes, sorted(existing), sorted(relative for relative, _content in scaffold)
 
 
 def _planned_skill_manifest(built: dict[str, Any], source: str) -> dict[str, Any] | None:
@@ -847,6 +989,19 @@ def _public_next_actions(
             command_args.extend(["--exclude-skill", source])
         for source in built["skill_selection"]["requested_management"]:
             command_args.extend(["--manage-skill", source])
+        layout_arguments = built["layout_arguments"]
+        for assignment in layout_arguments["save_paths"]:
+            command_args.extend(["--save-path", assignment])
+        if layout_arguments["naming_strategy"] is not None:
+            command_args.extend(["--naming-strategy", layout_arguments["naming_strategy"]])
+        if layout_arguments["naming_timezone"] is not None:
+            command_args.extend(["--timezone", layout_arguments["naming_timezone"]])
+        if layout_arguments["date_partition"] is not None:
+            command_args.extend(["--date-partition", layout_arguments["date_partition"]])
+        if layout_arguments["timestamp_format"] is not None:
+            command_args.extend(["--timestamp-format", layout_arguments["timestamp_format"]])
+        if layout_arguments["user_store"] is not None:
+            command_args.extend(["--user-store", layout_arguments["user_store"]])
         if built["backup_scope"] != "managed":
             command_args.extend(["--backup-scope", built["backup_scope"]])
         command_args.extend(["--expect-plan", plan_digest, "--apply", "--pretty"])
@@ -920,7 +1075,7 @@ def _public_next_actions(
 def _adoption_plan_digest(built: dict[str, Any]) -> str:
     root: Path = built["root"]
     intent = {
-        "format": "archmarshal-adoption-plan-v3",
+        "format": "archmarshal-adoption-plan-v4",
         "backup_scope": built["backup_scope"],
         "backup_archive_scope": built["backup_archive_scope"],
         "effective_skill_roots": built["effective_skill_roots"],
@@ -934,6 +1089,7 @@ def _adoption_plan_digest(built: dict[str, Any]) -> str:
         "overlay_enabled": built["overlay_enabled"],
         "project_initialization": built["project_initialization"],
         "tags": built["tags"],
+        "layout": built["layout"],
         "writes": [
             {
                 "path": path.relative_to(root).as_posix(),
@@ -1009,11 +1165,22 @@ def _logical_skill_plan(plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _skill_evidence_timestamp(root: Path, skills: list[dict[str, Any]]) -> str:
+def _skill_evidence_timestamp(
+    root: Path,
+    skills: list[dict[str, Any]],
+    *,
+    excluded_packages: list[str] | None = None,
+) -> str:
     candidates = [root]
     head = root / ".agent" / "skill-overlays" / ".archmarshal" / "HEAD"
     if head.is_file() and not is_link_or_reparse(head):
         candidates.append(head)
+    boundaries = {
+        (root / PurePosixPath(str(skill.get("source") or "."))).resolve() for skill in skills
+    }
+    boundaries.update(
+        (root / PurePosixPath(source)).resolve() for source in (excluded_packages or [])
+    )
     for skill in skills:
         source = root / str(skill.get("source") or "")
         if source.resolve(strict=False) == root.resolve():
@@ -1023,6 +1190,11 @@ def _skill_evidence_timestamp(root: Path, skills: list[dict[str, Any]]) -> str:
                 source,
                 purpose="Skill timestamp evidence",
                 excluded_parts=EXCLUDED_BACKUP_PARTS,
+                excluded_directories=[
+                    boundary
+                    for boundary in boundaries
+                    if boundary != source.resolve() and _path_is_within(boundary, source.resolve())
+                ],
             )
         else:
             source_files = []
@@ -1050,8 +1222,7 @@ def _resolve_skill_selection(
             item,
             allow_missing=(
                 isinstance(item, str)
-                and _portable_skill_root_key(item.strip().replace("\\", "/"))
-                in persisted_by_key
+                and _portable_skill_root_key(item.strip().replace("\\", "/")) in persisted_by_key
             ),
         )
         for item in requested_management
@@ -1077,7 +1248,9 @@ def _resolve_skill_selection(
     desired.update(excluded_by_key)
     for key in managed_by_key:
         desired.pop(key, None)
-    desired_values = sorted(desired.values(), key=lambda item: (_portable_skill_root_key(item), item))
+    desired_values = sorted(
+        desired.values(), key=lambda item: (_portable_skill_root_key(item), item)
+    )
     added = sorted(
         [value for key, value in desired.items() if key not in persisted_by_key],
         key=str.casefold,
@@ -1166,8 +1339,10 @@ def _normalize_skill_package_selection(
         )
     parts = tuple(part for part in path.parts if part not in {"", "."})
     relative = PurePosixPath(*parts).as_posix() if parts else "."
-    if relative == "." or unicodedata.normalize("NFC", relative) != relative or any(
-        _unsafe_skill_root_component(part) for part in parts
+    if (
+        relative == "."
+        or unicodedata.normalize("NFC", relative) != relative
+        or any(_unsafe_skill_root_component(part) for part in parts)
     ):
         raise ArchMarshalError(
             "skill_selection_not_portable",
@@ -1211,9 +1386,7 @@ def _discover_skills(
     *,
     excluded_packages: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
-    effective_roots, normalized_additional = _effective_skill_roots(
-        root, additional_roots or []
-    )
+    effective_roots, normalized_additional = _effective_skill_roots(root, additional_roots or [])
     skill_docs: set[Path] = set()
     excluded_packages = excluded_packages or []
     excluded_keys = {_portable_skill_root_key(item) for item in excluded_packages}
@@ -1237,6 +1410,8 @@ def _discover_skills(
                 skill_docs.add(path)
 
     skills: list[dict[str, Any]] = []
+    package_boundaries = {path.parent.resolve() for path in skill_docs}
+    package_boundaries.update(path.resolve() for path in excluded_directories)
     for skill_md in sorted(skill_docs):
         ensure_path_within(root, skill_md, purpose="Discovered skill source")
         source_dir = skill_md.parent
@@ -1245,9 +1420,7 @@ def _discover_skills(
             continue
         frontmatter = _skill_frontmatter(skill_md)
         source_manifest = source_dir / "manifest.yaml"
-        declared, import_errors, source_declared_status = _import_source_manifest(
-            source_manifest
-        )
+        declared, import_errors, source_declared_status = _import_source_manifest(source_manifest)
         display_name = (
             str(declared.get("name") or frontmatter.get("name") or source_dir.name).strip()
             or source_dir.name
@@ -1276,13 +1449,22 @@ def _discover_skills(
         )
         tags = declared.get("tags") or inferred_tags
         source_hash = sha256_file(skill_md)
+        nested_boundaries = [
+            boundary
+            for boundary in package_boundaries
+            if boundary != source_dir.resolve() and _path_is_within(boundary, source_dir.resolve())
+        ]
         package = fingerprint_directory(
             source_dir,
             purpose="Skill package",
             entrypoint_only=source_dir.resolve() == root,
             include_modes=True,
             excluded_parts=EXCLUDED_BACKUP_PARTS,
+            excluded_directories=nested_boundaries,
         )
+        preserved_nested = {
+            boundary.relative_to(source_dir.resolve()).as_posix() for boundary in nested_boundaries
+        }
         validation = validate_skill_package(
             source_dir,
             enforce_folder_name=source_dir.resolve() != root,
@@ -1370,7 +1552,9 @@ def _discover_skills(
             {
                 "source": source,
                 "package_files": package["files"],
-                "preserved_artifacts": package["preserved_paths"],
+                "preserved_artifacts": [
+                    item for item in package["preserved_paths"] if item not in preserved_nested
+                ],
                 "source_declared_status": source_declared_status,
                 "source_manifest": (
                     source_manifest.relative_to(root).as_posix()
@@ -1419,6 +1603,14 @@ def _effective_skill_roots(root: Path, additional_roots: list[str]) -> tuple[lis
         if _portable_skill_root_key(value) in effective_keys
     ]
     return effective_values, additional_values
+
+
+def _path_is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
 
 
 def _collapse_skill_roots(values: Iterable[str]) -> list[str]:
@@ -1561,8 +1753,7 @@ def _unsafe_skill_root_component(part: str) -> bool:
         part in {"", ".", ".."}
         or part.endswith((" ", "."))
         or ":" in part
-        or part.split(".", 1)[0].rstrip(" .").upper()
-        in WINDOWS_RESERVED_SKILL_ROOT_NAMES
+        or part.split(".", 1)[0].rstrip(" .").upper() in WINDOWS_RESERVED_SKILL_ROOT_NAMES
     )
 
 
@@ -1703,10 +1894,12 @@ def _workspace_yaml(
     now: datetime,
     *,
     source_skill_roots: list[str],
+    layout: dict[str, Any],
 ) -> str:
     created_on = _git_creation_date(root) or now.date().isoformat()
     code_roots = [name for name in ("src", "app", "packages", "lib") if (root / name).exists()]
     data = {
+        "layout": workspace_layout_metadata(layout),
         "workspace": {
             "name": root.name,
             "version": "0.1.0",
@@ -1716,28 +1909,8 @@ def _workspace_yaml(
             "tags": tags,
             "management_mode": "overlay",
         },
-        "save_paths": {
-            "skills": {
-                "generated": ".agents/skills/generated",
-                "project": ".agents/skills/project",
-            },
-            "project_files": {
-                "checkpoints": ".agent/inbox/checkpoints",
-                "reports": ".agent/reports",
-                "plans": ".agent/plans",
-                "history": ".agent/history",
-                "knowledge": ".agent/knowledge",
-                "artifacts": ".agent/inbox",
-            },
-        },
-        "naming": {
-            "project_files": {
-                "strategy": "time_topic_kind",
-                "timezone": "UTC",
-                "timestamp_format": "%Y%m%d-%H%M%S",
-                "max_slug_words": 6,
-            }
-        },
+        "save_paths": layout["effective_profile"]["save_paths"],
+        "naming": layout["effective_profile"]["naming"],
         "paths": {
             "project_root": ".",
             "code_roots": code_roots,
@@ -1783,13 +1956,35 @@ def _ownership_json(root: Path, *, index_required: bool) -> str:
     )
 
 
-def _registry_yaml(skills: list[dict[str, Any]]) -> str:
+def _registry_yaml(
+    skills: list[dict[str, Any]],
+    *,
+    layout: dict[str, Any],
+) -> str:
+    project_paths = layout["effective_profile"]["save_paths"]["project_files"]
     artifacts: list[dict[str, Any]] = [
         _artifact("project.index", "project_doc", ".agent/INDEX.md", "default", ["index"]),
-        _artifact("managed.history", "history", ".agent/history", "explicit_only", ["history"]),
-        _artifact("managed.reports", "report", ".agent/reports", "explicit_only", ["reports"]),
-        _artifact("managed.plans", "plan", ".agent/plans", "explicit_only", ["plans"]),
-        _artifact("managed.inbox", "artifact", ".agent/inbox", "explicit_only", ["inbox"]),
+        _artifact(
+            "managed.history", "history", project_paths["history"], "explicit_only", ["history"]
+        ),
+        _artifact(
+            "managed.reports", "report", project_paths["reports"], "explicit_only", ["reports"]
+        ),
+        _artifact("managed.plans", "plan", project_paths["plans"], "explicit_only", ["plans"]),
+        _artifact(
+            "managed.checkpoints",
+            "artifact",
+            project_paths["checkpoints"],
+            "task_based",
+            ["checkpoint", "context"],
+        ),
+        _artifact(
+            "managed.artifacts",
+            "artifact",
+            project_paths["artifacts"],
+            "explicit_only",
+            ["artifacts"],
+        ),
         _artifact("managed.backups", "artifact", ".agent/backups", "never_default", ["backup"]),
         _artifact(
             "managed.transactions",
@@ -1801,7 +1996,11 @@ def _registry_yaml(skills: list[dict[str, Any]]) -> str:
         _artifact("managed.archive", "artifact", ".agent/archive", "never_default", ["archive"]),
         _artifact("managed.cache", "cache", ".agent/cache", "never_default", ["cache"]),
         _artifact(
-            "managed.knowledge", "knowledge", ".agent/knowledge", "task_based", ["knowledge"]
+            "managed.knowledge",
+            "knowledge",
+            project_paths["knowledge"],
+            "task_based",
+            ["knowledge"],
         ),
         _artifact(
             "managed.skill-overlays",
@@ -1854,12 +2053,28 @@ def _index_markdown(
     skills: list[dict[str, Any]],
     tags: list[str],
     now: datetime,
+    *,
+    layout: dict[str, Any],
+    excluded_packages: list[str],
 ) -> str:
     skill_lines = [
         f"- `{skill['manifest']['name']}` ({skill['manifest']['kind']}): "
         f"source `{skill['source']}`, overlay `{skill['overlay_manifest']}`"
         for skill in skills
     ] or ["- No existing skills were discovered during adoption."]
+    profile = layout["effective_profile"]
+    project_paths = profile["save_paths"]["project_files"]
+    skill_paths = profile["save_paths"]["skills"]
+    naming = profile["naming"]["project_files"]
+    mapped_lines = [
+        f"- {role.replace('_', ' ').title()}: `{path}/`" for role, path in project_paths.items()
+    ]
+    root_lines = [f"- `{path}`" for path in profile["skill_roots"]] or [
+        "- No source Skill root was present during adoption."
+    ]
+    exclusion_lines = [f"- `{path}`" for path in excluded_packages] or [
+        "- No Skill package is excluded."
+    ]
     return "\n".join(
         [
             f"# {root.name} - ArchMarshal Index",
@@ -1867,21 +2082,28 @@ def _index_markdown(
             f"- Adopted: {now.date().isoformat()}",
             f"- Tags: {', '.join(tags)}",
             "- Management mode: non-destructive overlay",
+            f"- Layout foundation: {layout['foundation']}",
+            f"- Layout source: {layout['source']}",
             "",
             "## Active project map",
             "",
-            "- Knowledge: `.agent/knowledge/`",
-            "- Plans: `.agent/plans/`",
-            "- Reports: `.agent/reports/`",
-            "- Date-organized history: `.agent/history/YYYY/MM/DD/`",
-            "- Review inbox: `.agent/inbox/`",
+            *mapped_lines,
             "- Verified backups: `.agent/backups/` (never loaded by default)",
+            f"- Naming: `{naming['strategy']}` in `{naming['timezone']}`",
+            f"- Date partition: `{naming.get('date_partition', 'YYYY/MM/DD')}`",
             "",
             "## Project Skill paths",
             "",
-            "- Human-reviewed project Skills: `.agents/skills/project/`",
-            "- Generated Skill drafts: `.agents/skills/generated/`",
-            "- Skill directory guide: `.agents/skills/README.md` (created by `archmarshal init`)",
+            f"- Human-reviewed project Skills: `{skill_paths['project']}/`",
+            f"- Generated Skill drafts: `{skill_paths['generated']}/`",
+            "",
+            "## Source Skill roots",
+            "",
+            *root_lines,
+            "",
+            "## Excluded Skill packages",
+            "",
+            *exclusion_lines,
             "",
             "## Existing skills (sources remain untouched)",
             "",
@@ -1907,7 +2129,12 @@ def _agents_markdown() -> str:
     )
 
 
-def _managed_backup_files(root: Path, skills: list[dict[str, Any]]) -> list[Path]:
+def _managed_backup_files(
+    root: Path,
+    skills: list[dict[str, Any]],
+    *,
+    excluded_packages: list[str] | None = None,
+) -> list[Path]:
     files: set[Path] = set()
     for relative in RESERVED_FILES:
         candidate = root / relative
@@ -1944,6 +2171,10 @@ def _managed_backup_files(root: Path, skills: list[dict[str, Any]]) -> list[Path
                     )
                 )
         files.update(path for path in agent_files if path.is_file())
+    boundaries = {(root / PurePosixPath(str(skill["source"]))).resolve() for skill in skills}
+    boundaries.update(
+        (root / PurePosixPath(source)).resolve() for source in (excluded_packages or [])
+    )
     for skill in skills:
         source_dir = root / skill["source"]
         if source_dir.resolve() == root:
@@ -1959,6 +2190,12 @@ def _managed_backup_files(root: Path, skills: list[dict[str, Any]]) -> list[Path
                     purpose="Source skill package backup",
                     max_files=10_000,
                     excluded_parts=EXCLUDED_BACKUP_PARTS,
+                    excluded_directories=[
+                        boundary
+                        for boundary in boundaries
+                        if boundary != source_dir.resolve()
+                        and _path_is_within(boundary, source_dir.resolve())
+                    ],
                 )
                 if path.is_file()
             )
@@ -1986,16 +2223,12 @@ def _skill_backup_coverage(
         for record in package_files:
             if not isinstance(record, dict) or not isinstance(record.get("path"), str):
                 continue
-            expected_paths.append(
-                record["path"] if source == "." else f"{source}/{record['path']}"
-            )
+            expected_paths.append(record["path"] if source == "." else f"{source}/{record['path']}")
         covered = [by_path[path] for path in expected_paths if path in by_path]
         missing = sorted(set(expected_paths) - set(by_path), key=str.casefold)
         manifest_source = skill.get("manifest", {}).get("source", {})
         expected_count = (
-            manifest_source.get("package_file_count")
-            if isinstance(manifest_source, dict)
-            else None
+            manifest_source.get("package_file_count") if isinstance(manifest_source, dict) else None
         )
         complete = (
             isinstance(expected_count, int)

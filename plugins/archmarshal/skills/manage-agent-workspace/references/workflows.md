@@ -15,7 +15,8 @@ wrapper. All paths below are arguments, not instructions for the user to type.
 ## New or existing project
 
 - New: preview `init <root> [--tag <tag>] --pretty`; apply only with the exact
-  `--expect-plan` and the chosen backup scope.
+  `--expect-plan` and the chosen backup scope. Supply `--user-store` only when
+  the user placed a promoted layout profile in scope.
 - Existing: when the user already named Skills that must stay unmanaged,
   preview `adopt` first with repeatable exact `--exclude-skill` package paths so
   those subtrees are pruned before content inspection. Otherwise preview after
@@ -25,6 +26,16 @@ wrapper. All paths below are arguments, not instructions for the user to type.
   apply. Add each nonstandard project-relative source root with repeatable
   `--skill-root`; the exact apply must replay the same roots and selection
   arguments.
+- For project layout, report `foundation`, `quality`, `decision`, `source`,
+  `requires_confirmation`, field provenance, all evidence, issues,
+  recommendations, and `human_review.mapped_paths`. A nonstandard but safe
+  confirmed layout is reasonable and remains unchanged. Detection is
+  read-only evidence until the user confirms the exact plan.
+- Translate confirmed choices to repeatable `--save-path kind=relative/path`
+  plus `--naming-strategy`, `--timezone`, `--date-partition`, and
+  `--timestamp-format`. Never pass an unsafe path merely to match a user's old
+  convention; explain the blocker and suggest a safe nearby path without
+  moving existing content.
 - When preview reports preserved `.git`/VCS metadata, caches, virtual
   environments, dependency trees, or related artifact boundaries, do not enter
   or remove them. Unless the user already chose, ask whether to preserve those
@@ -64,6 +75,9 @@ Preview `end --level ...` first and apply with its exact plan. Report
    package. Apply only the exact saved promotion plan.
 6. Preference candidates skip draft creation but retain exact acceptance,
    replacement, plan, and HEAD requirements.
+7. A `preferred.workspace_layout` candidate is eligible only after the same
+   explicitly confirmed profile appears in multiple projects with committed
+   session evidence. Detected layouts and one-off choices remain local.
 
 ## Restore and rollback
 

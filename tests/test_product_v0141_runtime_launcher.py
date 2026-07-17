@@ -57,7 +57,7 @@ def test_launcher_accepts_only_commit_scoped_interpreter(
             {
                 "format": "archmarshal-runtime-v1",
                 "commit": commit,
-                "engine_version": "0.15.0",
+                "engine_version": "0.16.0",
                 "python": str(interpreter),
             }
         ),
@@ -78,11 +78,11 @@ def test_launcher_accepts_only_commit_scoped_interpreter(
 @pytest.mark.parametrize(
     "payload",
     [
-        {"format": "wrong", "commit": "a" * 40, "engine_version": "0.15.0"},
+        {"format": "wrong", "commit": "a" * 40, "engine_version": "0.16.0"},
         {
             "format": "archmarshal-runtime-v1",
             "commit": "not-a-commit",
-            "engine_version": "0.15.0",
+            "engine_version": "0.16.0",
             "python": "outside",
         },
         {
@@ -94,7 +94,7 @@ def test_launcher_accepts_only_commit_scoped_interpreter(
         {
             "format": "archmarshal-runtime-v1",
             "commit": "a" * 40,
-            "engine_version": "0.15.0",
+            "engine_version": "0.16.0",
             "python": "outside",
             "unexpected": "field",
         },
@@ -136,7 +136,7 @@ def test_launcher_rejects_interpreter_outside_commit_directory(
             {
                 "format": "archmarshal-runtime-v1",
                 "commit": commit,
-                "engine_version": "0.15.0",
+                "engine_version": "0.16.0",
                 "python": sys.executable,
             }
         ),

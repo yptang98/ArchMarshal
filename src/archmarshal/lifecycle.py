@@ -21,6 +21,11 @@ def start_workspace(
     skill_roots: list[str] | None = None,
     exclude_skills: list[str] | None = None,
     manage_skills: list[str] | None = None,
+    save_paths: list[str] | None = None,
+    naming_strategy: str | None = None,
+    naming_timezone: str | None = None,
+    date_partition: str | None = None,
+    timestamp_format: str | None = None,
 ) -> dict[str, Any]:
     inventory = collect_inventory(root)
     diagnostics = lint_workspace(root, inventory=inventory)
@@ -32,6 +37,12 @@ def start_workspace(
         skill_roots=skill_roots,
         exclude_skills=exclude_skills,
         manage_skills=manage_skills,
+        save_paths=save_paths,
+        naming_strategy=naming_strategy,
+        naming_timezone=naming_timezone,
+        date_partition=date_partition,
+        timestamp_format=timestamp_format,
+        user_store=user_store,
     )
     blocked_skill_count = sum(
         skill_activation_block_reason(skill) is not None for skill in inventory.skills
@@ -57,6 +68,7 @@ def start_workspace(
         "diagnostic_summary": counts,
         "save_paths": inventory.save_paths,
         "naming": inventory.naming,
+        "layout": adoption_preview["layout"],
         "diagnostics": [diagnostic.to_dict() for diagnostic in diagnostics],
         "adoption_preview": adoption_preview if not adoption_preview["configured"] else None,
         "skill_sync_preview": adoption_preview if adoption_preview["configured"] else None,
@@ -65,7 +77,7 @@ def start_workspace(
             "Use auto recording depth; routine skill reuse only needs important changes.",
             "Keep summaries as indexes; do not delete raw reports, plans, checkpoints, or notes.",
             "Use user-approved project file save paths.",
-            "Use time-first project file names with content hints.",
+            "Use the confirmed project naming and date-partition policy.",
             "Call ArchMarshal end when the project or phase is complete.",
         ],
         "notes": [
@@ -89,7 +101,9 @@ def start_workspace(
             and resolution["adoption_transaction"].get("state") == "none"
         )
     elif user_store is not None:
-        payload["notes"].append("A user store is loaded only when --task is supplied.")
+        payload["notes"].append(
+            "The user store may supply a confirmed layout profile; Skill resolution also requires --task."
+        )
     return payload
 
 
@@ -103,6 +117,12 @@ def initialize_workspace(
     skill_roots: list[str] | None = None,
     exclude_skills: list[str] | None = None,
     manage_skills: list[str] | None = None,
+    save_paths: list[str] | None = None,
+    naming_strategy: str | None = None,
+    naming_timezone: str | None = None,
+    date_partition: str | None = None,
+    timestamp_format: str | None = None,
+    user_store: Path | str | None = None,
 ) -> dict[str, Any]:
     """Create only the missing ArchMarshal control plane and project Skill scaffold."""
     return adopt_workspace(
@@ -115,6 +135,12 @@ def initialize_workspace(
         skill_roots=skill_roots,
         exclude_skills=exclude_skills,
         manage_skills=manage_skills,
+        save_paths=save_paths,
+        naming_strategy=naming_strategy,
+        naming_timezone=naming_timezone,
+        date_partition=date_partition,
+        timestamp_format=timestamp_format,
+        user_store=user_store,
     )
 
 

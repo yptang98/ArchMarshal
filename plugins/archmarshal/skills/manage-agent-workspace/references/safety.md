@@ -16,6 +16,12 @@
   runtime/build artifacts are reported as preserved boundaries. Their paths
   may be shown, but their contents are not entered, backed up, indexed, learned
   from, moved, or deleted.
+- Existing safe project layouts are mapped, not normalized. Detection never
+  grants permission to move content or to publish a user preference. Unsafe
+  destinations outside the project, across links/reparse points, inside
+  VCS/cache/dependency/runtime boundaries, or colliding with files fail closed.
+- A nested Skill package is a separate module boundary. Excluding it also
+  excludes its bytes from any managed parent package fingerprint and backup.
 - Apply must replay the complete reviewed plan and exact concurrency tokens.
 - User-owned destinations are create-only; a collision is not a merge request.
 - Partial, legacy, orphan, and corrupt state is retained for review. No doctor
@@ -39,6 +45,8 @@ mtimes in proportion to risk. Check:
 - backup descriptor-bound verification where required;
 - additive effective Skill roots, exact Skill selection, preserved artifact
   boundaries, and `skill_backup_coverage.complete`;
+- the complete effective layout, per-field provenance, confirmation state,
+  timezone/date partition, and every human-review mapped path;
 - activation and review state for every affected Skill.
 
 After apply, confirm that only reviewed create-only or internal immutable paths

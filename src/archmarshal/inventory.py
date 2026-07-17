@@ -16,7 +16,7 @@ from .safety import (
     fingerprint_directory_matches,
     sha256_file,
 )
-from .skill_index import load_skill_index, skill_index_summary
+from .skill_index import load_skill_index, skill_index_exclusions, skill_index_summary
 
 DEFAULT_PATHS = {
     "project_root": ".",
@@ -48,6 +48,7 @@ DEFAULT_NAMING = {
     "project_files": {
         "strategy": "time_topic_kind",
         "timezone": "UTC",
+        "date_partition": "YYYY/MM/DD",
         "timestamp_format": "%Y%m%d-%H%M%S",
         "max_slug_words": 6,
     }
@@ -119,16 +120,23 @@ def _as_list(value: Any) -> list[str]:
     return [str(value)]
 
 
-def _load_workspace(root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+def _load_workspace(
+    root: Path,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     workspace_file = root / ".agent" / "workspace.yaml"
     if not workspace_file.exists():
         return {}, DEFAULT_PATHS.copy(), _default_save_paths(), _default_naming()
     result = load_yaml_safe(workspace_file)
     if result.error:
-        return {
-            "_load_error": result.error,
-            "_source_path": rel(workspace_file, root),
-        }, DEFAULT_PATHS.copy(), _default_save_paths(), _default_naming()
+        return (
+            {
+                "_load_error": result.error,
+                "_source_path": rel(workspace_file, root),
+            },
+            DEFAULT_PATHS.copy(),
+            _default_save_paths(),
+            _default_naming(),
+        )
     data = result.data if isinstance(result.data, dict) else {}
     paths = DEFAULT_PATHS.copy()
     declared_paths = data.get("paths", {})
@@ -335,11 +343,14 @@ def _finalize_skill_manifest(
         current_hash = sha256_file(skill_dir / "SKILL.md")
         manifest["_current_skill_sha256"] = current_hash
         try:
+            nested_boundaries = _indexed_nested_skill_boundaries(root, skill_dir)
             package = fingerprint_directory(
                 skill_dir,
                 purpose="Skill package",
                 entrypoint_only=skill_dir.resolve() == root,
                 include_modes=True,
+                excluded_parts=EXCLUDED_BACKUP_PARTS,
+                excluded_directories=nested_boundaries,
             )
         except ArchMarshalError as exc:
             manifest["_fingerprint_error"] = exc.to_dict()
@@ -361,9 +372,35 @@ def _finalize_skill_manifest(
                     manifest["_source_drift"] = (
                         "untracked"
                         if not recorded_hash
-                        else "package_untracked" if recorded_hash == current_hash else "changed"
+                        else "package_untracked"
+                        if recorded_hash == current_hash
+                        else "changed"
                     )
     return manifest
+
+
+def _indexed_nested_skill_boundaries(root: Path, skill_dir: Path) -> list[Path]:
+    loaded = load_skill_index(root)
+    generation = loaded.get("generation") or {}
+    records = generation.get("skills") if isinstance(generation, dict) else []
+    sources = {
+        str(record.get("source"))
+        for record in records or []
+        if isinstance(record, dict) and isinstance(record.get("source"), str)
+    }
+    sources.update(skill_index_exclusions(root))
+    current = skill_dir.resolve()
+    result: list[Path] = []
+    for source in sources:
+        candidate = (root / Path(source)).resolve()
+        if candidate == current:
+            continue
+        try:
+            candidate.relative_to(current)
+        except ValueError:
+            continue
+        result.append(candidate)
+    return sorted(set(result), key=lambda path: str(path).casefold())
 
 
 def _load_virtual_skill(
@@ -402,9 +439,7 @@ def _find_skills(
     records = (loaded_skill_index.get("generation") or {}).get("skills", [])
     selection = (loaded_skill_index.get("generation") or {}).get("selection") or {}
     excluded_sources = {
-        str(source)
-        for source in selection.get("excluded_packages", [])
-        if isinstance(source, str)
+        str(source) for source in selection.get("excluded_packages", []) if isinstance(source, str)
     }
     excluded_directories = [root / source for source in excluded_sources]
     manifests: dict[Path, dict[str, Any]] = {}
@@ -430,14 +465,14 @@ def _find_skills(
                 }
     indexed_sources = {str(record["source"]) for record in records}
     skills: list[dict[str, Any]] = []
-    indexed_mode = index_required or loaded_skill_index.get("head") is not None or any(
-        _is_indexed_overlay_root(root, path) for path in skill_roots
+    indexed_mode = (
+        index_required
+        or loaded_skill_index.get("head") is not None
+        or any(_is_indexed_overlay_root(root, path) for path in skill_roots)
     )
     for manifest in manifests.values():
         source = manifest.get("source")
-        source_path = (
-            str(source.get("skill_dir") or "") if isinstance(source, dict) else ""
-        )
+        source_path = str(source.get("skill_dir") or "") if isinstance(source, dict) else ""
         if source_path in indexed_sources:
             continue
         candidate = dict(manifest)
@@ -496,9 +531,7 @@ def _unregistered_agent_files(root: Path, artifacts: list[dict[str, Any]]) -> li
     if not agent_root.exists():
         return []
     registered_paths = {
-        str(item.get("path", "")).replace("\\", "/")
-        for item in artifacts
-        if item.get("path")
+        str(item.get("path", "")).replace("\\", "/") for item in artifacts if item.get("path")
     }
     unregistered: list[str] = []
     for path in list_files(agent_root):

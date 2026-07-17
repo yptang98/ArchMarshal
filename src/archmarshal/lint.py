@@ -4,6 +4,7 @@ import shutil
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .adoption import ownership_skill_index_mode, plan_adoption, valid_ownership_marker
 from .adoption_tx import adoption_transaction_status
@@ -142,7 +143,9 @@ def _lint_project_files(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
         for value in (
             paths.get(key)
             if isinstance(paths.get(key), list)
-            else [paths.get(key)] if paths.get(key) else []
+            else [paths.get(key)]
+            if paths.get(key)
+            else []
         )
     ]
     overlay_enabled = data.get("workspace", {}).get("management_mode") == "overlay" or any(
@@ -424,24 +427,55 @@ def _lint_naming(naming: Any) -> list[Diagnostic]:
                     "Record a time-first naming policy before creating project artifacts.",
                 )
             )
-    if project_files.get("strategy") and project_files.get("strategy") != "time_topic_kind":
+    supported_strategies = {
+        "time_topic_kind",
+        "date_topic_kind",
+        "topic_kind",
+        "preserve",
+    }
+    if project_files.get("strategy") and project_files.get("strategy") not in supported_strategies:
         diagnostics.append(
             Diagnostic(
                 "project.project_file_naming_invalid",
                 "error",
                 "Project file naming strategy is not supported.",
                 ".agent/workspace.yaml#$.naming.project_files.strategy",
-                "Use strategy: time_topic_kind.",
+                "Use time_topic_kind, date_topic_kind, topic_kind, or preserve.",
             )
         )
-    if project_files.get("timezone") and project_files.get("timezone") != "UTC":
+    timezone_name = project_files.get("timezone")
+    if isinstance(timezone_name, str) and not _valid_timezone(timezone_name):
         diagnostics.append(
             Diagnostic(
                 "project.project_file_naming_invalid",
                 "error",
                 "Project file naming timezone is not supported.",
                 ".agent/workspace.yaml#$.naming.project_files.timezone",
-                "Use timezone: UTC for stable cross-machine ordering.",
+                "Use UTC, local, or a valid IANA timezone such as Asia/Shanghai.",
+            )
+        )
+    date_partition = project_files.get("date_partition")
+    if date_partition and date_partition not in {"none", "YYYY", "YYYY/MM", "YYYY/MM/DD"}:
+        diagnostics.append(
+            Diagnostic(
+                "project.project_file_naming_invalid",
+                "error",
+                "Project file date partition is not supported.",
+                ".agent/workspace.yaml#$.naming.project_files.date_partition",
+                "Use none, YYYY, YYYY/MM, or YYYY/MM/DD.",
+            )
+        )
+    timestamp_format = project_files.get("timestamp_format")
+    if isinstance(timestamp_format, str) and any(
+        token in timestamp_format for token in ("/", "\\", "\x00", "\n", "\r")
+    ):
+        diagnostics.append(
+            Diagnostic(
+                "project.project_file_naming_invalid",
+                "error",
+                "Project file timestamp_format contains an unsafe filename character.",
+                ".agent/workspace.yaml#$.naming.project_files.timestamp_format",
+                "Use a filename-only strftime pattern such as %Y%m%d-%H%M%S.",
             )
         )
     max_slug_words = project_files.get("max_slug_words")
@@ -456,6 +490,16 @@ def _lint_naming(naming: Any) -> list[Diagnostic]:
             )
         )
     return diagnostics
+
+
+def _valid_timezone(value: str) -> bool:
+    if value in {"UTC", "local"}:
+        return True
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError):
+        return False
+    return True
 
 
 def _schema_diagnostics(
@@ -680,7 +724,17 @@ def _lint_memory_stores(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
                 )
             )
             continue
-        for field in ["id", "name", "scope", "store_type", "path", "read_policy", "write_policy", "owner", "privacy"]:
+        for field in [
+            "id",
+            "name",
+            "scope",
+            "store_type",
+            "path",
+            "read_policy",
+            "write_policy",
+            "owner",
+            "privacy",
+        ]:
             if not store.get(field):
                 diagnostics.append(
                     Diagnostic(
@@ -692,7 +746,11 @@ def _lint_memory_stores(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
                     )
                 )
         store_path = str(store.get("path", ""))
-        if store.get("store_type") == "filesystem" and store_path and not _is_external_path(store_path):
+        if (
+            store.get("store_type") == "filesystem"
+            and store_path
+            and not _is_external_path(store_path)
+        ):
             if _path_escapes_root(root, store_path):
                 diagnostics.append(
                     Diagnostic(
@@ -774,7 +832,19 @@ def _lint_memory_records(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
                 )
             )
             continue
-        for field in ["id", "store_id", "kind", "scope", "namespace", "status", "content_path", "confidence", "review_status", "retrieval_keys", "read_policy"]:
+        for field in [
+            "id",
+            "store_id",
+            "kind",
+            "scope",
+            "namespace",
+            "status",
+            "content_path",
+            "confidence",
+            "review_status",
+            "retrieval_keys",
+            "read_policy",
+        ]:
             if not record.get(field):
                 diagnostics.append(
                     Diagnostic(
@@ -828,7 +898,11 @@ def _lint_memory_records(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
                     "Add evidence_refs pointing to reports, decisions, or reviewed artifacts.",
                 )
             )
-        if record.get("status") in {"active", "promoted"} and record.get("confidence") == "generated" and record.get("review_status") != "reviewed":
+        if (
+            record.get("status") in {"active", "promoted"}
+            and record.get("confidence") == "generated"
+            and record.get("review_status") != "reviewed"
+        ):
             diagnostics.append(
                 Diagnostic(
                     "memory.generated_unreviewed",
@@ -981,7 +1055,10 @@ def _lint_skills(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
                 Diagnostic(
                     "skill.overlay_source_unsafe",
                     "error",
-                    str(error.get("message") or "The source skill package could not be safely fingerprinted."),
+                    str(
+                        error.get("message")
+                        or "The source skill package could not be safely fingerprinted."
+                    ),
                     manifest_path,
                     "Remove or explicitly govern linked/oversized content before using this skill.",
                 )
@@ -1018,7 +1095,10 @@ def _lint_skills(root: Path, data: dict[str, Any]) -> list[Diagnostic]:
         diagnostics.extend(_lint_skill_local_paths(root, skill, manifest_path))
         diagnostics.extend(_lint_skill_memory_effects(skill, manifest_path))
         diagnostics.extend(_lint_skill_boundaries(root, skill, manifest_path))
-        if "/generated/" in skill_dir.replace("\\", "/") and skill_dir not in generated_registry_paths:
+        if (
+            "/generated/" in skill_dir.replace("\\", "/")
+            and skill_dir not in generated_registry_paths
+        ):
             diagnostics.append(
                 Diagnostic(
                     "project.generated_skill_not_registered",
@@ -1127,7 +1207,9 @@ def _lint_skill_reproducibility(skill: dict[str, Any], manifest_path: str) -> li
     return diagnostics
 
 
-def _lint_skill_local_paths(root: Path, skill: dict[str, Any], manifest_path: str) -> list[Diagnostic]:
+def _lint_skill_local_paths(
+    root: Path, skill: dict[str, Any], manifest_path: str
+) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
     skill_root = (root / str(skill.get("_skill_dir", ""))).resolve()
     manifest_paths = skill.get("paths") or {}
@@ -1211,7 +1293,9 @@ def _lint_skill_memory_effects(skill: dict[str, Any], manifest_path: str) -> lis
     permissions = skill.get("permissions") or {}
     writes = [str(item) for item in permissions.get("writes") or []]
     proposes = [str(item) for item in permissions.get("proposes") or []]
-    memoryish_permissions = [item for item in writes + proposes if item.startswith("memory.") or item.startswith("mem.")]
+    memoryish_permissions = [
+        item for item in writes + proposes if item.startswith("memory.") or item.startswith("mem.")
+    ]
     if memoryish_permissions and not skill.get("memory_effects"):
         return [
             Diagnostic(
@@ -1245,7 +1329,9 @@ def _is_external_path(path: str) -> bool:
     return path.startswith("~") or expanded.is_absolute()
 
 
-def _lint_skill_boundaries(root: Path, skill: dict[str, Any], manifest_path: str) -> list[Diagnostic]:
+def _lint_skill_boundaries(
+    root: Path, skill: dict[str, Any], manifest_path: str
+) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
     skill_md = root / str(skill.get("_skill_dir", "")) / "SKILL.md"
     text = read_text(skill_md) if skill_md.exists() else ""
@@ -1272,7 +1358,9 @@ def _lint_skill_boundaries(root: Path, skill: dict[str, Any], manifest_path: str
                 "Move project facts into project knowledge, context modules, or project skills.",
             )
         )
-    if kind == "functional_skill" and any(marker in lowered for marker in [".agent/knowledge", "project-specific deployment"]):
+    if kind == "functional_skill" and any(
+        marker in lowered for marker in [".agent/knowledge", "project-specific deployment"]
+    ):
         diagnostics.append(
             Diagnostic(
                 "skill.functional_contains_project_fact",

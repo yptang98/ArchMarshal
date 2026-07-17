@@ -37,7 +37,7 @@ This is a Codex plugin installation task, not a project-governance task. During 
 
 Complete the work yourself under these safety constraints; do not hand the steps back to me:
 
-1. Confirm that `codex plugin`, Git, and Python 3.10–3.13 are available. Reuse existing Git/GitHub authentication. Never request, print, copy, or write tokens, passwords, cookies, SSH private keys, or the complete Codex configuration.
+1. Confirm that `codex plugin`, Git, and Python 3.10-3.13 are available. Reuse existing Git/GitHub authentication. Never request, print, copy, or write tokens, passwords, cookies, SSH private keys, or the complete Codex configuration.
 2. Resolve the remote default branch HEAD to a full 40-character commit SHA, for example with `git ls-remote`, and confirm that GitHub Actions CI succeeded for that exact SHA. Install only that full SHA. Do not install an unpinned `main` branch or use a documentation placeholder.
 3. Before changing anything, inspect `codex plugin marketplace list --json` and `codex plugin list --available --json`. The marketplace must be uniquely named `archmarshal`, and the plugin must be `archmarshal@archmarshal`. If the same name points elsewhere, its origin is uncertain, or multiple candidates exist, stop without changing anything.
 4. For a first installation, run `codex plugin marketplace add yptang98/ArchMarshal --ref` with the resolved and verified SHA from step 2 as the argument immediately after `--ref`. Then run:
@@ -81,6 +81,8 @@ or command window to learn. Ask for the outcome:
 ```text
 Use ArchMarshal to inspect this project and its existing Skills. Diagnose only; do not modify files.
 Use ArchMarshal to safely adopt this existing project. Back it up first and show me the exact plan.
+Use ArchMarshal to preserve my existing reports, plans, history, and Skill layout. Show the detected mapping and ask before adopting it.
+Use ArchMarshal with reports in docs/reports, project Skills in .codex/skills/project, Asia/Shanghai time, and YYYY/MM/DD date folders.
 Use ArchMarshal to manage this project but never manage skills/costmarshal or skills/private-local. Show every Skill directory you plan to manage first.
 Use ArchMarshal to initialize this new project with the tags research and python.
 Update ArchMarshal safely. Do not run project governance during the update.
@@ -98,8 +100,8 @@ automation boundary, not a second product experience.
 ```mermaid
 flowchart LR
     A["Inspect"] --> B{"New or existing?"}
-    B -->|"New"| C["Preview initialization"]
-    B -->|"Existing"| D["Discover Skills and verify backup coverage"]
+    B -->|"New"| C["Preview defaults or confirmed user profile"]
+    B -->|"Existing"| D["Map current layout and Skill boundaries"]
     C --> E["Exact-plan apply"]
     D --> E
     E --> F["Normal Codex work"]
@@ -112,9 +114,13 @@ flowchart LR
     J --> K
 ```
 
-- **At project start:** initialize a new layout or adopt an existing project
-  through a metadata overlay. Preview lists every Skill directory prepared for
-  management before apply. Exact package exclusions persist across runs.
+- **At project start:** explicit project configuration wins, followed by
+  current confirmed choices, a promoted user layout profile, read-only
+  detection, and finally ArchMarshal defaults. Detected paths are shown as
+  evidence and require exact-plan confirmation; they are never silently
+  learned as a habit. Preview lists every mapped project path and Skill
+  directory prepared for management before apply. Exact package exclusions
+  persist across runs.
   Managed source is fingerprinted, backed up, and quarantined pending review;
   VCS metadata, caches, virtual environments, and dependency trees remain
   preserved outside the managed boundary.
@@ -122,7 +128,8 @@ flowchart LR
   separate from history/cache. Skills resolve by tags, triggers, negative
   triggers, status, scope, and verified package identity.
 - **At closeout:** choose quick, standard, or reproducible evidence. Records are
-  append-only under date-organized history and are committed last.
+  append-only under the confirmed history path, timezone, and date partition,
+  and are committed last.
 - **Across projects:** catalog by recorded date and AND-filtered tags; propose
   common-Skill and user-preference candidates from repeated committed evidence.
   Promotion remains a separate human-reviewed action.
@@ -135,6 +142,9 @@ flowchart LR
   dependency declarations as one fingerprinted package.
 - Project artifacts, memory stores, and memory records have ownership,
   lifecycle, privacy, evidence, and explicit-read policy.
+- Project save paths and naming may follow an existing human layout, explicit
+  per-project choices, or an approved lightweight user profile. The generated
+  `.agent/INDEX.md` maps the effective paths for human review.
 - Historical outputs live under date-organized paths; project catalogs use
   recorded creation dates and tags rather than scanning raw histories.
 - Built-in CLI domains load lazily. Project and user Skill code remains data
@@ -156,6 +166,12 @@ ArchMarshal is preview-first and fail-closed:
 - `.git` and other VCS metadata, caches, virtual environments, dependency
   trees, and runtime/build artifacts are reported as preserved boundaries.
   Their contents are not inspected merely to adopt the remaining Skill source.
+- Unsafe save paths fail closed: traversal outside the project, links/reparse
+  points, VCS/cache/dependency/runtime boundaries, and file/directory conflicts
+  cannot be adopted as output destinations.
+- A nested Skill package is a module boundary. Excluding a child package keeps
+  its bytes out of the parent package fingerprint, backup, index, and learning
+  evidence.
 - Apply requires the exact reviewed plan and, where relevant, the expected
   immutable `HEAD`; stale or concurrent plans fail.
 - Control state uses create-only transactions, content hashes, immutable
@@ -209,17 +225,17 @@ automatic scheduler/governance synchronization remains planned.
 
 ```text
 ArchMarshal/
-├─ INSTALL_PROMPT.md          # idempotent Codex installer/update prompt
-├─ UPDATE_PROMPT.md           # dedicated Codex update prompt
-├─ README.md                  # product overview and safety contract
-├─ .agents/plugins/           # repository marketplace manifest
-├─ plugins/archmarshal/       # Codex plugin, Skill, wrapper, engine lock
-├─ src/archmarshal/           # deterministic safety engine
-├─ schemas/                   # public workspace/Skill/artifact schemas
-├─ templates/                 # project, Skill, and context templates
-├─ docs/                      # architecture, contracts, safety, release docs
-├─ examples/                  # human-readable sample workspaces
-└─ tests/                     # behavioral, security, scale, distribution tests
+|-- INSTALL_PROMPT.md          # idempotent Codex installer/update prompt
+|-- UPDATE_PROMPT.md           # dedicated Codex update prompt
+|-- README.md                  # product overview and safety contract
+|-- .agents/plugins/           # repository marketplace manifest
+|-- plugins/archmarshal/       # Codex plugin, Skill, wrapper, engine lock
+|-- src/archmarshal/           # deterministic safety engine
+|-- schemas/                   # public workspace/Skill/artifact schemas
+|-- templates/                 # project, Skill, and context templates
+|-- docs/                      # architecture, contracts, safety, release docs
+|-- examples/                  # human-readable sample workspaces
+`-- tests/                     # behavioral, security, scale, distribution tests
 ```
 
 Useful references:

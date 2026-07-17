@@ -46,3 +46,40 @@ fields. They must not infer permission to write from exit code `0`; all
 mutation-capable workflows still require their explicit reviewed-plan tokens.
 `candidate-draft --apply` requires the complete saved preview plus its exact
 plan and user-store HEAD tokens; a plan fragment is never sufficient.
+
+## Layout fields for `init`, `adopt`, and `start`
+
+The three lifecycle entrypoints accept repeatable
+`--save-path kind=project/relative/path`, `--naming-strategy`, `--timezone`,
+`--date-partition`, `--timestamp-format`, and `--user-store`. Supported save
+roles are `checkpoints`, `reports`, `plans`, `history`, `knowledge`,
+`artifacts`, `skills.project`, and `skills.generated`.
+
+Their preview includes:
+
+```json
+{
+  "layout": {
+    "foundation": "confirmed|detected|none",
+    "quality": "reasonable|needs_optimization|unsafe",
+    "decision": "preserve|suggest_only|initialize",
+    "source": "project_config|cli|confirmed_user_profile|detected|archmarshal_default",
+    "requires_confirmation": false,
+    "effective_profile": {},
+    "field_provenance": {},
+    "evidence": [],
+    "issues": [],
+    "recommendations": []
+  },
+  "human_review": {
+    "entrypoint": ".agent/INDEX.md",
+    "mapped_paths": [],
+    "skill_packages": []
+  }
+}
+```
+
+The complete layout and its evidence are part of the adoption plan digest.
+Changing a path, naming rule, user-store HEAD/profile, or detected directory
+invalidates the old token. Unsafe destinations return a blocked plan and do not
+create `.agent`, `AGENTS.md`, or any scaffold path.

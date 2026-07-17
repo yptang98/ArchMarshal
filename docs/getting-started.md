@@ -41,6 +41,18 @@ For an existing project and existing Skills:
 Use ArchMarshal to safely adopt this existing project and its Skills. Diagnose first, confirm complete backup coverage and conflicts, then show me the exact plan.
 ```
 
+To keep an existing project organization:
+
+```text
+Use ArchMarshal to preserve my current reports, plans, history, and Skill layout. Show the detected mapping and any objective risks before asking me to confirm it.
+```
+
+To make explicit choices for this project:
+
+```text
+Use ArchMarshal with reports in docs/reports, project Skills in .codex/skills/project, Asia/Shanghai time, and YYYY/MM/DD date folders. Preview first.
+```
+
 To keep exact Skill packages outside ArchMarshal management:
 
 ```text
@@ -78,7 +90,8 @@ project remains a normal, human-readable repository. ArchMarshal's summaries
 are indexes into preserved source material, not replacements for reports,
 plans, notes, checkpoints, or history.
 
-Project files should remain grouped by purpose and lifecycle:
+Project files should remain grouped by purpose and lifecycle. The following is
+the default, not a required rewrite of an existing project:
 
 ```text
 .agent/
@@ -111,8 +124,8 @@ Reproducible closeout:
 Use ArchMarshal for a reproducible closeout. Preserve environment and dependency fingerprints, exact commands, key-script snapshots, and a reference run script, and clearly identify anything not execution-validated.
 ```
 
-All modes preview first. Applied sessions use a new date-organized directory
-and write `COMMITTED.json` last. Reproducible evidence does not imply that
+All modes preview first. Applied sessions use the confirmed history path,
+timezone, and date partition, then write `COMMITTED.json` last. Reproducible evidence does not imply that
 ArchMarshal executed or validated the commands; `execution_validated` remains
 a separate fact.
 
@@ -127,7 +140,10 @@ Use ArchMarshal to extract repeated Skills and my project preferences from these
 Learning, candidate decision, draft creation, and promotion are separate review
 boundaries. Common-Skill drafts contain `SKILL.md.draft` until a human completes
 the package and explicitly activates it. Promoted copies live in an isolated
-user store with immutable generations and forward rollback.
+user store with immutable generations and forward rollback. A project layout
+can become `preferred.workspace_layout` only after the same explicitly
+confirmed profile has committed evidence from multiple projects; read-only
+detection and one-off layouts remain local.
 
 ## Maintainer notes
 
