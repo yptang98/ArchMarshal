@@ -23,11 +23,54 @@ the user.
 
 > **Agents should become sharper over time, not heavier.**
 
+<p align="center">
+  <a href="#why-archmarshal">Why ArchMarshal</a> |
+  <a href="#capabilities-at-a-glance">Capabilities</a> |
+  <a href="#install-with-one-codex-prompt">Install</a> |
+  <a href="#use-it-directly-in-codex">Use in Codex</a> |
+  <a href="#safety-model">Safety</a> |
+  <a href="#compatibility">Compatibility</a>
+</p>
+
+## Why ArchMarshal
+
+Long-lived Codex workspaces tend to accumulate Skills, reports, scripts,
+history, generated files, and local conventions. The usual failure mode is not
+a missing file; it is losing track of what is active, what is reusable, what
+belongs to the user, and what another agent may safely change.
+
+ArchMarshal adds a small, reviewable control plane around that workspace. It
+maps the layout you already use, keeps Skill packages modular, records project
+evidence at the depth you choose, and proposes reusable knowledge without
+silently promoting it. The control plane is machine-verifiable, while project
+files and generated indexes remain easy for a human to inspect.
+
+## Capabilities at a glance
+
+| Capability | What ArchMarshal does | What it does not do |
+|---|---|---|
+| Adopt an existing project | Inspects the current layout, previews every managed path and Skill root, verifies a backup, then adds a create-only governance overlay. | It does not move, rename, normalize, or overwrite existing files. |
+| Initialize a new project | Creates a predictable project and Skill scaffold using confirmed paths, names, timezone, date partitioning, and tags. | It does not force ArchMarshal defaults over an approved user convention. |
+| Manage Skills safely | Discovers package boundaries, stores immutable metadata, supports exact persistent exclusions, quarantines new imports, and resolves reviewed Skills by task. | It does not rewrite an existing `SKILL.md` or auto-activate an imported Skill. |
+| Keep project files findable | Maps code, reports, history, knowledge, context, memory, and Skill locations into a human-readable `.agent/INDEX.md`. | It does not hide project content in a proprietary database or load all history by default. |
+| Close out work | Records quick, standard, or reproducible evidence with append-only files and a final integrity manifest. | It does not claim commands succeeded unless execution was separately validated. |
+| Learn across projects | Builds review-only candidates for common Skills and repeated user preferences from committed project evidence. | It does not silently mutate global policy or promote a candidate automatically. |
+| Diagnose and recover | Provides read-only health checks, verified backups, restore-to-new-directory, and forward-only rollback for ArchMarshal-owned state. | It does not delete partial evidence or rewrite human-owned source during recovery. |
+
+The practical result is a workspace that can grow without turning the global
+Skill layer into a monolith: global policy stays small, reusable capability
+packages stay modular, and project-specific knowledge stays with the project.
+
 ## Install with one Codex prompt
 
 Copy the entire prompt below into Codex. It handles a first installation or a
 safe update, pins the repository to a reviewed commit, avoids the current
 project, and verifies the installed plugin before reporting success.
+
+<details>
+<summary><strong>Show the complete installation and update prompt</strong></summary>
+
+Copy everything inside the block into a Codex task.
 
 <!-- BEGIN INSTALL PROMPT -->
 ```text
@@ -48,6 +91,8 @@ Complete the work yourself under these safety constraints; do not hand the steps
 8. Report the installation or update result, full commit SHA, plugin and engine versions, whether a backup was created and where, and the bootstrap and read-only doctor results. Do not adopt or reorganize the current project during installation. Remind me to start a new Codex task and invoke ArchMarshal directly in natural language.
 ```
 <!-- END INSTALL PROMPT -->
+
+</details>
 
 The same prompt is available as a standalone file:
 [INSTALL_PROMPT.md](INSTALL_PROMPT.md).
@@ -114,45 +159,60 @@ flowchart LR
     J --> K
 ```
 
-- **At project start:** explicit project configuration wins, followed by
-  current confirmed choices, a promoted user layout profile, read-only
-  detection, and finally ArchMarshal defaults. Detected paths are shown as
-  evidence and require exact-plan confirmation; they are never silently
-  learned as a habit. Preview lists every mapped project path and Skill
-  directory prepared for management before apply. Exact package exclusions
-  persist across runs.
-  Managed source is fingerprinted, backed up, and quarantined pending review;
-  VCS metadata, caches, virtual environments, and dependency trees remain
-  preserved outside the managed boundary.
-- **During work:** keep active project material readable, registry-backed, and
-  separate from history/cache. Skills resolve by tags, triggers, negative
-  triggers, status, scope, and verified package identity.
-- **At closeout:** choose quick, standard, or reproducible evidence. Records are
-  append-only under the confirmed history path, timezone, and date partition,
-  and are committed last.
-- **Across projects:** catalog by recorded date and AND-filtered tags; propose
-  common-Skill and user-preference candidates from repeated committed evidence.
-  Promotion remains a separate human-reviewed action.
+| Phase | ArchMarshal behavior | Write boundary |
+|---|---|---|
+| Inspect | Detects project paths, Skill roots, nested packages, exclusions, VCS/cache boundaries, and objective risks. | Read-only. An absent project root is not created. |
+| Adopt or initialize | Shows the complete mapping and exact plan before adding the control plane. Existing projects require verified backup coverage first. | Create-only managed files; existing source remains untouched. |
+| Work | Resolves reviewed Skills by tags, triggers, negative triggers, status, scope, and verified package identity. | Active files stay separate from explicit-only history and cache. |
+| Close | Records one of three evidence levels under the confirmed path, naming, timezone, and date policy. | Append-only session directory; `COMMITTED.json` is written last. |
+| Learn | Catalogs projects by recorded date and tags, then proposes repeated Skill or preference candidates. | Review-only candidates; activation and promotion are separate actions. |
 
-## What it manages
+Layout precedence is explicit and auditable:
 
-- Global policy stays tiny and high priority.
-- Functional, common-project, project, and generated Skills remain distinct.
-- Common Skills can carry their own scripts, references, templates, assets, and
-  dependency declarations as one fingerprinted package.
-- Project artifacts, memory stores, and memory records have ownership,
-  lifecycle, privacy, evidence, and explicit-read policy.
-- Project save paths and naming may follow an existing human layout, explicit
-  per-project choices, or an approved lightweight user profile. The generated
-  `.agent/INDEX.md` maps the effective paths for human review.
-- Historical outputs live under date-organized paths; project catalogs use
-  recorded creation dates and tags rather than scanning raw histories.
-- Built-in CLI domains load lazily. Project and user Skill code remains data
-  until a host deliberately chooses to execute it.
+```text
+recognized project configuration
+  > explicit choices for this preview
+  > promoted confirmed user profile
+  > read-only detected evidence
+  > ArchMarshal defaults
+```
+
+A safe nonstandard layout is treated as reasonable. ArchMarshal may suggest an
+improvement, but only unsafe paths block the operation. Detection alone never
+becomes a user preference; a convention can be learned only after it is
+explicitly confirmed and repeated across committed projects.
+
+## Project and Skill organization
+
+ArchMarshal keeps four Skill roles distinct:
+
+| Skill role | Purpose | Typical scope |
+|---|---|---|
+| Global policy | Small, high-priority rules that should always apply. | User-wide |
+| Functional Skill | A reusable capability selected by task triggers and tags. | User-wide or shared |
+| Common project Skill | A reproducible engineering workflow, including its scripts, references, templates, assets, and dependency declarations. | Cross-project |
+| Project or generated Skill | Repository-specific guidance or a draft derived from project evidence. | One project |
+
+Project artifacts, context modules, memory stores, and memory records retain
+explicit ownership, lifecycle, privacy, evidence, and read policies. Historical
+outputs can use date-organized paths, while the project catalog reads compact
+metadata instead of scanning raw history. Built-in command domains load lazily,
+and user Skill code remains data until a host deliberately executes it.
 
 ## Safety model
 
 ArchMarshal is preview-first and fail-closed:
+
+| Safety boundary | Guarantee |
+|---|---|
+| Before a write | The user sees the exact paths, Skill directories, exclusions, warnings, and plan digest. |
+| Existing content | Human-owned project and Skill files are never overwritten, moved, renamed, deleted, or normalized. |
+| Backup and recovery | Adoption verifies backup coverage first; restore writes to a new directory; rollback publishes a new audited generation. |
+| Skill isolation | Exact exclusions persist, nested packages are separate boundaries, and imported Skills remain quarantined until reviewed. |
+| Concurrent or stale work | Immutable generations, hashes, OS-lifetime locks, and expected-`HEAD` checks fail closed. |
+
+<details>
+<summary><strong>Read the detailed safety guarantees</strong></summary>
 
 - Read-only inspection does not create an absent project root.
 - Existing user project and Skill files are never normalized, overwritten,
@@ -186,6 +246,8 @@ ArchMarshal is preview-first and fail-closed:
 - Secret-like inline values are blocked, but user-selected summaries and script
   snapshots still require review before recording.
 
+</details>
+
 The current filesystem backend blocks static links/reparse points and handles
 cooperative concurrency. It does not claim protection from a malicious process
 with the same permissions replacing ancestor directories during a write; a
@@ -196,11 +258,11 @@ handle-relative backend remains a release gate.
 ArchMarshal can govern evidence produced by orchestration tools without taking
 over their scheduler. For CostMarshal, the intended boundary is:
 
-- CostMarshal owns provider routing, attempts, budgets, and leader acceptance.
-- ArchMarshal owns project/Skill inventory, reviewed backup boundaries,
-  closeout evidence, and reusable-candidate governance.
-- Integration should exchange accepted manifests/reports through explicit
-  paths or contracts; neither tool should edit the other's internal state.
+| Concern | CostMarshal | ArchMarshal |
+|---|---|---|
+| Primary role | Provider routing, attempts, budgets, and leader acceptance. | Project and Skill inventory, reviewed backup boundaries, closeout evidence, and reusable-candidate governance. |
+| Shared handoff | Produces accepted manifests or reports at explicit paths. | Catalogs or records those accepted artifacts through an explicit contract. |
+| Isolation rule | Keeps ownership of orchestration state. | Never edits CostMarshal internal state and may exclude its Skill packages completely. |
 
 Users can now place one or more CostMarshal Skill packages outside ArchMarshal's
 management boundary with exact persistent exclusions while ArchMarshal governs
