@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.17.1 - 2026-07-18
+
+- Disabled bytecode-cache writes in the plugin launcher so candidate,
+  marketplace, and recovery engine sources stay unchanged while commands run.
+- Kept sealed last-known-good capsules immutable during offline recovery by
+  materializing a separate create-only recovery checkout before registering a
+  local marketplace. Generated caches and Codex-local runtime state now land in
+  that disposable working copy, not in the verified capsule.
+- Added regression coverage that runs doctor from a real capsule, confirms no
+  `__pycache__` appears, re-verifies the capsule, and proves later changes to a
+  materialized recovery checkout cannot affect capsule integrity.
+
 ## 0.17.0 - 2026-07-18
 
 ### Lightweight, no-lockout updates

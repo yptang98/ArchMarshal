@@ -15,8 +15,11 @@ it stages and validates the candidate, and only then uses Codex's official
 plugin marketplace/add commands for a short cutover. The current Python
 environment is the lightweight fast path; an isolated runtime is prepared only
 when dependencies are actually missing. A compact last-known-good capsule and
-the previous runtime pointer remain available for immediate rollback. The guide
-does not publish a fake SHA placeholder that looks copyable but cannot run.
+the previous runtime pointer remain available for immediate rollback. Launchers
+suppress bytecode-cache writes. If offline recovery is needed, ArchMarshal
+materializes and registers a separate recovery working copy so the verified
+capsule remains sealed. The guide does not publish a fake SHA placeholder that
+looks copyable but cannot run.
 
 Start a new Codex task after installation so the plugin Skill is loaded.
 

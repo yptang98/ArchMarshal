@@ -85,9 +85,9 @@ def test_create_and_verify_minimal_last_known_good_capsule(tmp_path: Path) -> No
     assert all("codex-home" not in item["path"] for item in manifest["files"])
     assert manifest["rollback"]["runtime_pointer"] == "runtime/current.json"
     assert manifest["rollback"]["pinned_marketplace"][2].endswith("a" * 40)
-    assert "codex plugin marketplace add ." in manifest["rollback"][
+    assert "update_support.py materialize" in manifest["rollback"][
         "temporary_capsule_marketplace"
-    ]
+    ][0]
 
 
 def test_capsule_verification_detects_tampering(tmp_path: Path) -> None:
@@ -220,3 +220,53 @@ def test_real_repository_capsule_is_independently_bootstrappable(tmp_path: Path)
     assert payload["mode"] == "ready"
     assert payload["source_kind"] == "checkout"
     assert payload["verified"] is True
+    doctor_root = tmp_path / "doctor-root-does-not-exist"
+    doctor = subprocess.run(
+        [
+            sys.executable,
+            str(capsule / "plugins" / "archmarshal" / "scripts" / "run_archmarshal.py"),
+            "doctor",
+            str(doctor_root),
+        ],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert doctor.returncode == 0, doctor.stderr
+    assert not doctor_root.exists()
+    assert not list(capsule.rglob("__pycache__"))
+    assert support.verify_capsule(capsule)["verified"] is True
+
+
+def test_materialized_recovery_is_disposable_and_capsule_stays_sealed(
+    tmp_path: Path,
+) -> None:
+    support = _support()
+    codex_home, marketplace, plugin = _old_installation(tmp_path)
+    created = support.create_capsule(
+        codex_home=codex_home,
+        marketplace_root=marketplace,
+        plugin_root=plugin,
+        old_repository=OFFICIAL,
+        old_commit="9" * 40,
+        old_version="0.16.1",
+        output=Path("capsule"),
+    )
+    capsule = Path(created["capsule"])
+
+    result = support.materialize_recovery(
+        capsule=capsule,
+        codex_home=codex_home,
+        output=Path("recovery"),
+    )
+
+    recovery = Path(result["recovery"])
+    assert result["capsule_verified"] is True
+    assert (recovery / ".agents" / "plugins" / "marketplace.json").is_file()
+    assert (recovery / "plugins" / "archmarshal" / "engine.lock.json").is_file()
+    assert (recovery / "RECOVERY.json").is_file()
+    assert not (recovery / "runtime" / "current.json").exists()
+    (recovery / "generated-cache.txt").write_text("disposable", encoding="utf-8")
+    assert support.verify_capsule(capsule)["verified"] is True

@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 RUNTIME_FORMAT = "archmarshal-runtime-v1"
-REQUIRED_ENGINE_VERSION = "0.17.0"
+REQUIRED_ENGINE_VERSION = "0.17.1"
 MAX_POINTER_BYTES = 16 * 1024
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
@@ -150,7 +150,7 @@ def main(arguments: list[str] | None = None) -> int:
         return _error(str(exc), pointer=_codex_home() / "runtimes/archmarshal/current.json")
     try:
         completed = subprocess.run(
-            [str(interpreter), "-I", str(wrapper), *args], check=False
+            [str(interpreter), "-B", "-I", str(wrapper), *args], check=False
         )
     except OSError as exc:
         return _error(

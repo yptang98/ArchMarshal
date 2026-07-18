@@ -16,9 +16,10 @@ project command during this workflow.
 4. Keep the working version installed and enabled while staging the exact
    candidate below `CODEX_HOME/updates/archmarshal/`. Run the candidate
    launcher's dependency-free `--bootstrap-status` directly from that checkout,
-   then invoke its locked wrapper directly with active Python and `-I` for
+   then invoke its locked wrapper directly with active Python and `-B -I` for
    read-only `doctor` against a nonexistent system-temporary path. Do not touch
-   `current.json` or active plugin state unless both pass.
+   `current.json`, write bytecode caches, or touch active plugin state unless
+   both pass.
 5. Prefer the active Python interpreter. Only when candidate doctor reports a
    missing dependency, prepare and validate a commit-scoped isolated runtime;
    do not publish its pointer yet and do not modify system Python.
@@ -31,7 +32,8 @@ project command during this workflow.
    capsule launcher and local-marketplace recovery path. Keep old runtimes in
    place and exclude credentials, marketplace history, and the complete Codex
    configuration. The old plugin remains active until this capsule and the
-   candidate are both verified.
+   candidate are both verified. Keep the capsule sealed after verification;
+   never run project commands directly against it.
 7. Use only `codex plugin` commands for the short cutover. Re-add the new
    marketplace at its full SHA, install and enable `archmarshal@archmarshal`,
    atomically publish a prepared runtime pointer only if one was required, and
@@ -40,10 +42,11 @@ project command during this workflow.
    last-known-good pinned plugin/marketplace immediately. Report old/new
    versions and SHAs, capsule location, runtime choice, bootstrap result, doctor
    result, and whether the operation installed, updated, restored, or did
-   nothing. If the old Git pin is unavailable, temporarily register the verified
-   capsule as the recovery marketplace and reinstall the old plugin from it. A
-   current task may finish under already loaded old Skill instructions; use a
-   new task to load the new version.
+   nothing. If the old Git pin is unavailable, use `update_support.py
+   materialize` to create a disjoint recovery working copy, verify the sealed
+   capsule again, and temporarily register only the working copy as the recovery
+   marketplace. A current task may finish under already loaded old Skill
+   instructions; use a new task to load the new version.
 
 The complete standalone prompts are `INSTALL_PROMPT.md` and `UPDATE_PROMPT.md`
 in the ArchMarshal repository. The install prompt is intentionally idempotent:

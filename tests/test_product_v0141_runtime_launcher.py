@@ -37,8 +37,8 @@ def test_launcher_defaults_to_active_python_without_creating_state(
 
     assert launcher.main(["--bootstrap-status"]) == 0
     assert calls[0][0] == sys.executable
-    assert calls[0][1] == "-I"
-    assert calls[0][2].endswith("invoke_archmarshal.py")
+    assert calls[0][1:3] == ["-B", "-I"]
+    assert calls[0][3].endswith("invoke_archmarshal.py")
     assert not (tmp_path / "runtimes").exists()
 
 
@@ -156,11 +156,11 @@ def test_launcher_skips_a_valid_runtime_for_an_older_engine_version(
 @pytest.mark.parametrize(
     "payload",
     [
-        {"format": "wrong", "commit": "a" * 40, "engine_version": "0.17.0"},
+        {"format": "wrong", "commit": "a" * 40, "engine_version": "0.17.1"},
         {
             "format": "archmarshal-runtime-v1",
             "commit": "not-a-commit",
-            "engine_version": "0.17.0",
+            "engine_version": "0.17.1",
             "python": "outside",
         },
         {
@@ -172,7 +172,7 @@ def test_launcher_skips_a_valid_runtime_for_an_older_engine_version(
         {
             "format": "archmarshal-runtime-v1",
             "commit": "a" * 40,
-            "engine_version": "0.17.0",
+            "engine_version": "0.17.1",
             "python": "outside",
             "unexpected": "field",
         },

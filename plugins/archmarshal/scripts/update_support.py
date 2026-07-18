@@ -17,6 +17,8 @@ from typing import Any
 
 CAPSULE_FORMAT = "archmarshal-update-capsule-v1"
 CAPSULE_MANIFEST = "CAPSULE.json"
+RECOVERY_FORMAT = "archmarshal-update-recovery-v1"
+RECOVERY_MANIFEST = "RECOVERY.json"
 ALLOWED_REPOSITORIES = {
     "https://github.com/yptang98/archmarshal",
     "https://github.com/yptang98/archmarshal.git",
@@ -331,8 +333,8 @@ def create_capsule(
                 "codex plugin add archmarshal@archmarshal",
             ],
             "temporary_capsule_marketplace": [
-                "cd <verified-capsule-directory>",
-                "codex plugin marketplace add .",
+                "python update_support.py materialize <verified-capsule-directory> --codex-home <CODEX_HOME>",
+                "codex plugin marketplace add <materialized-recovery-directory>",
                 "codex plugin add archmarshal@archmarshal",
             ],
             "runtime_pointer": (
@@ -394,8 +396,8 @@ def _manifest(capsule: Path) -> dict[str, Any]:
             "codex plugin add archmarshal@archmarshal",
         ],
         "temporary_capsule_marketplace": [
-            "cd <verified-capsule-directory>",
-            "codex plugin marketplace add .",
+            "python update_support.py materialize <verified-capsule-directory> --codex-home <CODEX_HOME>",
+            "codex plugin marketplace add <materialized-recovery-directory>",
             "codex plugin add archmarshal@archmarshal",
         ],
         "runtime_pointer": (
@@ -484,6 +486,98 @@ def verify_capsule(capsule: Path) -> dict[str, Any]:
     }
 
 
+def _recovery_output(codex_home: Path, output: Path | None, commit: str) -> Path:
+    _unlinked_directory(codex_home, label="CODEX_HOME")
+    root = codex_home / "updates" / "archmarshal" / "recovery"
+    _ensure_directory(root)
+    resolved_root = root.resolve(strict=True)
+    if output is None:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        candidate = resolved_root / f"{stamp}-{commit[:12]}"
+    else:
+        candidate = output.expanduser()
+        if not candidate.is_absolute():
+            candidate = resolved_root / candidate
+    if candidate.parent.resolve(strict=False) != resolved_root:
+        raise CapsuleError(
+            "The recovery checkout must be a direct child of "
+            "CODEX_HOME/updates/archmarshal/recovery."
+        )
+    if os.path.lexists(candidate):
+        raise CapsuleError(f"The recovery destination already exists: {candidate}")
+    return candidate
+
+
+def materialize_recovery(
+    *,
+    capsule: Path,
+    codex_home: Path,
+    output: Path | None = None,
+) -> dict[str, Any]:
+    root = capsule.expanduser().resolve(strict=True)
+    verified = verify_capsule(root)
+    manifest = _manifest(root)
+    old = manifest["old"]
+    destination = _recovery_output(
+        codex_home.expanduser().resolve(strict=True), output, str(old["commit"])
+    )
+    unresolved_destination = destination.resolve(strict=False)
+    if unresolved_destination.is_relative_to(root) or root.is_relative_to(
+        unresolved_destination
+    ):
+        raise CapsuleError("The recovery checkout and capsule must be disjoint.")
+    destination.mkdir()
+
+    copied = 0
+    content_bytes = 0
+    for item in manifest["files"]:
+        relative = str(item["path"])
+        if relative.startswith("runtime/"):
+            continue
+        source = root / Path(*relative.split("/"))
+        content, mode = _stable_bytes(source, limit=MAX_BYTES, label="Capsule file")
+        if (
+            len(content) != item["bytes"]
+            or hashlib.sha256(content).hexdigest() != item["sha256"]
+            or mode != item["mode"]
+        ):
+            raise CapsuleError(f"Capsule file changed during recovery: {relative}")
+        _write_exclusive(
+            destination / Path(*relative.split("/")), content, mode=int(item["mode"])
+        )
+        copied += 1
+        content_bytes += len(content)
+
+    capsule_manifest, _ = _stable_bytes(
+        root / CAPSULE_MANIFEST,
+        limit=MAX_MANIFEST_BYTES,
+        label="Capsule manifest",
+    )
+    recovery = {
+        "format": RECOVERY_FORMAT,
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "capsule_manifest_sha256": hashlib.sha256(capsule_manifest).hexdigest(),
+        "old": old,
+        "source_capsule": str(root),
+    }
+    recovery_bytes = (
+        json.dumps(recovery, ensure_ascii=True, indent=2, sort_keys=True).encode("utf-8")
+        + b"\n"
+    )
+    _write_exclusive(destination / RECOVERY_MANIFEST, recovery_bytes, mode=0o600)
+    verify_capsule(root)
+    return {
+        "api_version": "archmarshal-update-support-v1",
+        "mode": "recovery_materialized",
+        "capsule": str(root),
+        "recovery": str(destination),
+        "old": old,
+        "file_count": copied,
+        "content_bytes": content_bytes,
+        "capsule_verified": verified["verified"],
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -498,6 +592,12 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--runtime-pointer", type=Path)
     verify = subparsers.add_parser("verify", help="Verify a committed update capsule.")
     verify.add_argument("capsule", type=Path)
+    materialize = subparsers.add_parser(
+        "materialize", help="Create a disposable local-marketplace recovery checkout."
+    )
+    materialize.add_argument("capsule", type=Path)
+    materialize.add_argument("--codex-home", type=Path, required=True)
+    materialize.add_argument("--output", type=Path)
     return parser
 
 
@@ -515,8 +615,14 @@ def main(arguments: list[str] | None = None) -> int:
                 output=args.output,
                 runtime_pointer=args.runtime_pointer,
             )
-        else:
+        elif args.command == "verify":
             payload = verify_capsule(args.capsule)
+        else:
+            payload = materialize_recovery(
+                capsule=args.capsule,
+                codex_home=args.codex_home,
+                output=args.output,
+            )
     except (CapsuleError, OSError) as exc:
         print(
             json.dumps(

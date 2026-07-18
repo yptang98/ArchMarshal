@@ -23,9 +23,10 @@ signature; users should still pin the marketplace to a reviewed commit.
 Plugin updates use a prepare-then-cutover boundary. The old plugin stays enabled
 while the exact candidate is staged, dependency-free bootstrapped, and checked
 with read-only doctor. The active Python interpreter is tried first. A bounded
-stdlib helper creates a compact, hash-complete last-known-good capsule that is
-also a valid temporary local marketplace. Only then may Codex unregister and
-re-register plugin state. Candidate failure leaves the old version untouched;
+stdlib helper creates a compact, hash-complete last-known-good capsule. Offline
+recovery materializes a separate working copy and registers only that copy as a
+temporary local marketplace, keeping the capsule sealed. Only then may Codex
+unregister and re-register plugin state. Candidate failure leaves the old version untouched;
 cutover failure restores the old pin and runtime pointer. Bootstrap identity
 checks bypass runtime pointers, while project commands still reject malformed
 or out-of-bound pointers and skip only structurally valid pointers for another
