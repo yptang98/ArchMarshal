@@ -10,9 +10,12 @@ Codex task. The prompt performs a first install or safe update, pins a verified
 full Git commit SHA, protects any existing installation, and validates the
 plugin without touching the current project.
 
-The prompt resolves the immutable ref and then uses Codex's official plugin
-marketplace/add commands. It also handles existing marketplaces, backup,
-rollback, identity checks, and an isolated runtime when necessary. The guide
+The prompt resolves the immutable ref, keeps the working version enabled while
+it stages and validates the candidate, and only then uses Codex's official
+plugin marketplace/add commands for a short cutover. The current Python
+environment is the lightweight fast path; an isolated runtime is prepared only
+when dependencies are actually missing. A compact last-known-good capsule and
+the previous runtime pointer remain available for immediate rollback. The guide
 does not publish a fake SHA placeholder that looks copyable but cannot run.
 
 Start a new Codex task after installation so the plugin Skill is loaded.
@@ -25,7 +28,11 @@ Update ArchMarshal safely to the latest verified version. Do not manage the curr
 ```
 
 The install prompt is intentionally update-compatible: rerunning it performs a
-verified update or an exact-version no-op rather than requiring an uninstall.
+verified update or an exact-version no-op. Candidate bootstrap bypasses the
+runtime pointer, so a stale old-version pointer cannot lock identity checks.
+Normal project commands still reject malformed or out-of-bound pointers, while
+a structurally valid pointer for another ArchMarshal version falls back to the
+active Python interpreter.
 
 ## 2. Start with natural language
 

@@ -23,7 +23,11 @@ runtime, it reads only
 `$CODEX_HOME/runtimes/archmarshal/current.json`, requires
 `archmarshal-runtime-v1`, the matching engine version, a full commit SHA, and an
 interpreter below that commit's runtime directory, then invokes the locked
-wrapper with it. An invalid or stale runtime pointer is a stop condition.
+wrapper with it. Dependency-free `--bootstrap-status` always bypasses the
+runtime pointer so installation identity remains diagnosable. A structurally
+valid pointer for another ArchMarshal version is skipped in favor of the active
+Python interpreter; a malformed pointer, linked/out-of-bound interpreter, or
+other unsafe pointer remains a stop condition for project commands.
 
 The wrapper uses this repository's `src/` when
 available, otherwise the uniquely named configured ArchMarshal Git marketplace

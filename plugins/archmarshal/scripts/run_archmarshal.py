@@ -12,9 +12,10 @@ import sys
 from pathlib import Path
 
 RUNTIME_FORMAT = "archmarshal-runtime-v1"
-REQUIRED_ENGINE_VERSION = "0.16.1"
+REQUIRED_ENGINE_VERSION = "0.17.0"
 MAX_POINTER_BYTES = 16 * 1024
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 WINDOWS_REPARSE_POINT = 0x0400
 
 
@@ -53,7 +54,7 @@ def _is_unlinked_regular_file(path: Path) -> bool:
     return not path.is_symlink() and not is_reparse and stat.S_ISREG(metadata.st_mode)
 
 
-def _read_pointer(pointer: Path, runtime_root: Path) -> Path:
+def _read_pointer(pointer: Path, runtime_root: Path) -> tuple[Path, str]:
     try:
         runtime_metadata = runtime_root.lstat()
     except OSError as exc:
@@ -91,7 +92,8 @@ def _read_pointer(pointer: Path, runtime_root: Path) -> Path:
         payload.get("format") != RUNTIME_FORMAT
         or not isinstance(commit, str)
         or COMMIT_RE.fullmatch(commit) is None
-        or engine_version != REQUIRED_ENGINE_VERSION
+        or not isinstance(engine_version, str)
+        or VERSION_RE.fullmatch(engine_version) is None
         or not isinstance(python_value, str)
         or not python_value
     ):
@@ -125,22 +127,25 @@ def _read_pointer(pointer: Path, runtime_root: Path) -> Path:
         raise RuntimePointerError(
             "The runtime interpreter must exist below its commit-scoped directory."
         ) from exc
-    return interpreter
+    return interpreter, engine_version
 
 
-def _interpreter() -> tuple[Path, Path]:
+def _interpreter(*, ignore_pointer: bool = False) -> tuple[Path, Path]:
     runtime_root = _codex_home() / "runtimes" / "archmarshal"
     pointer = runtime_root / "current.json"
-    if not os.path.lexists(pointer):
+    if ignore_pointer or not os.path.lexists(pointer):
         return Path(sys.executable), pointer
-    return _read_pointer(pointer, runtime_root), pointer
+    interpreter, engine_version = _read_pointer(pointer, runtime_root)
+    if engine_version != REQUIRED_ENGINE_VERSION:
+        return Path(sys.executable), pointer
+    return interpreter, pointer
 
 
 def main(arguments: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if arguments is None else arguments)
     wrapper = Path(__file__).resolve().with_name("invoke_archmarshal.py")
     try:
-        interpreter, pointer = _interpreter()
+        interpreter, pointer = _interpreter(ignore_pointer=args == ["--bootstrap-status"])
     except RuntimePointerError as exc:
         return _error(str(exc), pointer=_codex_home() / "runtimes/archmarshal/current.json")
     try:

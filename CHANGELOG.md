@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.17.0 - 2026-07-18
+
+### Lightweight, no-lockout updates
+
+- Kept the installed version enabled while a verified candidate is staged,
+  bootstrapped, and diagnosed outside every project root. Plugin-state removal
+  is now reserved for a short cutover after candidate and fallback checks pass.
+- Added an active-Python fast path and limited isolated-runtime creation to
+  missing-dependency cases. Candidate runtimes are validated before their
+  pointer can become current.
+- Replaced broad pre-update copying with a bounded stdlib helper that creates
+  and verifies a compact, create-only, commit-last last-known-good capsule. It
+  preserves the old plugin, locked engine source, exact pin, runtime pointer,
+  and recovery marketplace manifest without copying credentials or Codex
+  configuration.
+- Made dependency-free bootstrap status bypass runtime pointers, so a stale or
+  malformed pointer cannot hide plugin identity during installation repair.
+  Project commands still fail closed on malformed or out-of-bound pointers and
+  safely skip a valid pointer belonging to another ArchMarshal version.
+- Documented immediate old-pin and pointer restoration on cutover failure, while
+  allowing the current task to finish with already loaded old Skill instructions.
+
 ## 0.16.1 - 2026-07-18
 
 - Registered `archmarshal-adoption-plan-v4` as the current readable and

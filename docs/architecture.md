@@ -20,6 +20,17 @@ source-tree hash match `engine.lock.json`. It never falls back to an ambient
 Python installation. This is a coherence check, not a cryptographic publisher
 signature; users should still pin the marketplace to a reviewed commit.
 
+Plugin updates use a prepare-then-cutover boundary. The old plugin stays enabled
+while the exact candidate is staged, dependency-free bootstrapped, and checked
+with read-only doctor. The active Python interpreter is tried first. A bounded
+stdlib helper creates a compact, hash-complete last-known-good capsule that is
+also a valid temporary local marketplace. Only then may Codex unregister and
+re-register plugin state. Candidate failure leaves the old version untouched;
+cutover failure restores the old pin and runtime pointer. Bootstrap identity
+checks bypass runtime pointers, while project commands still reject malformed
+or out-of-bound pointers and skip only structurally valid pointers for another
+ArchMarshal version.
+
 ## Layers
 
 ```text

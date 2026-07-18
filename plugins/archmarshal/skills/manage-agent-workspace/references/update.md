@@ -12,28 +12,38 @@ project command during this workflow.
    `archmarshal` and plugin identity `archmarshal@archmarshal`. Stop on ambiguous
    origin or duplicate identity.
 3. If the exact SHA and version are already installed and enabled, report a
-   no-op. This is what makes the install command safely update-compatible.
-4. For first install, add the Git marketplace at the verified full SHA, then add
-   `archmarshal@archmarshal`.
-5. For update, never rewrite a user-owned local checkout. For a Codex-managed Git
-   snapshot, save the old origin, SHA, version, marketplace snapshot, plugin
-   cache, and ArchMarshal runtime pointer below a UTC-timestamped
-   `CODEX_HOME/backups/archmarshal/` directory. Exclude credentials and the full
-   Codex configuration. Verify the backup before using only `codex plugin`
-   remove/add commands to replace the old pinned marketplace and plugin. Restore
-   the last known-good pinned version if replacement or validation fails.
-6. Require the installed plugin to be enabled. Run its
-   `scripts/run_archmarshal.py --bootstrap-status`; require `mode=ready`,
-   `verified=true`, `marketplace=archmarshal`, `dependency_imported=false`, and
-   matching plugin/engine versions. Then run read-only `doctor` against a
-   nonexistent path under the system temporary directory, never the current
-   project.
-7. If dependencies are unavailable, create or reuse only the validated
-   commit-scoped isolated runtime below `CODEX_HOME/runtimes/archmarshal/` as
-   specified by the repository install prompt. Do not modify system Python.
-8. Report old/new versions and SHAs, backup location, bootstrap result, doctor
+   no-op. Never rewrite a user-owned local checkout.
+4. Keep the working version installed and enabled while staging the exact
+   candidate below `CODEX_HOME/updates/archmarshal/`. Run the candidate
+   launcher's dependency-free `--bootstrap-status` directly from that checkout,
+   then invoke its locked wrapper directly with active Python and `-I` for
+   read-only `doctor` against a nonexistent system-temporary path. Do not touch
+   `current.json` or active plugin state unless both pass.
+5. Prefer the active Python interpreter. Only when candidate doctor reports a
+   missing dependency, prepare and validate a commit-scoped isolated runtime;
+   do not publish its pointer yet and do not modify system Python.
+6. For an update, use the candidate's stdlib-only `update_support.py create`
+   command to build a small last-known-good capsule; do not assemble it with ad
+   hoc copy commands. It records the old identity, exact ref, runtime pointer,
+   `.agents/plugins/marketplace.json`, plugin directory, locked engine source,
+   `pyproject.toml`, commit-last file-hash manifest, and rollback commands in
+   repository-relative layout. Run its `verify` command, then verify both the
+   capsule launcher and local-marketplace recovery path. Keep old runtimes in
+   place and exclude credentials, marketplace history, and the complete Codex
+   configuration. The old plugin remains active until this capsule and the
+   candidate are both verified.
+7. Use only `codex plugin` commands for the short cutover. Re-add the new
+   marketplace at its full SHA, install and enable `archmarshal@archmarshal`,
+   atomically publish a prepared runtime pointer only if one was required, and
+   repeat bootstrap plus read-only doctor. Never manually delete plugin caches.
+8. On any cutover or validation failure, restore the old runtime pointer and
+   last-known-good pinned plugin/marketplace immediately. Report old/new
+   versions and SHAs, capsule location, runtime choice, bootstrap result, doctor
    result, and whether the operation installed, updated, restored, or did
-   nothing. Ask the user to start a new Codex task after a version change.
+   nothing. If the old Git pin is unavailable, temporarily register the verified
+   capsule as the recovery marketplace and reinstall the old plugin from it. A
+   current task may finish under already loaded old Skill instructions; use a
+   new task to load the new version.
 
 The complete standalone prompts are `INSTALL_PROMPT.md` and `UPDATE_PROMPT.md`
 in the ArchMarshal repository. The install prompt is intentionally idempotent:
