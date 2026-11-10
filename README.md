@@ -47,6 +47,12 @@ files and generated indexes remain easy for a human to inspect.
 
 ## Capabilities at a glance
 
+Version 0.18 adds [device-aware Skill sync and parallel-workstream context](docs/portability.md).
+Sync selected packages through your GitHub repository or a mounted cloud folder,
+retain their original device and versions, and restore saved work by project path.
+Independent windows keep separate handoffs that can be synthesized without losing
+either source. Imported Skills remain quarantined until reviewed.
+
 | Capability | What ArchMarshal does | What it does not do |
 |---|---|---|
 | Adopt an existing project | Inspects the current layout, previews every managed path and Skill root, verifies a backup, then adds a create-only governance overlay. | It does not move, rename, normalize, or overwrite existing files. |

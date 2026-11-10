@@ -10,12 +10,9 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, NamedTuple
 
-if os.name == "nt":
-    import msvcrt
-else:
-    import fcntl
-
 from .errors import ArchMarshalError, require_workspace_root
+from .file_lock import try_os_lock as _try_os_lock
+from .file_lock import unlock_os_lock as _unlock_os_lock
 from .safety import (
     EXCLUDED_BACKUP_PARTS,
     create_backup,
@@ -238,7 +235,7 @@ def _carry_review_decision(
     if not isinstance(review, dict):
         return current
     decision = review.get("decision")
-    if decision not in {"approved", "rejected"}:
+    if not isinstance(decision, str) or decision not in {"approved", "rejected"}:
         return current
     subject_digest = skill_review_subject_digest(current)
     if review.get("subject_digest") != subject_digest:
@@ -1175,7 +1172,8 @@ def _validate_generation(generation: object, head: str) -> None:
                     "Skill index generation contains an invalid rollback record.",
                 )
         elif (
-            kind
+            not isinstance(kind, str)
+            or kind
             not in {
                 "initialized",
                 "added",
@@ -1202,6 +1200,7 @@ def _validate_generation(generation: object, head: str) -> None:
         if (
             not isinstance(record, dict)
             or not isinstance(record.get("source"), str)
+            or not isinstance(record.get("state"), str)
             or record.get("state") not in {"active", "removed"}
             or not isinstance(record.get("manifest"), dict)
         ):
@@ -1315,7 +1314,7 @@ def _validate_source_preconditions(
     generation: dict[str, Any],
 ) -> list[dict[str, Any]]:
     policy = plan.get("source_precondition_policy")
-    if policy not in {"active-match", "active-match-and-removed-absent"}:
+    if not isinstance(policy, str) or policy not in {"active-match", "active-match-and-removed-absent"}:
         raise ArchMarshalError(
             "skill_index_plan_invalid",
             "Skill index commit requires an explicit source precondition policy.",
@@ -1350,13 +1349,14 @@ def _validate_source_preconditions(
             not isinstance(source, str)
             or not _is_safe_source(source)
             or source_key in seen
+            or not isinstance(state, str)
             or state not in {"active", "absent"}
             or (
                 state == "active"
                 and (not isinstance(package_hash, str) or not _is_sha256(package_hash))
             )
             or (state == "absent" and package_hash is not None)
-            or package_boundary not in {None, "portable-source-v1"}
+            or package_boundary not in (None, "portable-source-v1")
             or (state == "absent" and package_boundary is not None)
             or (
                 nested_boundaries is not None
@@ -1527,26 +1527,6 @@ def _verify_held_lock(held: _HeldLock) -> None:
             "skill_index_lock_replaced",
             "Skill index lock path was replaced while held; publication stopped.",
         )
-
-
-def _try_os_lock(handle: BinaryIO) -> bool:
-    handle.seek(0)
-    try:
-        if os.name == "nt":
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return False
-    return True
-
-
-def _unlock_os_lock(handle: BinaryIO) -> None:
-    handle.seek(0)
-    if os.name == "nt":
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-    else:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _read_lock_bytes(handle: BinaryIO) -> bytes:

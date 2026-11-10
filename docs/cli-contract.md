@@ -1,5 +1,17 @@
 # CLI Contract
 
+## Portability commands (0.18)
+
+`device-init`, `sync-push`, `sync-pull`, `sync-install`, `context-save`, and
+`context-merge` preview by default. Mutation requires `--apply --expect-plan`
+with the exact current preview digest. Their result includes `mode`, `plan`,
+and `plan_digest`; source/remote changes require a fresh review.
+
+`sync-status`, `context-resume`, and `context-read` are read-only. GitHub is the
+default sync backend. The folder backend and host-registered adapters implement
+the same immutable storage contract. See [portability](portability.md) for the
+full workflow, device provenance, bounds and activation boundaries.
+
 ArchMarshal exposes a versioned JSON contract for automation and agent hosts.
 Normal command results are written to stdout. Expected operational and usage
 errors are written to stderr. A process must read the stream selected by the

@@ -8,12 +8,9 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, NamedTuple
 
-if os.name == "nt":
-    import msvcrt
-else:
-    import fcntl
-
 from .errors import ArchMarshalError, require_workspace_root
+from .file_lock import try_os_lock as _try_os_lock
+from .file_lock import unlock_os_lock as _unlock_os_lock
 from .io import read_bytes_safe
 from .safety import (
     create_bytes_exclusive,
@@ -805,26 +802,6 @@ def _lock_status(root: Path) -> dict[str, Any]:
         if acquired:
             _unlock_os_lock(handle)
         handle.close()
-
-
-def _try_os_lock(handle: BinaryIO) -> bool:
-    handle.seek(0)
-    try:
-        if os.name == "nt":
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return False
-    return True
-
-
-def _unlock_os_lock(handle: BinaryIO) -> None:
-    handle.seek(0)
-    if os.name == "nt":
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-    else:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _safe_relative(value: str) -> str:

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from .errors import ArchMarshalError, require_workspace_root
+from .io import read_bytes_safe
 from .safety import is_link_or_reparse, workspace_root_id
 
 OWNERSHIP_FORMAT = "archmarshal-workspace-ownership-v1"
@@ -14,35 +15,39 @@ def workspace_id(root: Path | str) -> str:
     return workspace_root_id(root)
 
 
-def valid_ownership_marker(path: Path) -> bool:
+def _ownership_marker(path: Path) -> dict | None:
     try:
         if (
             not path.is_file()
             or is_link_or_reparse(path)
             or path.stat().st_size > MAX_OWNERSHIP_BYTES
         ):
-            return False
-        marker = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ArchMarshalError):
-        return False
-    return (
+            return None
+        loaded = read_bytes_safe(path, max_bytes=MAX_OWNERSHIP_BYTES, label="Ownership")
+        if loaded.error:
+            return None
+        marker = json.loads(loaded.data)
+    except (OSError, ValueError, RecursionError, ArchMarshalError):
+        return None
+    valid = (
         isinstance(marker, dict)
         and marker.get("format") == OWNERSHIP_FORMAT
         and marker.get("managed_root") == "."
-        and marker.get("skill_index") in {"required", "disabled"}
+        and isinstance(marker.get("skill_index"), str)
+        and marker["skill_index"] in {"required", "disabled"}
         and marker.get("source_mutation") is False
         and marker.get("workspace_id") == workspace_id(path.parent.parent)
     )
+    return marker if valid else None
+
+
+def valid_ownership_marker(path: Path) -> bool:
+    return _ownership_marker(path) is not None
 
 
 def ownership_skill_index_mode(path: Path) -> str | None:
-    if not valid_ownership_marker(path):
-        return None
-    try:
-        marker = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    return str(marker["skill_index"])
+    marker = _ownership_marker(path)
+    return marker["skill_index"] if marker else None
 
 
 def require_owned_workspace(root: Path | str, *, operation: str) -> Path:

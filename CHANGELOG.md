@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.18.0 - 2026-11-10
+
+- Added persistent machine identities and content-addressed Skill transfer with
+  original/exporting device provenance, preserved package assets, explicit variants,
+  exact-plan checks, quarantined imports and separate reviewed installation.
+- Added a default GitHub transport using existing authentication, immutable blob
+  reads, create-only uploads, public-upload review and read-back verification.
+  Added a folder transport and explicit host-side backend extension interface.
+- Added append-only per-window workstream handoffs, decision rationale, constraints,
+  rejected options, next steps and evidence. Restore by project directory or known
+  GitHub address, with cross-checkout synthesis retaining original source records.
+- Added bounded context retrieval, exact historical reads, file/branch staleness
+  checks, overlapping-work reports and automatic restoration in `start`.
+- Extended the plugin workflow, durable-format registry and regression coverage.
+  Existing user sources and closeout contracts remain unchanged.
+- Hardened quarantine boundaries and full-package verification, portable path
+  topology, journal capacity reservations, malformed metadata and bounded YAML/JSON
+  parsing. Refresh GitHub visibility and recheck mutable import plans under the lock.
+- Consolidated package materialization, secret-text checks, Skill discovery roots
+  and OS lock primitives; added a stability/architecture audit and failure regressions.
+
 ## 0.17.1 - 2026-07-18
 
 - Disabled bytecode-cache writes in the plugin launcher so candidate,

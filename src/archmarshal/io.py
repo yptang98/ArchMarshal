@@ -52,8 +52,16 @@ def load_yaml_safe(path: Path) -> YamlLoadResult:
     loaded = read_bytes_safe(path, max_bytes=MAX_YAML_BYTES, label="YAML")
     if loaded.error:
         return YamlLoadResult({}, loaded.error)
+    parsed = parse_yaml_safe(loaded.data)
+    return YamlLoadResult(parsed.data, parsed.error, loaded.byte_count, loaded.sha256)
+
+
+def parse_yaml_safe(raw: bytes, *, normalize: bool = True) -> YamlLoadResult:
+    """Parse bounded YAML bytes using the same graph contract as workspace files."""
+    if len(raw) > MAX_YAML_BYTES:
+        return YamlLoadResult({}, f"YAML exceeds the {MAX_YAML_BYTES}-byte safety limit")
     try:
-        text = loaded.data.decode("utf-8")
+        text = raw.decode("utf-8")
         alias_count = sum(
             isinstance(token, yaml.tokens.AliasToken) for token in yaml.scan(text)
         )
@@ -61,11 +69,7 @@ def load_yaml_safe(path: Path) -> YamlLoadResult:
             return YamlLoadResult({}, f"YAML exceeds the {MAX_YAML_ALIASES}-alias safety limit")
         data = yaml.safe_load(text) or {}
         _validate_yaml_graph(data)
-        return YamlLoadResult(
-            _normalize_yaml_graph(data),
-            byte_count=loaded.byte_count,
-            sha256=loaded.sha256,
-        )
+        return YamlLoadResult(_normalize_yaml_graph(data) if normalize else data)
     except (UnicodeDecodeError, yaml.YAMLError, ValueError, RecursionError) as exc:
         return YamlLoadResult({}, str(exc))
 

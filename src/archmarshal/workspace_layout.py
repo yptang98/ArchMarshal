@@ -345,7 +345,8 @@ def _parse_naming(value: object, *, source: str) -> tuple[dict[str, Any], str]:
             details={"max_slug_words": max_slug_words},
         )
     partition = policy.get("date_partition")
-    if partition is not None and partition not in SUPPORTED_DATE_PARTITIONS:
+    if partition is not None and (not isinstance(partition, str)
+                                  or partition not in SUPPORTED_DATE_PARTITIONS):
         raise ArchMarshalError(
             "workspace_layout_naming_invalid",
             "Project-file date_partition is not supported.",

@@ -374,7 +374,14 @@ def _main_impl(argv: list[str] | None = None) -> int:
         help="Return exit code 1 when any diagnostic is emitted, including warnings.",
     )
 
+    from .portability_cli import COMMANDS, dispatch, register
+
+    register(subparsers)
     args = parser.parse_args(argv)
+    if args.command in COMMANDS:
+        payload = dispatch(args)
+        _print_json(payload, args.pretty)
+        return 0
     if args.command == "backup-verify":
         from .safety import verify_backup
 

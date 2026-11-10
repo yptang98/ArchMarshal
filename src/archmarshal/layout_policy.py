@@ -357,7 +357,7 @@ def _validate_profile(
                 )
     policy = naming.get("project_files") or {}
     strategy = policy.get("strategy")
-    if strategy not in SUPPORTED_STRATEGIES:
+    if not isinstance(strategy, str) or strategy not in SUPPORTED_STRATEGIES:
         issues.append(
             {
                 "code": "naming_strategy_invalid",
@@ -377,7 +377,7 @@ def _validate_profile(
             }
         )
     partition = policy.get("date_partition", "YYYY/MM/DD")
-    if partition not in SUPPORTED_PARTITIONS:
+    if not isinstance(partition, str) or partition not in SUPPORTED_PARTITIONS:
         issues.append(
             {
                 "code": "date_partition_invalid",
@@ -482,10 +482,10 @@ def _layout_recommendations(
 
 
 def _valid_timezone(value: Any) -> bool:
-    if value in {"UTC", "local"}:
-        return True
     if not isinstance(value, str) or not value or len(value) > 128:
         return False
+    if value in {"UTC", "local"}:
+        return True
     try:
         ZoneInfo(value)
     except (ZoneInfoNotFoundError, ValueError):

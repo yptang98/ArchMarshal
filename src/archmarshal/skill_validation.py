@@ -6,9 +6,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from .errors import ArchMarshalError
+from .io import load_yaml_safe, parse_yaml_safe, read_bytes_safe
 from .safety import is_link_or_reparse
 
 MAX_SKILL_MD_BYTES = 512 * 1024
@@ -34,6 +33,7 @@ def validate_skill_package(skill_dir: Path, *, enforce_folder_name: bool = True)
     errors: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
     frontmatter: dict[str, Any] = {}
+    text = ""
 
     if is_link_or_reparse(directory) or not directory.is_dir():
         errors.append(_issue("skill_directory_invalid", "Skill directory is missing or linked."))
@@ -64,7 +64,10 @@ def validate_skill_package(skill_dir: Path, *, enforce_folder_name: bool = True)
                 )
                 text = ""
             else:
-                text = skill_md.read_text(encoding="utf-8")
+                loaded = read_bytes_safe(skill_md, max_bytes=MAX_SKILL_MD_BYTES, label="SKILL.md")
+                if loaded.error:
+                    raise ArchMarshalError("skill_entrypoint_unreadable", loaded.error)
+                text = loaded.data.decode("utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             raise ArchMarshalError(
                 "skill_entrypoint_unreadable",
@@ -115,12 +118,7 @@ def validate_skill_package(skill_dir: Path, *, enforce_folder_name: bool = True)
         )
 
     resources: dict[str, dict[str, Any]] = {}
-    text_for_references = ""
-    try:
-        if skill_md.is_file() and skill_md.stat().st_size <= MAX_SKILL_MD_BYTES:
-            text_for_references = skill_md.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        pass
+    text_for_references = text
     for resource_name in ("scripts", "references", "assets"):
         resource = directory / resource_name
         linked = is_link_or_reparse(resource)
@@ -165,11 +163,10 @@ def validate_skill_package(skill_dir: Path, *, enforce_folder_name: bool = True)
             )
             agents_metadata["valid"] = False
         else:
-            try:
-                data = yaml.safe_load(agents_file.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError, yaml.YAMLError):
-                data = None
-            valid_agents = isinstance(data, dict) and isinstance(data.get("interface"), dict)
+            loaded = load_yaml_safe(agents_file)
+            data = loaded.data
+            valid_agents = (not loaded.error and isinstance(data, dict)
+                            and isinstance(data.get("interface"), dict))
             agents_metadata["valid"] = valid_agents
             if not valid_agents:
                 errors.append(
@@ -207,10 +204,10 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], list[dict[str, str]]]
     )
     if closing is None:
         return {}, [_issue("skill_frontmatter_unclosed", "SKILL.md frontmatter is not closed.")]
-    try:
-        data = yaml.safe_load("\n".join(lines[1:closing])) or {}
-    except yaml.YAMLError:
+    parsed = parse_yaml_safe("\n".join(lines[1:closing]).encode("utf-8"), normalize=False)
+    if parsed.error:
         return {}, [_issue("skill_frontmatter_invalid", "SKILL.md frontmatter is invalid YAML.")]
+    data = parsed.data
     if not isinstance(data, dict):
         return {}, [_issue("skill_frontmatter_invalid", "SKILL.md frontmatter must be a mapping.")]
     unknown = sorted(str(key) for key in set(data) - ALLOWED_FRONTMATTER_FIELDS)

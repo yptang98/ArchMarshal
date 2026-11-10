@@ -87,6 +87,15 @@ def start_workspace(
             "For an overlay-managed project, skill_sync_preview reports new or changed source skills without rewriting them.",
         ],
     }
+    if (inventory.root / ".agent/context-index").exists():
+        from .errors import ArchMarshalError
+        from .handoff import resume_context
+
+        try:
+            payload["context"] = resume_context(inventory.root, task=task or "")
+        except ArchMarshalError as exc:
+            payload["context"] = {"mode": "error", "error": exc.to_dict()}
+            payload["project_ready"] = False
     if task:
         resolution = resolve_workspace(
             root,

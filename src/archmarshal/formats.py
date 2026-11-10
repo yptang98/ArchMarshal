@@ -26,6 +26,22 @@ class FormatSpec:
 # consume from persisted state. API envelope versions and hash-domain separators are
 # deliberately not durable formats and therefore do not belong here.
 DURABLE_FORMATS: tuple[FormatSpec, ...] = (
+    FormatSpec("device", "archmarshal.portable", "device_identity",
+               ("archmarshal-device-v1",), ("archmarshal-device-v1",), boundedness="4-KiB-file"),
+    FormatSpec("skill_sync", "archmarshal.skill_sync", "portable_skill",
+               ("archmarshal-skill-sync-v1",), ("archmarshal-skill-sync-v1",),
+               boundedness="2000-entries-4-MiB-content"),
+    FormatSpec("sync_receipt", "archmarshal.skill_sync", "commit_marker",
+               ("archmarshal-sync-receipt-v1",), ("archmarshal-sync-receipt-v1",)),
+    FormatSpec("sync_origin", "archmarshal.skill_sync", "provenance",
+               ("archmarshal-sync-origin-v1",), ("archmarshal-sync-origin-v1",)),
+    FormatSpec("handoff", "archmarshal.handoff", "context_evidence",
+               ("archmarshal-handoff-v1",), ("archmarshal-handoff-v1",),
+               boundedness="1000-records-128-KiB-record-16-MiB-history"),
+    FormatSpec("context_pointer", "archmarshal.handoff", "commit_marker",
+               ("archmarshal-context-pointer-v1",), ("archmarshal-context-pointer-v1",)),
+    FormatSpec("project_location", "archmarshal.handoff", "local_registry",
+               ("archmarshal-project-location-v1",), ("archmarshal-project-location-v1",)),
     FormatSpec(
         "adoption_plan",
         "archmarshal.adoption",
