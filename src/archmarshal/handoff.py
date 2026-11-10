@@ -23,6 +23,7 @@ from .context_store import (
     load_records,
 )
 from .errors import ArchMarshalError, require_workspace_root
+from .git_environment import inspection_environment
 from .ownership import require_owned_workspace
 from .portable import (
     canonical,
@@ -56,9 +57,9 @@ MAX_ROOTS = 100
 def _git(root: Path, *arguments: str) -> str:
     try:
         result = subprocess.run(["git", "-C", str(root), *arguments], capture_output=True,
-                                text=True, timeout=10, check=False,
-                                env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
-    except (OSError, subprocess.TimeoutExpired):
+                                text=True, encoding="utf-8", timeout=10, check=False,
+                                env=inspection_environment())
+    except (OSError, UnicodeError, subprocess.TimeoutExpired):
         return ""
     return result.stdout.strip()[:4096] if result.returncode == 0 else ""
 

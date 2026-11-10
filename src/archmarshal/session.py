@@ -14,6 +14,7 @@ import yaml
 
 from .closeout import closeout_workspace
 from .errors import ArchMarshalError, require_workspace_root
+from .git_environment import inspection_environment
 from .io import load_yaml_safe, read_bytes_safe
 from .operation_journal import complete_operation, prepare_operation
 from .ownership import require_owned_workspace, valid_ownership_marker
@@ -744,11 +745,15 @@ def _git_snapshot(root: Path) -> dict[str, Any]:
                 check=False,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                env=inspection_environment(),
                 timeout=5,
             )
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, UnicodeError, subprocess.SubprocessError):
             return None
-        return result.stdout.strip() if result.returncode == 0 else None
+        # Porcelain status uses leading spaces as columns; stripping them
+        # truncates the first modified filename when parsing line[3:].
+        return result.stdout.rstrip("\r\n") if result.returncode == 0 else None
 
     status = run("status", "--porcelain=v1")
     return {

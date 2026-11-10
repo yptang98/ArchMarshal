@@ -48,7 +48,7 @@ def snapshot_skill(root: Path | str, source: str, *, device_path: Path | str | N
 def _snapshot_skill(root: Path, source: str, *, device_path: Path | str | None
                     ) -> dict[str, Any]:
     root = require_owned_workspace(root, operation="Skill sync")
-    source = relative(source)
+    source = source if source == "." else relative(source)
     loaded = load_skill_index(root)
     generation = loaded.get("generation") or {}
     excluded = generation.get("selection", {}).get("excluded_packages", [])
@@ -63,8 +63,8 @@ def _snapshot_skill(root: Path, source: str, *, device_path: Path | str | None
     boundaries.update(root / value for value in excluded)
     identity = device(device_path)
     directory = root / source
-    files, directories = scan_package(directory, boundaries=boundaries)
-    if (files, directories) != scan_package(directory, boundaries=boundaries):
+    files, directories = scan_package(directory, boundaries=boundaries, entrypoint_only=source == ".")
+    if (files, directories) != scan_package(directory, boundaries=boundaries, entrypoint_only=source == "."):
         fail("Skill source changed while preparing the portable snapshot.", "sync_source_changed")
     snapshot = {"format": FORMAT, "name": str(record["manifest"].get("name") or directory.name),
                 "origin": identity, "exporter": identity, "parents": [],
@@ -83,7 +83,7 @@ def _snapshot_skill(root: Path, source: str, *, device_path: Path | str | None
             fail("Invalid Skill installation origin record.")
         old_id = origin_record.get("object_id")
         old = validate_snapshot(canonical(origin_record.get("snapshot")), old_id)
-    elif directory.name == "package" and receipt.exists() and original.exists():
+    elif source != "." and directory.name == "package" and receipt.exists() and original.exists():
         receipt_data = decode(read(receipt))
         old_id = receipt_data.get("object_id", "")
         validate_receipt(receipt_data, old_id)
@@ -132,6 +132,7 @@ def push_skill(root: Path | str, source: str, store: Transport, *,
     result = {"mode": "preview", "plan": plan, "plan_digest": digest(plan),
               "name": snapshot["name"], "origin": snapshot["origin"],
               "exporter": snapshot["exporter"],
+              "package_scope": "entrypoint_only" if source == "." else "package",
               "files": [{k: v for k, v in entry.items() if k != "content"}
                         for entry in snapshot["files"]],
               "public_upload_blocked": remote.get("public") is True and not allow_public}
@@ -140,7 +141,7 @@ def push_skill(root: Path | str, source: str, store: Transport, *,
         if result["public_upload_blocked"]:
             fail("Public upload requires explicit --allow-public.", "sync_public_review_required")
         # Bytes in this snapshot were re-read for this exact preview digest.
-        changed = store.put(key, canonical(snapshot))
+        changed = store.put(key, canonical(snapshot), expected_remote=remote, allow_public=allow_public)
         result["mode"] = "uploaded" if changed else "unchanged"
     return result
 

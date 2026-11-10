@@ -1,8 +1,8 @@
 {
-  "content_bytes": 1040174,
+  "content_bytes": 1044302,
   "engine_api": "archmarshal-engine-api-v1",
   "engine_version": "0.19.0",
-  "file_count": 68,
+  "file_count": 69,
   "files": [
     {
       "bytes": 170,
@@ -25,9 +25,9 @@
       "sha256": "826ca20e7e060046ee67b1aa5b2318e67f42750f1b5aeb4191658e4c0c06499c"
     },
     {
-      "bytes": 6454,
+      "bytes": 7625,
       "path": "_doctor_sessions.py",
-      "sha256": "bd3525a7a4497c0173e123ab5604c41abc32c1378088a6f4176e5f46bbb2037e"
+      "sha256": "8199e5998e0d7ff4677c36419fa0108cda5c1806391c17d5979084dd5a1638d4"
     },
     {
       "bytes": 9397,
@@ -105,9 +105,9 @@
       "sha256": "fb23b02a96c47381899dbea99541b8d77ddba45c0e917271026c30360d6d1ae3"
     },
     {
-      "bytes": 5020,
+      "bytes": 5126,
       "path": "doctor.py",
-      "sha256": "f6ee1752452d0e975075481f3c045d73560bed3bec1196d9c7685631ca125781"
+      "sha256": "837aefa4a70ae1548463c762256e419d86927ac5959ce18f074fa317e2debe8b"
     },
     {
       "bytes": 1123,
@@ -135,14 +135,19 @@
       "sha256": "f2985b3c2e47eaa50cc8be7c9b0924f3d464b9c2313e7f20d4a6ae3086a33bbb"
     },
     {
-      "bytes": 23892,
-      "path": "handoff.py",
-      "sha256": "fdbab73b7fe4ead5cc823d5c197ace6b32e733c85a0bd448a6880afa6cc82e7a"
+      "bytes": 395,
+      "path": "git_environment.py",
+      "sha256": "c8350480ebf3960b3fccfa20a6cd97993b1a24cf8c4e84fc5069fc2fc14f087f"
     },
     {
-      "bytes": 13663,
+      "bytes": 23959,
+      "path": "handoff.py",
+      "sha256": "be1c31135ef7fec76fd41c802906782d0cc000190c88912b93921ddf5855e5c2"
+    },
+    {
+      "bytes": 14231,
       "path": "host_skills.py",
-      "sha256": "bc1990e431965648d5ebe000c49c59f77004a76a5bd9b8d0dee99c7b9f2c8622"
+      "sha256": "f94c792eb83bb772b925c9dadcf5a1b9c847fedc846fe9e8e0ae6cd8ecac72ba"
     },
     {
       "bytes": 24089,
@@ -210,9 +215,9 @@
       "sha256": "ba4b9b272832eb83d50ca7142d98014df1db65d96a856a44cc3246bd80d6b344"
     },
     {
-      "bytes": 3980,
+      "bytes": 3808,
       "path": "project_context.py",
-      "sha256": "4429db42115a6fc89987291b72308190746a63f5e76107c9eeffe15ac3b67e96"
+      "sha256": "d1beda66587c689a92df973049a1e6be4a5bbbf49bd4c529e7f97f108375f2c8"
     },
     {
       "bytes": 18594,
@@ -275,9 +280,9 @@
       "sha256": "f48bf132f883eb0dfd5afe44861883ff4aecc99cbd592eb7b57d3c07a887a66b"
     },
     {
-      "bytes": 30523,
+      "bytes": 30821,
       "path": "session.py",
-      "sha256": "833e87f547ca726d44f4da7cfbe57240ee93698273a0c3c980430d28cb191a49"
+      "sha256": "a474056d2677de1e9d1c02e6a7260e1b5e29d1b5bb4b11139bdd09eb887996bc"
     },
     {
       "bytes": 1976,
@@ -290,9 +295,9 @@
       "sha256": "dd71c3356bf6eb011ab88ae450bb146ad24925a587a52da6b146c004007cdc5e"
     },
     {
-      "bytes": 7989,
+      "bytes": 8270,
       "path": "skill_package.py",
-      "sha256": "ba1493aad51f2013bd8c6b192985890ca4f0ad9356c00ee3f556ac2cde7782b2"
+      "sha256": "a71f74c2d20b899faf77e5e0eb49dec542172e97db56cf109928c81c31d735df"
     },
     {
       "bytes": 333,
@@ -305,9 +310,9 @@
       "sha256": "e3a7949601ff400976a2366f169c1de441c02207843868b0a26aaa431106baa4"
     },
     {
-      "bytes": 14516,
+      "bytes": 14758,
       "path": "skill_sync.py",
-      "sha256": "c5da4533f590c54ed60b199645e05bd5cdb3a0d6c4b0b71d11a3ac5a388b9fc8"
+      "sha256": "4f77a899af1be76465fa4ec9c6570feccc6c3340c5b83894e4d3d3d140ca2297"
     },
     {
       "bytes": 12598,
@@ -320,9 +325,9 @@
       "sha256": "8d4820fac5290716c1144a8ae9ab34e6955d14bcdd03d0b722d925cb90d581f7"
     },
     {
-      "bytes": 9993,
+      "bytes": 11165,
       "path": "sync_transport.py",
-      "sha256": "509d0cee3b3986bd9810b3d578b744e210f2326f04d44ce8d952173bf371e18e"
+      "sha256": "e0f83fa0258f0633d802c0b527b6e100af96149c4ccbdb3c8a993dbd279984b5"
     },
     {
       "bytes": 119090,
@@ -347,5 +352,5 @@
   ],
   "format": "archmarshal-plugin-engine-lock-v1",
   "source_root": "src/archmarshal",
-  "source_tree_sha256": "047cc007344f41277b7c75cab50b7945a79760c3770b29af2282575282973795"
+  "source_tree_sha256": "d194af00d10d340c84d53f88aaab9e2fb46f328549d77419bfe4baf24fb41994"
 }

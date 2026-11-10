@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .git_environment import inspection_environment
 from .portable import fail, text
 from .safety import ensure_unlinked_path
 
@@ -25,13 +26,10 @@ def canonical_path(path: Path) -> str:
 
 
 def _git(root: Path, *args: str) -> str | None:
-    # An inherited GIT_DIR/WORK_TREE can override -C and bind an unrelated repo.
-    environment = {key: value for key, value in os.environ.items()
-                   if not key.upper().startswith("GIT_")}
     try:
         result = subprocess.run(["git", "-C", str(root), *args], capture_output=True,
                                 text=True, encoding="utf-8", timeout=10, check=False,
-                                env={**environment, "GIT_OPTIONAL_LOCKS": "0"})
+                                env=inspection_environment())
     except (OSError, UnicodeError, subprocess.TimeoutExpired):
         return None
     return result.stdout.strip() if result.returncode == 0 and len(result.stdout) < 8192 else None

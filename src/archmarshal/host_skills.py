@@ -106,6 +106,11 @@ def _verify_source(work: Path, source: str, manifest: dict[str, Any], boundaries
             return {"state": "missing"}
         nested = [directory / Path(_source_key(work, item)).relative_to(source_directory) for item in boundaries
                   if item != source and source_directory in Path(_source_key(work, item)).parents]
+        if installed_path:
+            # A mapped installation may itself contain other project packages.
+            # Preserve their actual boundaries as well as the source's mapped ones.
+            nested.extend(Path(_source_key(work, item)) for item in boundaries
+                          if directory in Path(_source_key(work, item)).parents)
         fingerprint = fingerprint_directory(directory, purpose="Selected Skill verification",
                                             entrypoint_only=source_directory == work, include_modes=True,
                                             excluded_parts=EXCLUDED_BACKUP_PARTS, excluded_directories=nested,
@@ -148,9 +153,12 @@ def reconcile_host_skills(project_root: Path | str, *, work_root: Path | str | N
     installed_keys = set()
     for source, target in installed.items():
         key = _path_key(target)
+        target_excluded = key is not None and any(
+            Path(_path_key(_source_key(work, item))) in (Path(key).parent, *Path(key).parent.parents)
+            for item in excluded)
         if (source not in indexed or is_excluded(source) or key is None
-                or Path(key).name.lower() != "skill.md" or key in installed_keys):
-            fail("Installed bindings require unique absolute SKILL.md paths and non-excluded sources.",
+                or Path(key).name.lower() != "skill.md" or key in installed_keys or target_excluded):
+            fail("Installed bindings require unique absolute SKILL.md paths and non-excluded sources and targets.",
                  "host_skills_source_invalid")
         installed_keys.add(key)
     effective_keys = [_path_key(installed.get(source, str(Path(_source_key(work, source)) / "SKILL.md")))

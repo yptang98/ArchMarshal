@@ -78,6 +78,11 @@ ambiguous installed targets are not read. This inspection grants no installation
 or activation permission. Linked installed packages can be observed natively but
 are not followed for ArchMarshal byte verification.
 
+An installation mapping cannot override persistent exclusions: a target inside
+an excluded package is rejected before reading package bytes. When an installation
+contains excluded or separately indexed project packages, their actual directory
+boundaries remain outside its fingerprint, alongside boundaries mapped from the source.
+
 Limits: 4 MiB per observation, 1,000 native Skills, 20 explicit package selections,
 64 MiB/10,000 files shared across all selected source and installation checks, and
 100 returned rows by default (1–1,000 configurable). Read-budget exhaustion is

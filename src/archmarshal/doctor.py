@@ -109,7 +109,9 @@ def _finalize(workspace: Path, store: Path | None, report: Report) -> dict[str, 
         state = "error"
     elif summary["warning"]:
         state = "warning"
-    elif any(item["classification"] == "absent" for item in findings):
+    elif any(item["classification"] == "absent"
+             and item["area"] in {"ownership", "control_plane", "skill_index", "user_store"}
+             for item in findings):
         state = "absent"
     else:
         state = "healthy"

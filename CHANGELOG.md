@@ -2,6 +2,13 @@
 
 ## 0.19.0 - 2026-11-10
 
+- Recheck reviewed repository identity, branch and public-upload permission at the
+  GitHub write boundary. Reject installation aliases into excluded Skill packages.
+- Support indexed root Skills in sync with the same entrypoint-only scope as review.
+- Isolate inherited Git overrides during project, handoff and closeout inspection;
+  preserve leading porcelain columns when recording modified filenames.
+- Inspect configured history paths in doctor, including pre-journal sessions;
+  keep empty optional history from marking a healthy owned workspace absent.
 - Reconcile native Skill observations, review decisions and explicit source/installed
   package verification. Add a bounded read-only Codex stdio probe; retain unknown,
   stale, excluded and ambiguous states without changing native configuration.
