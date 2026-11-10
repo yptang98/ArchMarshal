@@ -61,13 +61,13 @@ Evidence: [lifecycle](../src/archmarshal/lifecycle.py),
 [candidate CLI](../src/archmarshal/candidate_cli.py),
 [performance gate](../scripts/check_benchmark.py), and
 [gate tests](../tests/test_benchmark_gate.py). The new Linux/Windows scale jobs
-are configured in [CI](../.github/workflows/ci.yml); remote execution is pending.
+passed on Linux and Windows in [remote CI](https://github.com/yptang98/ArchMarshal/actions/runs/42828262520).
 
 ## Release assurance
 
 - [x] Prepare verifiable build provenance and artifact attestation in release automation.
 - [x] Exercise rollback with explicit byte/hash verification.
-- [ ] Run real filesystem permission and disk-capacity failure integration tests in CI.
+- [x] Run real filesystem permission and disk-capacity failure integration tests in CI.
 - [x] Refresh product readiness, version metadata, engine lock, and user documentation.
 - [x] Repeat full-suite and package checks after the native Skill reconciliation changes.
 
@@ -79,8 +79,15 @@ Evidence: [provenance workflow](../.github/workflows/provenance.yml),
 [real filesystem integration](../tests/integration/test_filesystem_failures.py),
 [release procedure](release-process.md), and [readiness boundaries](product-readiness.md).
 Local Windows/Python 3.11 wheel and sdist clean installs and the
-0.19.0/0.18.0/0.19.0 rollback passed. Remote attestations, Linux real filesystem
-failures, and the full CI matrix are not yet verified. No new release is published.
+0.19.0/0.18.0/0.19.0 rollback passed. On commit `db35774`, remote Linux/Windows
+rollback and package checks passed, the [real Linux filesystem job](https://github.com/yptang98/ArchMarshal/actions/runs/42828262520/job/129871171296)
+ran all four ENOSPC/EACCES cases without skips, and [build attestation](https://github.com/yptang98/ArchMarshal/actions/runs/42828253497)
+verified signatures, source ref, commit and signer workflow. The disposable tmpfs
+is bounded at 128 MiB so fixture adoption retains the unchanged 64 MiB backup reserve
+before the test deliberately fills it. The first remote run also exposed Linux
+path/fixture differences and missing sync rejection coverage; follow-up commits
+address these without reducing coverage floors. See [PR checks](https://github.com/yptang98/ArchMarshal/pull/2/checks)
+for the full matrix at the current head. No new release is published.
 
 The current native-compatibility snapshot passed Windows / Python 3.11 verification:
 full suite 614 passed and 19 skipped, including fresh-process handoff, external
@@ -88,7 +95,8 @@ delivery and a real Codex protocol integration. Statement coverage is 87.89% and
 existing and newly added module gate passed. Wheel/sdist metadata, clean installs
 and the current/0.18/current rollback passed again. Fresh same-runner 0.18.0/current scale
 comparisons passed for 10,000 files, 100 Skills and 50 projects, with unchanged
-fixture hashes. These local results do not substitute for the pending remote jobs.
+fixture hashes. These local results complement the remote evidence above; they
+do not substitute for checking the full matrix at the current PR head.
 
 ## Codex compatibility direction (user steering, 2026-11-10)
 

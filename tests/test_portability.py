@@ -166,6 +166,38 @@ def test_stale_upload_plan_and_remote_tampering(environment):
         pull_skill(roots[1], key, store, device_path=identities[1])
 
 
+def test_new_unmanaged_skill_cannot_be_exported(environment):
+    roots, identities, store = environment
+    source = roots[0] / ".agents/skills/unmanaged"
+    source.mkdir()
+    content = "---\nname: unmanaged\ndescription: New local Skill.\n---\nKeep this local.\n"
+    (source / "SKILL.md").write_text(content)
+    with pytest.raises(ArchMarshalError, match="Adopt the selected Skill"):
+        push_skill(roots[0], ".agents/skills/unmanaged", store,
+                   device_path=identities[0])
+    assert not store.keys()
+    assert (source / "SKILL.md").read_text() == content
+
+
+def test_reimport_preserves_receipt_owned_by_another_device(environment):
+    roots, identities, store = environment
+    key = upload(environment)
+    result = pull(environment, key)
+    package = Path(result["package"])
+    receipt_path = package.parent / "RECEIPT.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    receipt["imported_by"] = device(identities[0])
+    changed_receipt = canonical(receipt)
+    receipt_path.write_bytes(changed_receipt)
+    original_files = {p.relative_to(package): p.read_bytes() for p in package.rglob("*") if p.is_file()}
+    preview = pull_skill(roots[1], key, store, device_path=identities[1])
+    with pytest.raises(ArchMarshalError, match="Import receipt differs"):
+        pull_skill(roots[1], key, store, device_path=identities[1], apply=True,
+                   expected_plan=preview["plan_digest"])
+    assert receipt_path.read_bytes() == changed_receipt
+    assert {p.relative_to(package): p.read_bytes() for p in package.rglob("*") if p.is_file()} == original_files
+
+
 def test_exclusions_caches_nested_packages_and_secrets(environment):
     roots, identities, store = environment
     skill = roots[0] / ".agents/skills/demo"

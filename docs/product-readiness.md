@@ -30,8 +30,15 @@ trust.
 | Dynamic context runtime | Not implemented | Resolver is advisory | Token-budgeted loader and host integrations |
 | CLI module loading | Implemented for built-in domains | Parsing, help, and version load only the lightweight CLI/error/version layer; each command imports its built-in domain after selection; user Skill code is never imported or executed | Measured cold-start budget and host integration profiling |
 | Product health diagnostics | Implemented, read-only | `doctor` uses bounded stable reads, rejects links/reparse points, validates control schemas and current v2 package integrity, classifies corrupt/legacy/orphan/partial state, proposes retention only, and exposes a versioned durable-format registry plus truthful filesystem capabilities | Guided repair/migration plans must remain separate exact-plan workflows; no automatic cleanup |
-| Scale baseline | Reproducible benchmark and CI comparison implemented | Temporary fixtures only; public read/preview APIs; complete fixture bytes/modes/mtimes hashed before and after; reference covers 10,000 files, 100 Skills, and 50 projects; same-runner baseline/current comparison | Validate the new CI jobs and accumulate runner history |
-| Packaging | Existing CI checks plus new provenance and rollback jobs | Linux/Windows and Python 3.10-3.13 tests; wheel/sdist clean installs on Linux/Windows at Python 3.10/3.13 boundaries; exact package file/hash comparison during isolated current/previous/current installation; attestation checks pin source ref, commit and signer workflow | Validate new remote jobs and publish only artifacts from the reviewed tagged run |
+| Scale baseline | Reproducible benchmark and CI comparison implemented and exercised on Linux/Windows | Temporary fixtures only; public read/preview APIs; complete fixture bytes/modes/mtimes hashed before and after; reference covers 10,000 files, 100 Skills, and 50 projects; same-runner baseline/current comparison | Accumulate longer-term runner history |
+| Packaging | CI packaging, provenance and rollback jobs exercised remotely | Linux/Windows and Python 3.10-3.13 test matrix; wheel/sdist clean installs on Linux/Windows at Python 3.10/3.13 boundaries; exact package file/hash comparison during isolated current/previous/current installation; attestation checks pin source ref, commit and signer workflow | Publish only artifacts from a reviewed tagged run |
+
+Remote evidence for development commit `db35774`: [package, rollback and scale jobs](https://github.com/yptang98/ArchMarshal/actions/runs/42828262520),
+[four real Linux ENOSPC/EACCES recovery checks](https://github.com/yptang98/ArchMarshal/actions/runs/42828262520/job/129871171296),
+and [verified build provenance](https://github.com/yptang98/ArchMarshal/actions/runs/42828253497).
+Individual passed jobs do not imply that the entire run passed; the Linux full suite
+exposed a sync branch-coverage gap addressed in follow-up tests. Check the [current PR matrix](https://github.com/yptang98/ArchMarshal/pull/2/checks)
+before accepting a later commit. This remains alpha development, not a stable-release claim.
 
 ## Release Gates
 
