@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .adoption import adopt_workspace, plan_adoption
+from .adoption_tx import adoption_transaction_status
 from .closeout import closeout_workspace
 from .diagnostics import severity_counts
 from .inventory import collect_inventory
@@ -27,6 +28,7 @@ def start_workspace(
     date_partition: str | None = None,
     timestamp_format: str | None = None,
 ) -> dict[str, Any]:
+    transaction_before = adoption_transaction_status(root)
     inventory = collect_inventory(root)
     diagnostics = lint_workspace(root, inventory=inventory)
     counts = severity_counts(diagnostics)
@@ -87,12 +89,13 @@ def start_workspace(
             "For an overlay-managed project, skill_sync_preview reports new or changed source skills without rewriting them.",
         ],
     }
-    if (inventory.root / ".agent/context-index").exists():
+    if any((inventory.root / path).exists() for path in (
+            ".agent/context-index", ".agent/context-archives")):
         from .errors import ArchMarshalError
-        from .handoff import resume_context
+        from .workstream import start_workstream
 
         try:
-            payload["context"] = resume_context(inventory.root, task=task or "")
+            payload["context"] = start_workstream(inventory.root, task=task or "")
         except ArchMarshalError as exc:
             payload["context"] = {"mode": "error", "error": exc.to_dict()}
             payload["project_ready"] = False
@@ -102,6 +105,8 @@ def start_workspace(
             task,
             user_store=user_store,
             adoption_preview=adoption_preview,
+            inventory=inventory,
+            observed_transaction=transaction_before,
         )
         payload["resolution"] = resolution
         payload["task_ready"] = bool(
@@ -162,7 +167,19 @@ def end_workspace(root: Path | str, used_skills: list[str] | None = None) -> dic
         "Preserve original project history before distilling memory.",
         "Review candidate memory updates before promotion.",
         "Keep generated summaries explicit-only unless reviewed.",
+        "Save a context handoff before switching windows; use context-finish when a stream is complete.",
     ]
+    from .errors import ArchMarshalError
+    from .workstream import start_workstream
+
+    try:
+        context = start_workstream(root)
+        payload["workstream_closeout"] = {
+            "active_streams": [item for item in context["workstreams"] if item["status"] == "active"],
+            "omitted": context["omitted"], "workflow": context["workflow"],
+            "reminder": "Explicitly save changed decisions and next steps before leaving this window."}
+    except (ArchMarshalError, OSError) as exc:
+        payload["workstream_closeout"] = {"mode": "error", "message": str(exc)}
     return payload
 
 

@@ -19,6 +19,10 @@ HEAVY_MODULES = {
     "archmarshal.adoption",
     "archmarshal.lifecycle",
     "archmarshal.session",
+    "archmarshal.external_records",
+    "archmarshal.project_context",
+    "archmarshal.host_skills",
+    "archmarshal.codex_skill_probe",
 }
 
 

@@ -54,8 +54,24 @@ jobs:
           --module src/archmarshal/handoff.py=85,70
           --module src/archmarshal/sensitive_data.py=95,90
           --module src/archmarshal/file_lock.py=80,45
+          --module src/archmarshal/adoption_backup.py=88,80
+          --module src/archmarshal/skill_activation.py=80,72
+          --module src/archmarshal/sync_policy.py=85,70
+          --module src/archmarshal/operation_journal.py=85,75
+          --module src/archmarshal/operation_recovery.py=80,60
+          --module src/archmarshal/context_store.py=85,75
+          --module src/archmarshal/recommendation.py=95,90
+          --module src/archmarshal/candidate_evidence.py=85,70
+          --module src/archmarshal/external_records.py=85,70
+          --module src/archmarshal/project_context.py=85,70
+          --module src/archmarshal/project_cli.py=90,75
+          --module src/archmarshal/host_skills.py=85,70
+          --module src/archmarshal/codex_skill_probe.py=85,70
+          --module src/archmarshal/external_artifacts.py=85,70
       - name: CLI smoke test
         run: archmarshal lint examples/simple-project --pretty
+      - name: Recommendation corpus
+        run: python scripts/evaluate_recommendations.py
 
   package:
     name: Artifacts / ${{ matrix.os }} / Python ${{ matrix.python-version }}
@@ -89,3 +105,87 @@ jobs:
         run: python scripts/package_smoke.py "dist/*.tar.gz"
       - name: Ensure build did not dirty tracked files
         run: git diff --exit-code
+
+  scale:
+    name: Scale regression / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -e ".[dev]"
+      - name: Prepare released baseline
+        run: git worktree add --detach baseline v0.18.0
+      - name: Measure released and current versions on the same runner
+        run: |
+          python baseline/scripts/benchmark_scale.py --iterations 3 --warmups 1 > baseline.json
+          python scripts/benchmark_scale.py --iterations 3 --warmups 1 > current.json
+      - name: Enforce relative and absolute performance budgets
+        run: python scripts/check_benchmark.py baseline.json current.json
+      - name: Retain regression history
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scale-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            baseline.json
+            current.json
+          if-no-files-found: error
+          retention-days: 90
+
+  filesystem-failures:
+    name: Real filesystem failures / Linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -e ".[dev]"
+      - name: Prepare bounded disposable filesystem
+        run: |
+          mkdir "$RUNNER_TEMP/archmarshal-failure-fs"
+          sudo mount -t tmpfs -o size=16m,mode=1777 tmpfs "$RUNNER_TEMP/archmarshal-failure-fs"
+      - name: Exercise real ENOSPC and EACCES before and after staging
+        env:
+          ARCHMARSHAL_FILESYSTEM_INTEGRATION: "1"
+          ARCHMARSHAL_FAILURE_FS: ${{ runner.temp }}/archmarshal-failure-fs
+        run: python -m pytest tests/integration/test_filesystem_failures.py -q --junitxml=filesystem-results.xml
+      - name: Ensure integration checks actually ran
+        run: python -c "import xml.etree.ElementTree as E; r=E.parse('filesystem-results.xml'); assert sum(int(s.get('tests',0)) for s in r.iter('testsuite')) == 4; assert all(s.get('skipped','0') == '0' for s in r.iter('testsuite'))"
+      - name: Unmount disposable filesystem
+        if: always()
+        run: sudo umount "$RUNNER_TEMP/archmarshal-failure-fs"
+
+  rollback:
+    name: Package rollback / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install build
+      - run: git worktree add --detach baseline v0.18.0
+      - name: Build both versions
+        run: |
+          python -m build --wheel --outdir rollback-current
+          python -m build --wheel --outdir rollback-previous baseline
+      - name: Verify downgrade and return to current
+        run: python -c "import pathlib,subprocess,sys; subprocess.run([sys.executable,'scripts/package_rollback_drill.py','--current',str(next(pathlib.Path('rollback-current').glob('*.whl'))),'--previous',str(next(pathlib.Path('rollback-previous').glob('*.whl')))],check=True)"

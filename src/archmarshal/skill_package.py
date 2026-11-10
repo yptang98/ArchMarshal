@@ -13,7 +13,6 @@ from .portable import (
     fail,
     is_digest,
     portable_key,
-    publish,
     read,
     relative,
     sha,
@@ -176,6 +175,6 @@ def materialize_package(directory: Path, snapshot: dict[str, Any]) -> None:
         (directory / name).mkdir(parents=True, exist_ok=True)
     for entry in snapshot["files"]:
         path = directory / entry["path"]
-        publish(path, base64.b64decode(entry["content"], validate=True))
-        if os.name != "nt":
-            path.chmod(0o755 if entry["executable"] else 0o644)
+        from .safety import create_bytes_exclusive
+        create_bytes_exclusive(path, base64.b64decode(entry["content"], validate=True),
+                               mode=0o755 if entry["executable"] else 0o644)

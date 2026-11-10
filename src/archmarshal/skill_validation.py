@@ -82,7 +82,7 @@ def validate_skill_package(skill_dir: Path, *, enforce_folder_name: bool = True)
                         f"SKILL.md exceeds the {MAX_SKILL_MD_LINES}-line progressive-disclosure limit.",
                     )
                 )
-            frontmatter, frontmatter_errors = _parse_frontmatter(text)
+            frontmatter, frontmatter_errors = parse_skill_frontmatter(text)
             errors.extend(frontmatter_errors)
 
     name = frontmatter.get("name")
@@ -192,7 +192,8 @@ def validate_skill_package(skill_dir: Path, *, enforce_folder_name: bool = True)
     }
 
 
-def _parse_frontmatter(text: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
+def parse_skill_frontmatter(text: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Parse the same frontmatter contract from disk or sealed recovery bytes."""
     errors: list[dict[str, str]] = []
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":

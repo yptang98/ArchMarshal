@@ -5,8 +5,13 @@ from typing import Any
 
 from .adoption import plan_adoption
 from .adoption_tx import adoption_transaction_status
-from .inventory import collect_inventory
-from .skill_index import skill_review_subject_digest
+from .errors import ArchMarshalError, require_workspace_root
+from .inventory import WorkspaceInventory, collect_inventory
+from .recommendation import contains as _contains
+from .recommendation import match_skills as _match_skills
+from .recommendation import normalize as _normalize
+from .skill_activation import skill_activation_block_reason
+from .skill_activation import source_managed as _source_managed
 from .user_store import read_user_store_active
 
 HISTORICAL_KEYS = ["reports", "history", "archive", "cache"]
@@ -18,9 +23,13 @@ def resolve_workspace(
     *,
     user_store: Path | str | None = None,
     adoption_preview: dict[str, Any] | None = None,
+    inventory: WorkspaceInventory | None = None,
+    observed_transaction: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    transaction_before = adoption_transaction_status(root)
-    inventory = collect_inventory(root)
+    transaction_before = observed_transaction or adoption_transaction_status(root)
+    if inventory is not None and inventory.root != require_workspace_root(root):
+        raise ArchMarshalError("inventory_root_mismatch", "Inventory belongs to a different workspace.")
+    inventory = inventory or collect_inventory(root)
     transaction_after = adoption_transaction_status(root)
     task_text = task.lower()
     transaction_incomplete = (
@@ -90,57 +99,6 @@ def resolve_workspace(
             "Historical artifact paths remain explicit-only unless a selected context module references them.",
         ],
     }
-
-
-def _normalize(value: str) -> str:
-    return value.lower().replace("-", " ").replace("_", " ")
-
-
-def _contains(text: str, needle: str) -> bool:
-    return _normalize(needle) in _normalize(text)
-
-
-def _match_skills(skills: list[dict[str, Any]], task_text: str) -> list[dict[str, Any]]:
-    matches: list[dict[str, Any]] = []
-    for skill in skills:
-        if (
-            skill.get("status") not in {"active", "experimental"}
-            or skill_activation_block_reason(skill) is not None
-        ):
-            continue
-        negative_matches = [
-            item for item in skill.get("negative_triggers") or [] if _contains(task_text, str(item))
-        ]
-        if negative_matches:
-            continue
-        trigger_matches = [
-            item for item in skill.get("triggers") or [] if _contains(task_text, str(item))
-        ]
-        tag_matches = [item for item in skill.get("tags") or [] if _contains(task_text, str(item))]
-        priority_bonus = {"highest": 3, "high": 2, "normal": 0, "low": -1}.get(
-            str(skill.get("priority") or "normal"), 0
-        )
-        score = len(trigger_matches) * 3 + len(tag_matches) + priority_bonus
-        if score <= 0:
-            continue
-        matches.append(
-            {
-                "id": skill.get("id"),
-                "name": skill.get("name"),
-                "kind": skill.get("kind"),
-                "scope": skill.get("scope"),
-                "priority": skill.get("priority") or "normal",
-                "score": score,
-                "path": skill.get("_skill_dir"),
-                "metadata_path": skill.get("_overlay_manifest_path") or skill.get("_manifest_path"),
-                "source_managed": _source_managed(skill),
-                "origin": "workspace",
-                "trigger_matches": trigger_matches,
-                "tag_matches": tag_matches,
-                "implementation_sha256": skill.get("_current_package_sha256"),
-            }
-        )
-    return sorted(matches, key=lambda item: (-item["score"], str(item["id"])))
 
 
 def _match_user_store_skills(
@@ -360,51 +318,6 @@ def _skill_matches_task_signals(skill: dict[str, Any], task_text: str) -> bool:
         isinstance(signal, str) and signal.strip() and _contains(task_text, signal)
         for signal in signals
     )
-
-
-def skill_activation_block_reason(skill: dict[str, Any]) -> str | None:
-    if skill.get("_index_state") == "untracked":
-        return "index_untracked"
-    status = skill.get("status")
-    if status not in {"active", "experimental"}:
-        return f"status_{status or 'unknown'}"
-    if skill.get("_source_error"):
-        return "source_unsafe"
-    if skill.get("_has_skill_md") is False:
-        return "source_missing"
-    drift = skill.get("_source_drift")
-    if drift and drift != "unchanged":
-        return f"source_{drift}"
-    source = skill.get("source")
-    source_managed = bool(source.get("managed", True)) if isinstance(source, dict) else True
-    if not source_managed:
-        review_state = skill.get("review_state")
-        review = skill.get("review")
-        if review_state == "rejected":
-            return "metadata_rejected"
-        if review_state != "approved" or not isinstance(review, dict):
-            return "metadata_needs_review"
-        if review.get("decision") != "approved":
-            return "metadata_review_invalid"
-        try:
-            current_subject = skill_review_subject_digest(skill)
-        except (TypeError, ValueError):
-            return "metadata_review_invalid"
-        if review.get("subject_digest") != current_subject:
-            return "metadata_review_stale"
-        elevated = (
-            skill.get("kind") == "global_skill"
-            or skill.get("scope") == "global"
-            or skill.get("priority") == "highest"
-        )
-        if elevated and review.get("allow_global_policy") is not True:
-            return "global_policy_not_approved"
-    return None
-
-
-def _source_managed(skill: dict[str, Any]) -> bool:
-    source = skill.get("source")
-    return bool(source.get("managed", True)) if isinstance(source, dict) else True
 
 
 def _match_context_modules(modules: list[dict[str, Any]], task_text: str) -> list[dict[str, Any]]:

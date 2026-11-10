@@ -25,15 +25,21 @@ outcomes in the user's language and handle command construction yourself.
    `sync-install ROOT --object ID --destination NEW_RELATIVE_DIRECTORY`. The target
    must be new. Then use existing adoption and exact `skill-review` before activation.
    Retain `.agent/skill-sync-origins` so future exports retain the original device.
-6. Verify status and imported file hashes. Report partial output; do not clear or
-   overwrite it automatically. No remote deletes or whole-project uploads occur.
+6. Verify status and imported file hashes. For interrupted output, inspect
+   `operation-status ROOT`, preview `operation-recover ROOT --operation ID`, and
+   apply the exact plan if continuation is authorized. Sealed local inputs support
+   offline recovery; changed files or mappings block it. Legacy partial imports
+   without a journal remain preserved. No remote deletes or whole-project uploads occur.
 
 ## Parallel windows
 
-1. Begin with `context-resume PROJECT --task TASK`. PROJECT may be a directory or
+1. Begin with `context-start PROJECT --task TASK`. PROJECT may be a directory or
    a GitHub address already registered by saved local work. `start ROOT` also
    restores current handoffs. Add explicit `--include-root` for another worktree.
-2. Give this window a stable descriptive `--stream`, distinct from other windows.
+2. Inspect available streams, last-save times, unfinished next steps and stale
+   evidence. Select an existing stream with `--stream` when resuming, or use the
+   suggested name as a starting point for a distinct new workstream. Names are not
+   automatic host window IDs. Give this window a stable descriptive `--stream`, distinct from other windows.
    Preserve a handoff after important decisions, before compaction and before
    stopping or transferring work. Use `context-save ROOT --stream NAME --summary TEXT`
    with `--task`, repeatable `--decision`, `--constraint`, `--rejected-option`,
@@ -50,6 +56,13 @@ outcomes in the user's language and handle command construction yourself.
    --integrate ID2` plus decisions, constraints, evidence and next steps. Include the
    other checkout root when necessary. Source records remain intact and are embedded
    into the synthesis; this does not merge code or Git branches.
-5. `--status completed` closes a stream without erasing its history. Do not claim
+5. Preview/apply `context-finish ROOT --stream NAME --summary TEXT` when the work is
+   complete. `end` reports active streams as a reminder; it does not silently save
+   context. `--status completed` remains supported. Neither route erases history. Do not claim
    access to unsaved private chat context. Recovery is as complete as the handoffs
    recorded before leaving the original windows.
+6. When active history reaches its capacity, preview/apply `context-archive ROOT`.
+   It keeps original records and terminal heads, with cold history available through
+   `context-read --record ID`. Outstanding save plans need a fresh preview after an
+   archive. If all records are already terminal heads, archiving reports no reclaimable
+   capacity; it must not drop streams to make room.

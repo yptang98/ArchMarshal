@@ -48,11 +48,19 @@ optimization that weakens validation.
 
 ## Known scaling work
 
-Inventory, lint, resolver, catalog, and lifecycle commands still perform some
-overlapping scans. The next optimization boundary is one immutable,
-root-identity-bound `InventorySnapshot` shared within a command. It must retain
-the current no-follow checks, complete-package hashes, and stale-source
-behavior; caching based only on paths or directory mtimes would be unsafe.
+Start shares one root-bound inventory observation with lint and task resolution,
+while retaining before/after adoption-transaction checks. Inventory also reuses its
+agent-file enumeration for counts and unregistered-file reporting; internal recovery
+payloads and context indexes are inspected through their domain status/doctor paths.
+No observation is cached across commands or used to authorize an apply. Adoption
+preview still performs its own exact package validation, and writers recheck inputs.
+
+CI now measures the released 0.18.0 and current checkout on the same Linux/Windows
+runner with the full 10,000-file / 100-Skill / 50-project fixture. Median and p95 must
+remain below `max(2 seconds, baseline * 1.75)` and an absolute 60-second ceiling.
+Fixture sizes, observations, Python, platform, and unchanged-tree evidence must
+match. Raw results are retained for 90 days. These generous initial budgets detect
+large regressions; sustained history can justify tighter thresholds later.
 
 Skill-index and user-store history verification are intentionally linear in the
 reachable chain. A future checkpoint/epoch format needs an explicit migration

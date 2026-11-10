@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.19.0 - 2026-11-10
+
+- Reconcile native Skill observations, review decisions and explicit source/installed
+  package verification. Add a bounded read-only Codex stdio probe; retain unknown,
+  stale, excluded and ambiguous states without changing native configuration.
+- Recognize existing external delivery manifests and preserve unknown directories
+  separately from interrupted native bundles; hash only their explicitly listed files.
+- Add explicit Codex project/worktree bindings and preview-bound `project-record`
+  and `project-status`. Copy selected deliverables into external version directories,
+  verify hashes before committing history, and preserve interrupted/changed output.
+  Read existing local workflow records without rewriting them or claiming native adoption.
+- Seal inputs before Skill import, installation, and closeout; add bounded
+  `operation-status` and exact-plan `operation-recover` without overwriting changed files.
+- Archive full context generations while retaining original files, current heads,
+  exact historical reads, and merge references. Add `context-start`, stream filtering,
+  save-age/next-step displays, and explicit `context-finish`.
+- Require task evidence before priority affects Skill recommendation; respect Latin
+  token boundaries and Unicode normalization. Add a bilingual recommendation corpus.
+- Compare duplicate, extended, complementary, or conflicting candidate evidence
+  without deleting packs or transferring acceptance between candidate digests.
+- Reuse inventory within start/lint/resolution, avoid rescanning internal recovery
+  payloads as user artifacts, and separate candidate CLI, context storage, activation,
+  sync policy, and adoption backup responsibilities.
+- Add same-runner scale comparisons against 0.18.0, real Linux ENOSPC/EACCES checks,
+  package downgrade/return drills, and signed build provenance with source verification.
+- Support extended Windows paths in atomic file publication; retain restrictive umask.
+
+This remains an alpha. New build provenance does not retroactively attest older
+release assets, and recorded reproduction evidence does not prove execution.
+
 ## 0.18.0 - 2026-11-10
 
 - Added persistent machine identities and content-addressed Skill transfer with
