@@ -39,11 +39,11 @@ def record_location(project_root: Path | str, store_root: Path | str) -> tuple[P
     store = absolute_directory(store_root, existing=False)
     if store == project or project in store.parents or store in project.parents:
         fail("Project content and external records must be disjoint.", "external_store_overlap")
+    if store.exists() and not store.is_dir():
+        fail("External record storage is not a directory.", "external_store_invalid")
     key = hashlib.sha256(canonical_path(project).encode("utf-8")).hexdigest()[:16]
     label = re.sub(r"[^\w.-]+", "-", project.name).strip(".-")[:48] or "project"
     location = ensure_unlinked_path(store / f"{label}-{key}", purpose="External project records")
-    if store.exists() and not store.is_dir():
-        fail("External record storage is not a directory.", "external_store_invalid")
     return project, location
 
 

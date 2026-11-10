@@ -18,7 +18,10 @@ from test_portability import upload
 import archmarshal.skill_sync as skill_sync
 from archmarshal.operation_journal import operation_status
 from archmarshal.operation_recovery import recover_operation
+from archmarshal.safety import BACKUP_DISK_RESERVE_BYTES
 from archmarshal.skill_sync import pull_skill
+
+MAX_TMPFS_BYTES = 128 * 1024 * 1024
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux" or os.environ.get("ARCHMARSHAL_FILESYSTEM_INTEGRATION") != "1",
@@ -32,7 +35,9 @@ def tmp_path():
     mounts = Path("/proc/mounts").read_text().splitlines()
     assert any(row.split()[1] == str(mount) and row.split()[2] == "tmpfs" for row in mounts)
     capacity = os.statvfs(mount)
-    assert 0 < capacity.f_blocks * capacity.f_frsize <= 32 * 1024 * 1024
+    # Fixture adoption must keep the production backup reserve before the test
+    # deliberately exhausts this disposable filesystem.
+    assert BACKUP_DISK_RESERVE_BYTES < capacity.f_blocks * capacity.f_frsize <= MAX_TMPFS_BYTES
     with tempfile.TemporaryDirectory(prefix="failure-check-", dir=mount) as directory:
         yield Path(directory)
 
@@ -41,7 +46,7 @@ def fill_tmpfs(path):
     written = 0
     with path.open("wb", buffering=0) as handle:
         try:
-            while written <= 32 * 1024 * 1024:
+            while written <= MAX_TMPFS_BYTES:
                 written += handle.write(b"x" * (64 * 1024))
         except OSError as exc:
             assert exc.errno == errno.ENOSPC

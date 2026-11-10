@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -337,7 +338,7 @@ def test_native_probe_respects_exclusions_before_starting_any_process(tmp_path, 
         raise AssertionError("Native reload must not inspect excluded packages")
     monkeypatch.setattr(probe, "_query", never)
     with pytest.raises(ArchMarshalError, match="excluded Skills"):
-        probe_codex_skills(root, sys.executable)
+        probe_codex_skills(root, Path(sys.executable).resolve(strict=True))
 
 
 def test_public_probe_validates_binary_and_builds_only_the_read_only_command(tmp_path, monkeypatch):
@@ -347,10 +348,13 @@ def test_public_probe_validates_binary_and_builds_only_the_read_only_command(tmp
         calls.append((command, work, host_id, timeout))
         return observation(work)
     monkeypatch.setattr(probe, "_query", capture)
-    result = probe_codex_skills(tmp_path, sys.executable, timeout=5)
+    # Hosted Linux Python launchers are symlinks. Pass the actual binary for
+    # these positive cases while keeping production link rejection intact.
+    binary = Path(sys.executable).resolve(strict=True)
+    result = probe_codex_skills(tmp_path, binary, timeout=5)
     assert result["format"] == OBSERVATION_FORMAT
-    assert calls[0][0] == [sys.executable, "app-server", "--listen", "stdio://"]
+    assert calls[0][0] == [str(binary), "app-server", "--listen", "stdio://"]
     for invalid in (0, 61, float('nan'), True):
         with pytest.raises(ArchMarshalError):
-            probe_codex_skills(tmp_path, sys.executable, timeout=invalid)
+            probe_codex_skills(tmp_path, binary, timeout=invalid)
     assert len(calls) == 1

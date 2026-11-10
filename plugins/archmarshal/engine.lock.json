@@ -122,7 +122,7 @@
     {
       "bytes": 22311,
       "path": "external_records.py",
-      "sha256": "fdb7a9178ecc21b95ee7a60c6419f2828f96e98468b68503e9faf69e5391bade"
+      "sha256": "de73130eb531d26ed2d4469e138a3310706957f003ed773f6b7c08790a7ee2c6"
     },
     {
       "bytes": 684,
@@ -347,5 +347,5 @@
   ],
   "format": "archmarshal-plugin-engine-lock-v1",
   "source_root": "src/archmarshal",
-  "source_tree_sha256": "6c756b0d240f7b79043bad7a365e48c2f57862cb7209154452e2df54bba24e35"
+  "source_tree_sha256": "047cc007344f41277b7c75cab50b7945a79760c3770b29af2282575282973795"
 }

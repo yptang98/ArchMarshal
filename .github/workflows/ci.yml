@@ -154,7 +154,7 @@ jobs:
       - name: Prepare bounded disposable filesystem
         run: |
           mkdir "$RUNNER_TEMP/archmarshal-failure-fs"
-          sudo mount -t tmpfs -o size=16m,mode=1777 tmpfs "$RUNNER_TEMP/archmarshal-failure-fs"
+          sudo mount -t tmpfs -o size=128m,mode=1777 tmpfs "$RUNNER_TEMP/archmarshal-failure-fs"
       - name: Exercise real ENOSPC and EACCES before and after staging
         env:
           ARCHMARSHAL_FILESYSTEM_INTEGRATION: "1"
