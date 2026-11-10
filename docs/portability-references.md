@@ -23,3 +23,22 @@ instructions were activated and no implementation code was copied.
 The combination specifically addresses two independent needs: transferring reusable
 capabilities between devices, and restoring the decisions of parallel project work.
 Project context is never bundled into a Skill upload implicitly.
+
+## Stability review follow-up
+
+- [Agent Skills specification](https://github.com/agentskills/agentskills/blob/main/docs/specification.mdx)
+  and its [reference validator](https://github.com/agentskills/agentskills/blob/main/skills-ref/src/skills_ref/validator.py)
+  separate the package entrypoint and optional resources. This review retained
+  ArchMarshal's existing compatibility contract and consolidated package validation;
+  adopting a reference implementation would not replace filesystem or trust checks.
+- [KitsuneKode/session-handoff](https://github.com/KitsuneKode/agent-skills/blob/main/skills/session-handoff/SKILL.md)
+  emphasizes key-file references, ordered next actions, task alignment and checking
+  stale state before continuation. ArchMarshal already records these fields; the
+  audit added shared evidence verification and a cumulative read budget.
+- Revisited TreatTrick/skill-sync's explicit conflict/recovery model and forest's
+  fact-based handoffs. Kept immutable versions and commit-last receipts; strengthened
+  quarantine boundary checks, failure reporting and capacity preflight. No external
+  hooks were installed, and no third-party code or Skill instructions were executed.
+
+These are workflow references, not evidence that either implementation is secure.
+See [the audit findings](stability-audit-2026-11-10.md) for locally reproduced issues.

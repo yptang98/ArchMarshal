@@ -1,7 +1,6 @@
 """Portable Skill snapshots, self-declared device lineage, and quarantined imports."""
 from __future__ import annotations
 
-import base64
 import os
 from pathlib import Path
 from typing import Any
@@ -9,7 +8,6 @@ from typing import Any
 from .io import load_yaml_safe
 from .ownership import require_owned_workspace
 from .portable import (
-    MAX_FILES,
     canonical,
     checked_plan,
     decode,
@@ -21,19 +19,21 @@ from .portable import (
     publish,
     read,
     relative,
-    sha,
-    text,
-    validate_device,
 )
-from .safety import EXCLUDED_BACKUP_PARTS, ensure_unlinked_path, is_link_or_reparse
-from .session import _sensitive_text_errors
+from .safety import EXCLUDED_BACKUP_PARTS, ensure_unlinked_path
 from .skill_index import load_skill_index
+from .skill_package import (
+    FORMAT,
+    materialize_package,
+    scan_package,
+    validate_snapshot,
+    verify_package,
+)
+from .skill_paths import SKILL_PATH_FIELDS, SKILL_ROOT_CANDIDATES
 from .skill_validation import validate_skill_package
 from .sync_transport import Transport
 from .workspace_lock import workspace_mutation_lock
 
-FORMAT = "archmarshal-skill-sync-v1"
-MAX_CONTENT = 4 * 1024 * 1024
 MAX_SYNC_TOTAL = 64 * 1024 * 1024
 
 
@@ -45,136 +45,45 @@ def _inbox(root: Path) -> Path:
     inboxes = paths.get("inbox", [".agent/inbox"]) if isinstance(paths, dict) else None
     if not isinstance(inboxes, list) or not inboxes:
         fail("Workspace inbox mapping must contain at least one relative directory.")
-    return ensure_unlinked_path(root / relative(inboxes[0]), purpose="Skill inbox")
-
-
-def _safe_content(path: str, raw: bytes) -> None:
-    name = Path(path).name.casefold()
-    if name in {".env", ".npmrc", ".pypirc", "credentials", "id_rsa", "id_ed25519"}:
-        fail("A credential filename is inside the selected package; remove it from sync scope.")
-    content = raw.decode("utf-8", errors="replace")
-    if "PRIVATE KEY-----" in content or _sensitive_text_errors(content=content):
-        fail("Selected package appears to contain a secret; inspect it before syncing.")
-
-
-def _scan(directory: Path, *, boundaries: set[Path] | None = None,
-          root_entrypoint: bool = False) -> tuple[list[dict[str, Any]], list[str]]:
-    ensure_unlinked_path(directory, purpose="Skill source")
-    if not directory.is_dir():
-        fail("Skill package directory does not exist.")
-    boundaries = boundaries or set()
-    files: list[dict[str, Any]] = []
-    directories: list[str] = []
-    seen: set[str] = set()
-    total = 0
-    def scan_error(error: OSError) -> None:
-        raise error
-    for current, children, filenames in os.walk(directory, followlinks=False, onerror=scan_error):
-        parent = Path(current)
-        kept = []
-        for name in sorted(children):
-            child = parent / name
-            if (root_entrypoint or name in EXCLUDED_BACKUP_PARTS or child in boundaries
-                    or (child / "SKILL.md").exists()):
-                continue
-            if is_link_or_reparse(child):
-                fail("Linked directories cannot be synced.")
-            value = relative(child.relative_to(directory).as_posix())
-            key = portable_key(value)
-            if key in seen:
-                fail("Portable package path collision.")
-            seen.add(key)
-            directories.append(value)
-            kept.append(name)
-        children[:] = kept
-        for name in sorted(filenames):
-            if name in EXCLUDED_BACKUP_PARTS or (root_entrypoint and name != "SKILL.md"):
-                continue
-            path = parent / name
-            value = relative(path.relative_to(directory).as_posix())
-            key = portable_key(value)
-            if key in seen:
-                fail("Portable package path collision.")
-            seen.add(key)
-            raw = read(path, MAX_CONTENT - total)
-            total += len(raw)
-            _safe_content(value, raw)
-            files.append({"path": value, "sha256": sha(raw), "bytes": len(raw),
-                          "executable": bool(path.stat().st_mode & 0o111),
-                          "content": base64.b64encode(raw).decode("ascii")})
-        if len(files) + len(directories) > MAX_FILES:
-            fail("Skill package exceeds its file budget.")
-    if "SKILL.md" not in {item["path"] for item in files}:
-        fail("Selected package must have SKILL.md.")
-    return sorted(files, key=lambda item: item["path"]), sorted(directories)
-
-
-def validate_snapshot(raw: bytes, key: str) -> dict[str, Any]:
-    snapshot = decode(raw)
-    if not is_digest(key) or digest(snapshot) != key:
-        fail("Portable snapshot digest does not match its object ID.", "sync_integrity_failed")
-    fields = {"format", "name", "origin", "exporter", "parents", "files", "directories"}
-    if set(snapshot) != fields or snapshot["format"] != FORMAT:
-        fail("Unsupported Skill snapshot format.")
-    text(snapshot["name"], "Skill name", 200, required=True)
-    validate_device(snapshot["origin"])
-    validate_device(snapshot["exporter"])
-    parents = snapshot["parents"]
-    if not isinstance(parents, list) or len(parents) > 100 or not all(map(is_digest, parents)):
-        fail("Invalid snapshot lineage.")
-    files, directories = snapshot["files"], snapshot["directories"]
-    if not isinstance(files, list) or not isinstance(directories, list):
-        fail("Invalid package entries.")
-    if not files or len(files) + len(directories) > MAX_FILES:
-        fail("Package entry limit exceeded.")
-    seen: set[str] = set()
-    file_keys: set[str] = set()
-    total = 0
-    for value in directories:
-        key_value = portable_key(relative(value))
-        if key_value in seen:
-            fail("Duplicate package path.")
-        seen.add(key_value)
-    for entry in files:
-        if not isinstance(entry, dict) or set(entry) != {
-            "path", "sha256", "bytes", "executable", "content"
-        }:
-            fail("Invalid package file record.")
-        path = relative(entry["path"])
-        key_value = portable_key(path)
-        if key_value in seen or type(entry["executable"]) is not bool:
-            fail("Duplicate path or invalid executable bit.")
-        seen.add(key_value)
-        file_keys.add(key_value)
-        try:
-            content = base64.b64decode(entry["content"], validate=True)
-        except (ValueError, TypeError):
-            fail("Invalid package file encoding.")
-        if type(entry["bytes"]) is not int or entry["bytes"] != len(content):
-            fail("Package file size mismatch.")
-        if sha(content) != entry["sha256"]:
-            fail("Package file digest mismatch.")
-        total += len(content)
-        if total > MAX_CONTENT:
-            fail("Package exceeds its content budget.")
-        _safe_content(path, content)
-    for path in seen:
-        if any(part in EXCLUDED_BACKUP_PARTS for part in path.split("/")):
-            fail("Portable package contains a preserved runtime or VCS boundary.")
-        if path.endswith("/skill.md"):
-            fail("Nested Skills must travel as separate packages.")
-        parts = path.split("/")
-        for index in range(1, len(parts)):
-            parent = "/".join(parts[:index])
-            if parent in file_keys or parent not in seen:
-                fail("Invalid package directory topology.")
-    if not any(entry["path"] == "SKILL.md" for entry in files):
-        fail("Portable Skill has no SKILL.md.")
-    return snapshot
+    value = relative(inboxes[0])
+    folded = portable_key(value)
+    if any(part in EXCLUDED_BACKUP_PARTS for part in folded.split("/")):
+        fail("Skill inbox crosses a reserved runtime or VCS boundary.")
+    if folded == ".agent" or (folded.startswith(".agent/")
+                              and not folded.startswith(".agent/inbox/")
+                              and folded != ".agent/inbox"):
+        fail("Skill inbox must not overlap internal management state.")
+    roots = list(SKILL_ROOT_CANDIDATES)
+    for field in (*SKILL_PATH_FIELDS, "source_skill_roots"):
+        declared = paths.get(field, [])
+        if isinstance(declared, str):
+            declared = [declared]
+        if not isinstance(declared, list) or not all(isinstance(p, str) for p in declared):
+            fail("Invalid Skill discovery mapping.")
+        roots.extend(declared)
+    for skill_root in roots:
+        normalized = skill_root.strip().replace("\\", "/").strip("/")
+        # A root-level SKILL.md is entrypoint-only in adoption, not a recursive discovery root.
+        if normalized == ".":
+            continue
+        boundary = portable_key(relative(normalized))
+        if (folded == boundary or folded.startswith(boundary + "/")
+                or boundary.startswith(folded + "/")):
+            fail("Skill inbox overlaps a Skill discovery boundary.")
+    return ensure_unlinked_path(root / value, purpose="Skill inbox")
 
 
 def _origin_path(root: Path, source: str) -> Path:
     return root / ".agent/skill-sync-origins" / (digest(source) + ".json")
+
+
+def _validate_receipt(receipt: dict[str, Any], key: str) -> None:
+    from .portable import validate_device
+    if (set(receipt) != {"format", "object_id", "imported_by", "activation"}
+            or receipt["format"] != "archmarshal-sync-receipt-v1"
+            or receipt["object_id"] != key or receipt["activation"] != "quarantined"):
+        fail("A committed quarantine receipt is required before installation.")
+    validate_device(receipt["imported_by"])
 
 
 def snapshot_skill(root: Path | str, source: str, *, device_path: Path | str | None = None
@@ -202,8 +111,8 @@ def _snapshot_skill(root: Path, source: str, *, device_path: Path | str | None
     boundaries.update(root / value for value in excluded)
     identity = device(device_path)
     directory = root / source
-    files, directories = _scan(directory, boundaries=boundaries)
-    if (files, directories) != _scan(directory, boundaries=boundaries):
+    files, directories = scan_package(directory, boundaries=boundaries)
+    if (files, directories) != scan_package(directory, boundaries=boundaries):
         fail("Skill source changed while preparing the portable snapshot.", "sync_source_changed")
     snapshot = {"format": FORMAT, "name": str(record["manifest"].get("name") or directory.name),
                 "origin": identity, "exporter": identity, "parents": [],
@@ -216,11 +125,16 @@ def _snapshot_skill(root: Path, source: str, *, device_path: Path | str | None
     old_id = None
     if origin_path.exists():
         origin_record = decode(read(origin_path))
+        if (set(origin_record) != {"format", "source", "object_id", "snapshot"}
+                or origin_record["format"] != "archmarshal-sync-origin-v1"
+                or origin_record["source"] != source):
+            fail("Invalid Skill installation origin record.")
         old_id = origin_record.get("object_id")
         old = validate_snapshot(canonical(origin_record.get("snapshot")), old_id)
     elif directory.name == "package" and receipt.exists() and original.exists():
         receipt_data = decode(read(receipt))
         old_id = receipt_data.get("object_id", "")
+        _validate_receipt(receipt_data, old_id)
         old = validate_snapshot(read(original), old_id)
     if old is not None:
         snapshot["name"] = old["name"]
@@ -288,7 +202,8 @@ def install_skill(root: Path | str, key: str, destination: str, *,
     root = require_owned_workspace(ensure_unlinked_path(Path(root), purpose="Skill workspace"),
                                    operation="Skill sync install")
     relative(destination)
-    if any(part in EXCLUDED_BACKUP_PARTS | {".agent"} for part in destination.split("/")):
+    if any(part in EXCLUDED_BACKUP_PARTS | {".agent"}
+           for part in portable_key(destination).split("/")):
         fail("Install destination crosses a reserved project boundary.")
     target = ensure_unlinked_path(root / destination, purpose="Reviewed Skill destination")
     if target.exists():
@@ -302,16 +217,9 @@ def install_skill(root: Path | str, key: str, destination: str, *,
         fail("Invalid snapshot object ID.")
     quarantine = _inbox(root) / "skill-sync" / key
     receipt = decode(read(quarantine / "RECEIPT.json"))
-    if receipt.get("object_id") != key or receipt.get("activation") != "quarantined":
-        fail("A committed quarantine receipt is required before installation.")
+    _validate_receipt(receipt, key)
     snapshot = validate_snapshot(read(quarantine / "snapshot.json"), key)
-    actual_files, actual_dirs = _scan(quarantine / "package")
-    expected_files = snapshot["files"]
-    if os.name == "nt":
-        actual_files = [{**f, "executable": False} for f in actual_files]
-        expected_files = [{**f, "executable": False} for f in expected_files]
-    if actual_files != expected_files or actual_dirs != snapshot["directories"]:
-        fail("Quarantine files changed; inspect the sealed snapshot before installation.")
+    verify_package(quarantine / "package", snapshot)
     validation = validate_skill_package(quarantine / "package", enforce_folder_name=False)
     if not validation["valid"]:
         fail("Imported Skill fails the existing package validation contract.")
@@ -328,19 +236,15 @@ def install_skill(root: Path | str, key: str, destination: str, *,
         return result
     checked_plan(plan, expected_plan)
     with workspace_mutation_lock(root, operation="sync_install"):
+        # Rebuild the preview under the mutation lock, including exclusions and inbox mapping.
+        locked_plan = install_skill(root, key, destination)["plan"]
+        checked_plan(locked_plan, expected_plan)
         if target.exists():
             fail("Install destination already exists; no files were overwritten.")
         origin_path = _origin_path(root, destination)
         if origin_path.exists():
             fail("An earlier installation receipt already owns this destination.")
-        target.mkdir(parents=True)
-        for name in snapshot["directories"]:
-            (target / name).mkdir(parents=True, exist_ok=True)
-        for entry in snapshot["files"]:
-            path = target / entry["path"]
-            publish(path, base64.b64decode(entry["content"], validate=True))
-            if os.name != "nt":
-                path.chmod(0o755 if entry["executable"] else 0o644)
+        materialize_package(target, snapshot)
         publish(origin_path, canonical({"format": "archmarshal-sync-origin-v1", "source": destination,
                                        "object_id": key, "snapshot": snapshot}))
     result["mode"] = "installed"
@@ -367,6 +271,9 @@ def pull_skill(root: Path | str, key: str, store: Transport, *,
         return result
     checked_plan(plan, expected_plan)
     with workspace_mutation_lock(root, operation="sync_pull"):
+        require_owned_workspace(root, operation="Skill sync import")
+        if _inbox(root) != inbox:
+            fail("Workspace inbox mapping changed; review a fresh preview.", "portability_stale_plan")
         receipt_data = {"format": "archmarshal-sync-receipt-v1", "object_id": key,
                         "imported_by": identity, "activation": "quarantined"}
         if target.exists():
@@ -375,23 +282,11 @@ def pull_skill(root: Path | str, key: str, store: Transport, *,
             if decode(read(target / "RECEIPT.json")) != receipt_data:
                 fail("Import receipt differs.")
             validate_snapshot(read(target / "snapshot.json"), key)
-            actual_files, actual_dirs = _scan(target / "package")
-            expected_files = snapshot["files"]
-            if os.name == "nt":
-                actual_files = [{**f, "executable": False} for f in actual_files]
-                expected_files = [{**f, "executable": False} for f in expected_files]
-            if actual_files != expected_files or actual_dirs != snapshot["directories"]:
-                fail("Existing imported package was modified; no files were overwritten.")
+            verify_package(target / "package", snapshot)
             result["mode"] = "unchanged"
             return result
         target.mkdir(parents=True)
-        for name in snapshot["directories"]:
-            (target / "package" / name).mkdir(parents=True, exist_ok=True)
-        for entry in snapshot["files"]:
-            path = target / "package" / entry["path"]
-            publish(path, base64.b64decode(entry["content"], validate=True))
-            if os.name != "nt":
-                path.chmod(0o755 if entry["executable"] else 0o644)
+        materialize_package(target / "package", snapshot)
         publish(target / "snapshot.json", canonical(snapshot))
         publish(target / "RECEIPT.json", canonical(receipt_data))
     result["mode"] = "imported"

@@ -67,3 +67,9 @@ repository. Write protocol behavior is covered with a controlled GitHub API fixt
 no user Skill package was uploaded to a public repository for testing. Device
 labels are self-declared, and context restoration covers recorded handoffs rather
 than unsaved private conversations. See portability.md for explicit resource limits.
+
+The subsequent stability audit adds 49 regression cases and shared boundary
+primitives: 472 tests passed, 13 platform skips; statements 87.43%, branches 76.15%.
+All existing and six new module gates, static/version/lock checks, package metadata,
+wheel/sdist clean installs and wheel source-byte verification passed locally.
+See [the findings and architecture assessment](stability-audit-2026-11-10.md).

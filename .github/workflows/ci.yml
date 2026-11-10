@@ -48,6 +48,12 @@ jobs:
           --module src/archmarshal/_doctor_immutable.py=78,64
           --module src/archmarshal/_doctor_sessions.py=80,65
           --module src/archmarshal/formats.py=95,88
+          --module src/archmarshal/portable.py=90,80
+          --module src/archmarshal/skill_package.py=82,65
+          --module src/archmarshal/skill_sync.py=85,70
+          --module src/archmarshal/handoff.py=85,70
+          --module src/archmarshal/sensitive_data.py=95,90
+          --module src/archmarshal/file_lock.py=80,45
       - name: CLI smoke test
         run: archmarshal lint examples/simple-project --pretty
 

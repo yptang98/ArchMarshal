@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import unicodedata
@@ -17,6 +18,8 @@ from .safety import WINDOWS_RESERVED_NAMES, create_bytes_exclusive, ensure_unlin
 MAX_OBJECT_BYTES = 16 * 1024 * 1024
 MAX_FILES = 2_000
 MAX_OBJECTS = 2_000
+MAX_JSON_DEPTH = 100
+MAX_JSON_NODES = 100_000
 
 
 def fail(message: str, code: str = "portability_invalid") -> None:
@@ -64,12 +67,27 @@ def decode(raw: bytes) -> dict[str, Any]:
         raise ArchMarshalError("portability_invalid", "Invalid portable JSON.") from exc
     if not isinstance(value, dict):
         fail("Portable object must be a JSON mapping.")
+    pending = [(value, 0)]
+    nodes = 0
+    while pending:
+        item, depth = pending.pop()
+        nodes += 1
+        if nodes > MAX_JSON_NODES or depth > MAX_JSON_DEPTH:
+            fail("Portable JSON exceeds its structure budget.")
+        if isinstance(item, float) and not math.isfinite(item):
+            fail("Portable JSON contains a non-finite number.")
+        if isinstance(item, dict):
+            pending.extend((child, depth + 1) for child in item.values())
+        elif isinstance(item, list):
+            pending.extend((child, depth + 1) for child in item)
     return value
 
 
 def strict_files(directory: Path, *, limit: int = MAX_OBJECTS) -> list[Path]:
     """Reject links and incomplete scans instead of hiding journal entries."""
     ensure_unlinked_path(directory, purpose="Portable store")
+    if not directory.is_dir():
+        fail("Portable store must be a directory.")
     result: list[Path] = []
     count = 0
     def failed(error: OSError) -> None:

@@ -529,8 +529,9 @@ def test_documented_cli_sync_and_merge_end_to_end(environment, capsys):
      "sha": "b" * 40, "size": "invalid"}])
 def test_remote_malformed_tree_fails_with_structured_error(entry, monkeypatch):
     store = GitHubTransport("owner/repo")
-    store._repository = {"id": 123, "private": True, "default_branch": "main"}
-    monkeypatch.setattr(store, "_request", lambda *a, **k: {"truncated": False, "tree": [entry]})
+    monkeypatch.setattr(store, "_request", lambda path, **k:
+        {"id": 123, "private": True, "default_branch": "main"} if path == "" else
+        {"truncated": False, "tree": [entry]})
     with pytest.raises(ArchMarshalError):
         store.keys()
 

@@ -162,8 +162,21 @@ hashes and invalid manifests. Context is limited to 1,000 journal records, 128 K
 per record and 16 MiB total history per checkout; default retrieval is 24,000
 characters of selected context. A corrupt referenced record blocks restoration
 rather than disappearing silently. Preserve incomplete artifacts for inspection.
+New context is rejected before writing if it would exceed journal capacity; history
+is never automatically pruned. Restoration accepts at most 100 checkout roots and
+verifies each evidence file once per checkout, within a combined 64 MiB read budget.
+Files that cannot be verified are explicitly marked as unverified/changed.
+If local project registration fails after a handoff commits, the command reports the
+saved record plus a warning; resume using the checkout directory.
+
+The configured inbox must be outside VCS/runtime boundaries, internal management
+state and all configured/default Skill discovery roots. `.agent/inbox` remains the
+default. Repeated imports and installations verify every quarantine entry, including
+directories normally excluded from source exports. JSON parsing rejects duplicate
+keys, non-finite numbers, more than 100 nesting levels or 100,000 value nodes.
 The filesystem threat model remains cooperative concurrency and static-link
 protection; hostile same-permission ancestor replacement is not fully handle-relative.
 
 See [design and verification](portability-design.md) and
-[prior-art notes](portability-references.md).
+[prior-art notes](portability-references.md), and the
+[stability audit](stability-audit-2026-11-10.md).

@@ -28,7 +28,7 @@ from .portable import (
     validate_device,
 )
 from .safety import ensure_unlinked_path
-from .session import _sensitive_text_errors
+from .sensitive_data import sensitive_text_errors
 from .workspace_layout import load_workspace_layout
 from .workspace_lock import workspace_mutation_lock
 
@@ -37,6 +37,8 @@ INDEX = Path(".agent/context-index")
 MAX_RECORDS = 1_000
 MAX_RECORD_BYTES = 128 * 1024
 MAX_HISTORY_BYTES = 16 * 1024 * 1024
+MAX_EVIDENCE_BYTES = 64 * 1024 * 1024
+MAX_ROOTS = 100
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -80,25 +82,35 @@ def _roots(project: Path | str, include_roots: list[str] | None) -> list[Path]:
         if directory.exists():
             for path in strict_files(directory, limit=1000):
                 entry = decode(read(path, 16 * 1024))
-                if entry.get("format") != "archmarshal-project-location-v1":
+                if (set(entry) != {"format", "root", "address"}
+                        or entry["format"] != "archmarshal-project-location-v1"):
                     fail("Invalid project registry entry.")
+                text(entry["root"], "registered root", 4096, required=True)
+                text(entry["address"], "registered address", 4096, required=True)
                 candidate = Path(entry["root"])
+                if not candidate.is_absolute():
+                    fail("Registered project root must be absolute.")
                 if entry.get("address") == address and candidate.is_dir():
                     candidate = ensure_unlinked_path(candidate, purpose="Registered project")
-                    if _git_state(candidate)["remote"] == address:
+                    if project_address(_git(candidate, "remote", "get-url", "origin")) == address:
                         roots.append(candidate.resolve())
         if not roots:
             fail("No recorded local checkout matches this project address; supply its directory.",
                  "context_project_not_found")
     else:
         roots = [require_workspace_root(ensure_unlinked_path(Path(project), purpose="Project"))]
+    if include_roots is not None and (not isinstance(include_roots, list)
+                                      or len(include_roots) > MAX_ROOTS):
+        fail("Too many context checkout roots.")
     for extra in include_roots or []:
+        text(extra, "checkout root", 4096, required=True)
         roots.append(require_workspace_root(ensure_unlinked_path(Path(extra), purpose="Project")))
+    if len(set(roots)) > MAX_ROOTS:
+        fail("Too many context checkout roots.")
     return sorted(set(roots), key=str)
 
 
-def _texts(values: list[str] | None, label: str) -> list[str]:
-    values = values or []
+def _texts(values: list[str], label: str) -> list[str]:
     if not isinstance(values, list) or len(values) > 100:
         fail(f"Too many {label} entries.")
     return [text(value, label) for value in values]
@@ -129,7 +141,7 @@ def _validate_record(record: dict[str, Any], depth: int = 0) -> None:
     for key in ("decisions", "next_steps", "risks", "evidence", "constraints", "rejected_options"):
         _texts(record[key], key)
     validate_device(record["device"])
-    if record["status"] not in {"active", "completed"}:
+    if not isinstance(record["status"], str) or record["status"] not in {"active", "completed"}:
         fail("Invalid stream status.")
     if record["parent"] is not None and not is_digest(record["parent"]):
         fail("Invalid context parent.")
@@ -162,13 +174,16 @@ def _validate_record(record: dict[str, Any], depth: int = 0) -> None:
         fail("Invalid context timestamp.")
 
 
-def _records(root: Path) -> dict[str, dict[str, Any]]:
+def _records(root: Path, *, reserve_bytes: int = 0, reserve_records: int = 0
+             ) -> dict[str, dict[str, Any]]:
     directory = ensure_unlinked_path(root / INDEX, purpose="Context index")
+    total = reserve_bytes
+    if total > MAX_HISTORY_BYTES or reserve_records > MAX_RECORDS:
+        fail("Context history exceeds its read budget or record limit.")
     if not directory.exists():
         return {}
     records = {}
-    total = 0
-    for path in strict_files(directory, limit=MAX_RECORDS):
+    for path in strict_files(directory, limit=MAX_RECORDS - reserve_records):
         if path.parent != directory or path.suffix != ".json" or not is_digest(path.stem):
             fail("Unexpected context index entry.")
         pointer = decode(read(path, 8192))
@@ -220,26 +235,32 @@ def save_context(root: Path | str, *, stream: str, summary: str, task: str = "",
     sources = dict(records)
     for other in _roots(root, include_roots):
         sources.update(_records(other))
-    integrates = sorted(set(integrates or []))
+    integrates = _texts([] if integrates is None else integrates, "integrated record IDs")
+    integrates = sorted(set(integrates))
     if any(key not in sources for key in integrates):
         fail("Integrated context record is unavailable; include its checkout directory.")
     payload = {"format": FORMAT, "stream": text(stream, "stream", 100, required=True),
                "task": text(task, "task"), "summary": text(summary, "summary", required=True),
-               "decisions": _texts(decisions, "decisions"),
-               "next_steps": _texts(next_steps, "next steps"), "risks": _texts(risks, "risks"),
-               "evidence": _texts(evidence, "evidence"),
-               "constraints": _texts(constraints, "constraints"),
-               "rejected_options": _texts(rejected_options, "rejected options"),
-               "files": _file_state(root, _texts(files, "file paths")),
+               "decisions": _texts([] if decisions is None else decisions, "decisions"),
+               "next_steps": _texts([] if next_steps is None else next_steps, "next steps"),
+               "risks": _texts([] if risks is None else risks, "risks"),
+               "evidence": _texts([] if evidence is None else evidence, "evidence"),
+               "constraints": _texts([] if constraints is None else constraints, "constraints"),
+               "rejected_options": _texts([] if rejected_options is None else rejected_options,
+                                          "rejected options"),
+               "files": _file_state(root, _texts([] if files is None else files, "file paths")),
                "status": status, "device": device(device_path), "git": _git_state(root),
                "parent": heads[0] if heads else None, "integrates": integrates,
                "integrated_contexts": {key: sources[key] for key in integrates}}
-    if _sensitive_text_errors(payload=canonical(payload).decode("utf-8")):
+    if sensitive_text_errors(payload=canonical(payload).decode("utf-8")):
         fail("Context appears to contain an inline secret; remove it before recording.")
     now = datetime.now(timezone.utc)
-    _validate_record({**payload, "recorded_at": now.isoformat()})
-    if len(canonical(payload)) + 100 > MAX_RECORD_BYTES:
+    record = {**payload, "recorded_at": now.isoformat()}
+    _validate_record(record)
+    encoded = (json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    if len(encoded) > MAX_RECORD_BYTES:
         fail("Context record exceeds its byte budget.")
+    _records(root, reserve_bytes=len(encoded), reserve_records=1)
     layout = load_workspace_layout(root)
     destination = layout.save_dir("checkpoints", now, append=("handoffs",))
     plan = {"operation": "context_save", "root": str(root), "record": payload,
@@ -249,14 +270,11 @@ def save_context(root: Path | str, *, stream: str, summary: str, task: str = "",
         return result
     checked_plan(plan, expected_plan)
     with workspace_mutation_lock(root, operation="context_save"):
-        if _heads(_records(root)).get(stream, []) != heads:
+        current = _records(root, reserve_bytes=len(encoded), reserve_records=1)
+        if _heads(current).get(stream, []) != heads:
             fail("Another window updated this stream; review a fresh preview.", "context_stale_head")
         if _file_state(root, [f["path"] for f in payload["files"]]) != payload["files"]:
             fail("Evidence files changed before context publication.", "context_stale_evidence")
-        record = {**payload, "recorded_at": now.isoformat()}
-        encoded = (json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-        if len(encoded) > MAX_RECORD_BYTES:
-            fail("Context record exceeds its byte budget.")
         key = digest(record)
         path = destination / (key + ".json")
         publish(path, encoded)
@@ -266,18 +284,27 @@ def save_context(root: Path | str, *, stream: str, summary: str, task: str = "",
         if payload["git"]["remote"]:
             location = {"format": "archmarshal-project-location-v1", "root": str(root),
                         "address": payload["git"]["remote"]}
-            publish(_registry() / (digest(location) + ".json"), canonical(location))
+            try:
+                publish(_registry() / (digest(location) + ".json"), canonical(location))
+            except (ArchMarshalError, OSError):
+                # The committed journal remains usable by directory even if optional lookup fails.
+                result["warnings"] = [{"kind": "project_registry_unavailable",
+                                       "message": "Context saved; resume using the checkout directory."}]
     return {**result, "mode": "recorded", "record_id": key, "path": str(path)}
 
 
 def resume_context(project: Path | str, *, include_roots: list[str] | None = None,
                    task: str = "", max_chars: int = 24_000) -> dict[str, Any]:
-    if not 2000 <= max_chars <= 200_000:
+    if type(max_chars) is not int or not 2000 <= max_chars <= 200_000:
         fail("Context character budget must be between 2000 and 200000.")
+    text(task, "task")
     roots = _roots(project, include_roots)
     candidates = []
     warnings = []
     touched: dict[str, list[str]] = {}
+    evidence_cache: dict[Path, str | None] = {}
+    evidence_failures: set[Path] = set()
+    evidence_bytes = 0
     for root in roots:
         records = _records(root)
         git = _git_state(root)
@@ -289,11 +316,24 @@ def resume_context(project: Path | str, *, include_roots: list[str] | None = Non
                 changed = []
                 for entry in record["files"]:
                     try:
-                        current = _file_state(root, [entry["path"]])[0]["sha256"]
+                        path = ensure_unlinked_path(root / entry["path"], purpose="Context evidence")
+                        if path in evidence_failures:
+                            fail("Evidence could not be verified within the read budget.")
+                        if path not in evidence_cache:
+                            evidence_cache[path] = None
+                            if path.exists():
+                                raw = read(path, min(8 * 1024 * 1024,
+                                                    MAX_EVIDENCE_BYTES - evidence_bytes))
+                                evidence_bytes += len(raw)
+                                evidence_cache[path] = sha(raw)
+                        current = evidence_cache[path]
                         if current != entry["sha256"]:
                             changed.append(entry["path"])
-                    except ArchMarshalError:
+                    except (ArchMarshalError, OSError):
+                        evidence_failures.add(root / entry["path"])
                         changed.append(entry["path"])
+                        warnings.append({"kind": "evidence_unverified", "path": entry["path"],
+                                         "root": str(root)})
                     if record["status"] == "active":
                         touched.setdefault(entry["path"], []).append(key)
                 candidates.append({"record_id": key, "root": str(root), "record": record,
@@ -303,7 +343,8 @@ def resume_context(project: Path | str, *, include_roots: list[str] | None = Non
     terms = set(re.findall(r"\w+", task.casefold()))
     def relevance(item: dict[str, Any]) -> tuple[int, str, str]:
         record = item["record"]
-        score = sum(term in canonical(record).decode("utf-8").casefold() for term in terms)
+        searchable = canonical(record).decode("utf-8").casefold()
+        score = sum(term in searchable for term in terms)
         return (-score, record["stream"], item["record_id"])
     candidates.sort(key=relevance)
     selected = []
@@ -329,7 +370,7 @@ def resume_context(project: Path | str, *, include_roots: list[str] | None = Non
 
 
 def read_context(root: Path | str, record_id: str) -> dict[str, Any]:
-    records = _records(require_workspace_root(root))
+    records = _records(require_workspace_root(ensure_unlinked_path(Path(root), purpose="Project")))
     if record_id not in records:
         fail("Requested context record is not in this project's verified index.")
     return {"mode": "read_only", "record_id": record_id, "record": records[record_id],

@@ -8,12 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Iterator
 
-if os.name == "nt":
-    import msvcrt
-else:
-    import fcntl
-
 from .errors import ArchMarshalError, require_workspace_root
+from .file_lock import try_os_lock as _try_os_lock
+from .file_lock import unlock_os_lock
 from .safety import is_link_or_reparse
 
 
@@ -124,25 +121,9 @@ def _lock_path(root: Path, identity: tuple[int, int]) -> Path:
     return path
 
 
-def _try_os_lock(handle: BinaryIO) -> bool:
-    try:
-        if os.name == "nt":
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return False
-    return True
-
-
 def _unlock_os_lock(handle: BinaryIO) -> None:
     try:
-        if os.name == "nt":
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        unlock_os_lock(handle)
     except OSError:
         pass
 

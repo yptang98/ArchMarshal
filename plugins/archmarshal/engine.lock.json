@@ -1,8 +1,8 @@
 {
-  "content_bytes": 920046,
+  "content_bytes": 926719,
   "engine_api": "archmarshal-engine-api-v1",
   "engine_version": "0.18.0",
-  "file_count": 48,
+  "file_count": 52,
   "files": [
     {
       "bytes": 170,
@@ -35,14 +35,14 @@
       "sha256": "5cb912b7a48b3f5f4a60f803ea03a5cebca399a7132159576f2866816c668773"
     },
     {
-      "bytes": 92317,
+      "bytes": 92123,
       "path": "adoption.py",
-      "sha256": "5fc1668adbf7c19ed3d82ecaae182b34217d1f53bf1dd7a13edfc7be04b23127"
+      "sha256": "00620ffadcfcdbcd22f34b1504d48180945e2d9445ce58fc21f05cb45eee12b7"
     },
     {
-      "bytes": 31645,
+      "bytes": 31168,
       "path": "adoption_tx.py",
-      "sha256": "e5d57538e121bd3b62dbd144233cd4de8530167533b57b5810c5ecfd82aa2b2a"
+      "sha256": "c75f5757d87a5648e945d4e0a02508d844acfc57ca28cd77002c12c5dc46027a"
     },
     {
       "bytes": 2941,
@@ -90,14 +90,19 @@
       "sha256": "f7da85d7f6ebc31bb2a33336bda059e24ac0bc47a6aa26bfe932003abe38e1a0"
     },
     {
+      "bytes": 684,
+      "path": "file_lock.py",
+      "sha256": "e0a4265dc2ae4dc2cde7f705e4a45c4374b1a5e7af222930d02c763afe92b5bd"
+    },
+    {
       "bytes": 13954,
       "path": "formats.py",
       "sha256": "d1eaaebaaba265dd5ed224bd181fc7aaecc76f23c21c9dc5f4dab147a587769e"
     },
     {
-      "bytes": 17269,
+      "bytes": 20101,
       "path": "handoff.py",
-      "sha256": "f3071751ed036e217f9ecf419eb2709cfdbd6837f7a56ba4150eee42f1d5d7af"
+      "sha256": "b86a7c70a5a8844c60c1ebad2cde4c69c4209eb10ace283246a6a8473d49c284"
     },
     {
       "bytes": 23288,
@@ -105,14 +110,14 @@
       "sha256": "152c8706bfef7d2823ee2eb89eb305b7bc693528e6398ba77e694259a8027609"
     },
     {
-      "bytes": 5861,
+      "bytes": 6195,
       "path": "io.py",
-      "sha256": "fdf8490e25beda191272c4e5be0171e26c2114bc8c2fe52c1e4bfd59960d1c79"
+      "sha256": "1c51c3e8d4f5bc4deb3c0348d26591e250c7e48cb0e2c6fdc78e059315e8cdd1"
     },
     {
-      "bytes": 17924,
+      "bytes": 17991,
       "path": "layout_policy.py",
-      "sha256": "b2ec37f5588cbe35ed3e9b62e69e69652ac0a1a4fea419447e6eb316a6a03f21"
+      "sha256": "e22c1b22b2dc8c7742fb8c4f4779d7655c1a14654aa1cc510ccb9a15af60d954"
     },
     {
       "bytes": 28067,
@@ -130,9 +135,9 @@
       "sha256": "5342950b62ae922748a7c9576f83c7c691f845370f8e41129883d9f06ffe414f"
     },
     {
-      "bytes": 2145,
+      "bytes": 2302,
       "path": "ownership.py",
-      "sha256": "c6e7dba09a285a69afdfb845d64da921fa2114d48946961c034f1ea6fd1f2ac6"
+      "sha256": "7790a7d218195934794a6dd04faf2456d59ad49f40c3920d1017253d75c6ccf8"
     },
     {
       "bytes": 8749,
@@ -145,9 +150,9 @@
       "sha256": "842effedc644e68a76d99f4687591972972ff116dbd8bc2a991e02120c0a641d"
     },
     {
-      "bytes": 6646,
+      "bytes": 7366,
       "path": "portable.py",
-      "sha256": "4773ee25364e2ac4e501d7318bd469e4c4b08429f549f118b8352f939d275e7d"
+      "sha256": "4634bcab98d7be5748e40a22176f3e4d3d983ed5d19ca5c3d5dbb1ea2175f021"
     },
     {
       "bytes": 18482,
@@ -200,14 +205,29 @@
       "sha256": "9b4bbd2cbeac3f25a92f8ec894d1778970341b8aca292398db350697753dfe5c"
     },
     {
-      "bytes": 30382,
-      "path": "session.py",
-      "sha256": "70a761c9b44a4d513b7d8d1401dc2cf0b7624b5a75658e427555954bc62b1f66"
+      "bytes": 1652,
+      "path": "sensitive_data.py",
+      "sha256": "f48bf132f883eb0dfd5afe44861883ff4aecc99cbd592eb7b57d3c07a887a66b"
     },
     {
-      "bytes": 69982,
+      "bytes": 28862,
+      "path": "session.py",
+      "sha256": "508b22505abb3dacbcb7314334dfcea30a42d54326e7677d78cfae31dded6bdd"
+    },
+    {
+      "bytes": 69708,
       "path": "skill_index.py",
-      "sha256": "1cc262b20e0047e77ae47012f1ffbfe2f63550e2aa268fa03ef759dd9c024b8f"
+      "sha256": "dd71c3356bf6eb011ab88ae450bb146ad24925a587a52da6b146c004007cdc5e"
+    },
+    {
+      "bytes": 7951,
+      "path": "skill_package.py",
+      "sha256": "6b4eeebde34c62807362edb5773fb33496889f4166edc07acabafff95e21ed0e"
+    },
+    {
+      "bytes": 333,
+      "path": "skill_paths.py",
+      "sha256": "b7be614625e27f80b22b6e31dad5a0bfa7872bc7b9e957350d66c6047d5d92bd"
     },
     {
       "bytes": 18238,
@@ -215,37 +235,37 @@
       "sha256": "e3a7949601ff400976a2366f169c1de441c02207843868b0a26aaa431106baa4"
     },
     {
-      "bytes": 19823,
+      "bytes": 14891,
       "path": "skill_sync.py",
-      "sha256": "bf93ba5f4d440c758f2da8282db85a50ff90914bf796299a4c02264a1fdf9207"
+      "sha256": "5c00c91aba70a627c9c8f733841c33990642128fb1c295b70b9eca4fcd94dbf9"
     },
     {
-      "bytes": 12468,
+      "bytes": 12506,
       "path": "skill_validation.py",
-      "sha256": "0890fdd5a5e265f60d8939643b6a511194babcd01245cb14edaf57cc4c695b7c"
+      "sha256": "598d8f9adf9bddfa180f5f0d280f14167775851a284d652c08ab4743d34fb3e6"
     },
     {
-      "bytes": 9970,
+      "bytes": 9993,
       "path": "sync_transport.py",
-      "sha256": "29dd838896121228803e0d7c0c9793702ae24b56f4bbbbdeb0121fe5e142c2a4"
+      "sha256": "509d0cee3b3986bd9810b3d578b744e210f2326f04d44ce8d952173bf371e18e"
     },
     {
-      "bytes": 119433,
+      "bytes": 119090,
       "path": "user_store.py",
-      "sha256": "db1c3a9f3d452964a401362070f8a30f8618009dafdcefdbe68f340d596d2e16"
+      "sha256": "601edf509c984bc87aa7a54368c6ca28f70ebc8fd67df74f891be62f93563e2b"
     },
     {
-      "bytes": 17595,
+      "bytes": 17665,
       "path": "workspace_layout.py",
-      "sha256": "efcceb86a8ef4dbada2449334499003f5140346a608a77b183090a8d68eca592"
+      "sha256": "668cba687337d33911bd6e3c5d543f29c08aa5cf7a9ca72afaebae370b574b04"
     },
     {
-      "bytes": 4938,
+      "bytes": 4490,
       "path": "workspace_lock.py",
-      "sha256": "406b44e2bfc2f40ed5cf709829494737fca36447c471f693aa62dc3b5ace2d45"
+      "sha256": "6ba495283b8181d4869c041576cf76bfb4f6f74f9103b68ea180eca86dce998a"
     }
   ],
   "format": "archmarshal-plugin-engine-lock-v1",
   "source_root": "src/archmarshal",
-  "source_tree_sha256": "98459e4871e364cff9ac32e08d23a48517eec39cb68a182127475cc8c75ac5fd"
+  "source_tree_sha256": "eabf9a6514887d1e87b871236952a72f2ce400b12fb601cb408b3d65732c33ca"
 }

@@ -39,23 +39,10 @@ from .skill_index import (
     public_skill_index_plan,
     skill_index_exclusions,
 )
+from .skill_paths import SKILL_PATH_FIELDS, SKILL_ROOT_CANDIDATES
 from .skill_validation import validate_skill_package
 from .workspace_lock import WorkspaceMutationLock, workspace_mutation_lock
 
-SKILL_ROOT_CANDIDATES = (
-    ".agents",
-    ".codex/skills",
-    ".claude/skills",
-    "plugins",
-    "skills",
-)
-SKILL_PATH_FIELDS = (
-    "global_skills",
-    "functional_skills",
-    "common_project_skills",
-    "project_skills",
-    "generated_skills",
-)
 WINDOWS_RESERVED_SKILL_ROOT_NAMES = {
     "CON",
     "PRN",

@@ -15,6 +15,11 @@
   checks, overlapping-work reports and automatic restoration in `start`.
 - Extended the plugin workflow, durable-format registry and regression coverage.
   Existing user sources and closeout contracts remain unchanged.
+- Hardened quarantine boundaries and full-package verification, portable path
+  topology, journal capacity reservations, malformed metadata and bounded YAML/JSON
+  parsing. Refresh GitHub visibility and recheck mutable import plans under the lock.
+- Consolidated package materialization, secret-text checks, Skill discovery roots
+  and OS lock primitives; added a stability/architecture audit and failure regressions.
 
 ## 0.17.1 - 2026-07-18
 

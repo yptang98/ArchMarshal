@@ -102,12 +102,12 @@ def _github_token() -> str:
 
 class GitHubTransport:
     def __init__(self, remote: str, *, branch: str | None = None, **_: Any):
-        if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", remote) is None:
+        if (re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", remote) is None
+                or any(part in {".", ".."} for part in remote.split("/"))):
             fail("GitHub remote must be owner/repository, without credentials or a URL.")
         self.remote = remote
         self.branch = branch
         self._token: str | None = None
-        self._repository: dict[str, Any] | None = None
         self._blobs: dict[str, str] = {}
 
     def _request(self, path: str, *, method: str = "GET", payload: Any = None,
@@ -135,9 +135,8 @@ class GitHubTransport:
         return None
 
     def describe(self) -> dict[str, Any]:
-        if self._repository is None:
-            self._repository = self._request("")
-        info = self._repository or {}
+        # Visibility is an authorization input, so each preview/apply must refresh it.
+        info = self._request("") or {}
         if (not isinstance(info.get("private"), bool) or not info.get("default_branch")
                 or type(info.get("id")) is not int):
             fail("GitHub repository metadata is incomplete.")
