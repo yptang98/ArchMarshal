@@ -31,13 +31,22 @@ class Transport(Protocol):
     def describe(self) -> dict[str, Any]: ...
     def keys(self) -> list[str]: ...
     def get(self, key: str) -> bytes: ...
-    def put(self, key: str, data: bytes) -> bool: ...
+    def put(self, key: str, data: bytes, *, expected_remote: dict[str, Any] | None = None,
+            allow_public: bool = False) -> bool: ...
 
 
 def check_key(key: str) -> str:
     if not is_digest(key):
         fail("Remote object key must be a SHA-256 digest.")
     return key
+
+
+def check_write_policy(actual: dict[str, Any], expected: dict[str, Any] | None,
+                       allow_public: bool) -> None:
+    if actual.get("public") is True and not allow_public:
+        fail("Public upload requires explicit --allow-public.", "sync_public_review_required")
+    if expected is not None and actual != expected:
+        fail("Sync destination changed after review; prepare a fresh preview.", "sync_destination_changed")
 
 
 class FolderTransport:
@@ -66,9 +75,11 @@ class FolderTransport:
     def get(self, key: str) -> bytes:
         return read(self.root / PREFIX / (check_key(key) + ".json"))
 
-    def put(self, key: str, data: bytes) -> bool:
+    def put(self, key: str, data: bytes, *, expected_remote: dict[str, Any] | None = None,
+            allow_public: bool = False) -> bool:
         if len(data) > MAX_OBJECT_BYTES:
             fail("Sync object exceeds its byte budget.")
+        check_write_policy(self.describe(), expected_remote, allow_public)
         return publish(self.root / PREFIX / (check_key(key) + ".json"), data)
 
 
@@ -193,9 +204,12 @@ class GitHubTransport:
             fail("Remote object exceeds its byte budget.")
         return raw
 
-    def put(self, key: str, data: bytes) -> bool:
+    def put(self, key: str, data: bytes, *, expected_remote: dict[str, Any] | None = None,
+            allow_public: bool = False) -> bool:
         check_key(key)
-        self.describe()
+        current = self.describe()
+        check_write_policy(current, expected_remote, allow_public)
+        expected = current if expected_remote is None else expected_remote
         if key in self.keys():
             if self.get(key) != data:
                 fail("Remote immutable object differs.", "sync_collision")
@@ -205,6 +219,9 @@ class GitHubTransport:
         path = "/contents/" + PREFIX + key + ".json"
         from .errors import ArchMarshalError
         try:
+            # Enumeration can take time and refresh metadata. Enforce the same
+            # reviewed identity and visibility at the actual write boundary.
+            check_write_policy(self.describe(), expected, allow_public)
             self._request(path, method="PUT", payload={
                 "message": f"ArchMarshal Skill snapshot {key[:12]}", "branch": self.branch,
                 "content": base64.b64encode(data).decode("ascii")})

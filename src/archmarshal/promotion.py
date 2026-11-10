@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .candidate_evidence import explain_candidate
 from .errors import ArchMarshalError
 from .io import read_bytes_safe
 from .learning import verify_learning_pack
@@ -325,6 +326,7 @@ def _candidate_plan_envelope(
         "candidate_type": candidate.get("candidate_type"),
         "candidate_digest": candidate_digest,
         "candidate_pack_sha256": pack["sha256"],
+        "evidence_explanation": explain_candidate(candidate),
         "expected_head": plan.get("expected_head"),
         "expected_head_token": plan.get("expected_head") or "none",
         "plan_digest": plan["plan_digest"],

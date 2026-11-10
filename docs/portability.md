@@ -46,6 +46,9 @@ archmarshal sync-status --remote me/skill-vault --pretty
 ```
 
 Public upload is blocked unless the reviewed invocation includes `--allow-public`.
+The write boundary rechecks the reviewed repository ID, branch and visibility;
+an observed change requires a new preview before any upload. This detects changes
+reported by GitHub, but cannot lock the repository against subsequent remote changes.
 The remote stores immutable envelopes in `archmarshal-skills/v1/<sha256>.json`.
 Each envelope carries the complete package: instructions, scripts, references,
 binary assets, empty directories and executable flags. The current limit is
@@ -53,6 +56,12 @@ binary assets, empty directories and executable flags. The current limit is
 VCS artifacts, nested Skills and persistent exclusions are outside that package.
 Known credential filenames and common inline-secret patterns block export; this
 is not a general-purpose DLP guarantee. Review the selected files before upload.
+
+For a repository-root `SKILL.md` already indexed as `.`, use `--skill .`. The
+preview reports `package_scope: entrypoint_only` and exports only `SKILL.md`, matching
+root Skill review scope. It never walks or includes the rest of the project.
+For a portable Skill with scripts, references or assets, use a separate package
+directory with its own explicit review and sync scope.
 
 On the receiving machine, initialize its own device identity and adopt the target
 project, then select an exact object ID from the catalog:
@@ -97,7 +106,10 @@ status command after files have arrived.
 
 Host integrations can implement `sync_transport.Transport` (`describe`, `keys`,
 `get`, `put`) and explicitly call `register_backend`. Backends must provide bounded
-reads and create-only, idempotent writes. Remote metadata never loads Python code.
+reads and create-only, idempotent writes. In 0.19, `put` accepts keyword arguments
+`expected_remote` and `allow_public`; extensions must enforce these against fresh
+destination metadata immediately before writing. The folder and GitHub backends
+implement this contract. Remote metadata never loads Python code.
 Dedicated S3/Dropbox/etc. adapters are extensions, not bundled integrations.
 
 ## Two windows, one project

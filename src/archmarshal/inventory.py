@@ -7,7 +7,7 @@ from typing import Any
 from . import __version__
 from .adoption import ownership_skill_index_mode
 from .errors import ArchMarshalError, require_workspace_root
-from .io import list_files, load_yaml_safe, rel
+from .io import is_placeholder, list_files, load_yaml_safe, rel
 from .safety import (
     EXCLUDED_BACKUP_PARTS,
     ensure_managed_path,
@@ -217,7 +217,8 @@ def _file_status(root: Path) -> dict[str, dict[str, Any]]:
     }
 
 
-def _directory_status(root: Path, entries: dict[str, list[Path]]) -> dict[str, Any]:
+def _directory_status(root: Path, entries: dict[str, list[Path]], *,
+                      agent_files: list[Path]) -> dict[str, Any]:
     directories: dict[str, Any] = {}
     for key, roots in entries.items():
         if key == "project_root":
@@ -226,7 +227,7 @@ def _directory_status(root: Path, entries: dict[str, list[Path]]) -> dict[str, A
             {
                 "path": _display_path(path, root),
                 "exists": path.exists(),
-                "file_count": len(list_files(path)),
+                "file_count": len(agent_files if path == root / ".agent" else list_files(path)),
             }
             for path in roots
         ]
@@ -526,15 +527,25 @@ def _find_context_modules(root: Path, entries: dict[str, list[Path]]) -> list[di
     return sorted(modules, key=lambda item: item.get("_module_path", ""))
 
 
-def _unregistered_agent_files(root: Path, artifacts: list[dict[str, Any]]) -> list[str]:
+def _visible_agent_files(root: Path) -> list[Path]:
     agent_root = root / ".agent"
     if not agent_root.exists():
         return []
+    internal = [child for child in agent_root.iterdir() if child.name in {
+        "operations", "context-index", "context-archives", "context-staging", "skill-sync-origins"
+    } or (child.name.startswith("context-index-g") and child.name[15:].isdigit())]
+    return [path for path in files_below_no_links(agent_root, purpose="Agent inventory",
+                                                excluded_directories=internal)
+            if path.is_file() and not is_placeholder(path)]
+
+
+def _unregistered_agent_files(root: Path, artifacts: list[dict[str, Any]], *,
+                               agent_files: list[Path]) -> list[str]:
     registered_paths = {
         str(item.get("path", "")).replace("\\", "/") for item in artifacts if item.get("path")
     }
     unregistered: list[str] = []
-    for path in list_files(agent_root):
+    for path in agent_files:
         relative = rel(path, root)
         if relative in RESERVED_AGENT_FILES:
             continue
@@ -607,6 +618,7 @@ def collect_inventory(root: Path | str) -> WorkspaceInventory:
     artifacts = _load_registry(resolved_root)
     memory_stores = _load_memory_stores(resolved_root)
     memory_records = _load_memory_records(resolved_root)
+    agent_files = _visible_agent_files(resolved_root)
     return WorkspaceInventory(
         root=resolved_root,
         workspace=workspace,
@@ -614,7 +626,7 @@ def collect_inventory(root: Path | str) -> WorkspaceInventory:
         save_paths=save_paths,
         naming=naming,
         files=_file_status(resolved_root),
-        directories=_directory_status(resolved_root, entries),
+        directories=_directory_status(resolved_root, entries, agent_files=agent_files),
         artifacts=artifacts,
         skills=_find_skills(
             resolved_root,
@@ -629,7 +641,7 @@ def collect_inventory(root: Path | str) -> WorkspaceInventory:
         memory_stores=memory_stores,
         memory_records=memory_records,
         detected_memory_locations=_detect_memory_locations(resolved_root),
-        unregistered_agent_files=_unregistered_agent_files(resolved_root, artifacts),
+        unregistered_agent_files=_unregistered_agent_files(resolved_root, artifacts, agent_files=agent_files),
         unsafe_paths=unsafe_paths,
         skill_index=skill_index_summary(loaded_skill_index),
     )

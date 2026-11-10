@@ -45,22 +45,41 @@ the separately authorized installation prompt, outside every project root.
 
 ## Route the request
 
+- Native Skill availability, enablement or installed-version checks: read
+  [host-skills.md](references/host-skills.md). Keep native observations, review
+  decisions and verified package bytes separate; never activate from a status query.
+- For Codex project work, preserve the host-selected project and actual worktree.
+  Read [external-projects.md](references/external-projects.md). Default to external
+  workflow records and selected deliverables when the user has authorized an
+  external store. Ask only if the destination is genuinely missing; never create
+  a replacement source tree or choose a different host project automatically.
+  Use `project-status` and preview-bound `project-record`; formal deliverables are
+  real files under returned `record_root`, with chat summaries and file links.
+  Without a confirmed store, read-only diagnosis can continue independently.
+- Project-local native control is a separate workflow. Use the lifecycle routes
+  below only when the user's request includes native initialization, adoption,
+  governance or the existing native lifecycle. Generic "manage this project",
+  ordinary task start/finish, or absent `.agent` state is not such a request.
+  Preserve any existing native files; external records do not replace them.
 - Sync or migrate Skills between machines: read [portability.md](references/portability.md).
   Use GitHub by default, retain device provenance, and review exact versions before
   importing or installing. A request to sync Skills does not include project context.
 - Resume from a project directory/address, preserve a window's context, or combine
-  parallel work: use the context workflow in [portability.md](references/portability.md).
+  parallel work: prefer the host's current chat context and available native chat
+  controls through [host-chats.md](references/host-chats.md).
+  Use [portability.md](references/portability.md) when the user requests
+  an ArchMarshal handoff stored in the project's native state.
   Save observed facts, decisions and rationale, constraints, rejected options, next
   steps and validation evidence. Never invent content missing from this conversation.
 
 - Inspect health or safety: run `doctor`; add `--user-store` only when the user
   placed that store in scope. Use `inventory`, `lint`, or `audit` when the user
   asks for project-level detail beyond durable state.
-- Manage a new project: preview `init`. If the user supplied a confirmed user
+- Initialize native management for a new project: preview `init`. If the user supplied a confirmed user
   store, let the preview inherit only its promoted
   `preferred.workspace_layout` profile; never treat detection as a global
   preference.
-- Manage an existing project or existing Skills: run `doctor`, then preview
+- Adopt an existing project or existing Skills into native management: run `doctor`, then preview
   `adopt`. If the user already named Skills that ArchMarshal must not manage,
   preview `adopt` with repeatable exact `--exclude-skill` paths before any
   broad inventory or doctor pass. Inspect normal and project-specific Skill locations; supply every
@@ -72,9 +91,9 @@ the separately authorized installation prompt, outside every project root.
   A safe nonstandard layout is reasonable. Objective risks receive suggestions
   only; traversal, linked paths, VCS/cache/dependency/runtime boundaries, and
   file conflicts block apply.
-- Start governed work: use `start` after inspecting whether initialization or
+- Start explicitly native-governed work: use `start` after inspecting whether initialization or
   adoption is still required.
-- Finish work: use `end` with `quick`, `standard`, or `reproducible` evidence
+- Finish explicitly native-governed work: use `end` with `quick`, `standard`, or `reproducible` evidence
   according to the user's requested depth. Never claim execution was reproduced
   merely because evidence was recorded.
 - Find projects: use `catalog` with date/tag metadata rather than scanning raw
@@ -82,6 +101,11 @@ the separately authorized installation prompt, outside every project root.
 - Learn reusable behavior: use `learn`, `candidate-review`, `candidate-draft`,
   and `candidate-promote` as separate review boundaries. Never mutate the
   global Skill layer automatically.
+  Use `candidate-compare` for overlapping packs; show pinned evidence and variant
+  conflicts without transferring an acceptance decision to another candidate.
+- Continue an interrupted import, install, or closeout: inspect `operation-status`,
+  then preview `operation-recover` for its exact ID. Apply the reviewed missing-file
+  continuation within the user's authorized scope; preserve changed or unjournaled output.
 
 Read [workflows.md](references/workflows.md) before an apply-capable lifecycle,
 candidate, restore, or rollback operation. Read

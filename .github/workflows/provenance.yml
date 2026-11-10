@@ -1,0 +1,66 @@
+name: Build provenance
+
+on:
+  push:
+    branches: [main, "feature/**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  attest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - name: Install build tools
+        run: python -m pip install build twine
+      - name: Validate source contract
+        run: |
+          python scripts/check_version_contract.py
+          python scripts/build_plugin_engine_lock.py --check
+      - name: Build and validate distributions
+        run: |
+          python -m build
+          python -m twine check dist/*
+          python scripts/package_smoke.py 'dist/*.whl' --check-schemas
+          python scripts/package_smoke.py 'dist/*.tar.gz'
+          sha256sum dist/*.whl dist/*.tar.gz > dist/SHA256SUMS
+      - name: Attest exact build artifacts
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          create-storage-record: false
+      - name: Verify signatures and source identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          for artifact in dist/*.whl dist/*.tar.gz dist/SHA256SUMS; do
+            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY" \
+              --bundle "$BUNDLE_PATH" --source-ref "$GITHUB_REF" --source-digest "$GITHUB_SHA" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/provenance.yml"
+          done
+          cp "$BUNDLE_PATH" dist/provenance.sigstore.json
+      - name: Retain verified release inputs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: attested-distributions-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30

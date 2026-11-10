@@ -265,40 +265,9 @@ def _main_impl(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Back up the index and publish the reviewed immutable decision.",
     )
-    candidate_review_parser = _add_root_command(
-        subparsers,
-        "candidate-review",
-        "Record a review decision for an exact committed learning candidate.",
-    )
-    _add_candidate_arguments(candidate_review_parser)
-    candidate_review_parser.add_argument(
-        "--decision", required=True, choices=("accept", "reject", "defer")
-    )
-    candidate_draft_parser = _add_root_command(
-        subparsers,
-        "candidate-draft",
-        "Create a reviewed, disabled Skill draft envelope from an accepted candidate.",
-    )
-    _add_candidate_draft_arguments(candidate_draft_parser)
-    candidate_promote_parser = _add_root_command(
-        subparsers,
-        "candidate-promote",
-        "Promote an exact committed candidate into the isolated user store.",
-    )
-    _add_candidate_arguments(candidate_promote_parser)
-    candidate_promote_parser.add_argument(
-        "--draft", help="Reviewed common-Skill draft directory; required for Skill candidates."
-    )
-    candidate_promote_parser.add_argument(
-        "--replace-existing-skill",
-        action="store_true",
-        help="Explicitly confirm replacement when the draft id already has a different active user-store record.",
-    )
-    candidate_promote_parser.add_argument(
-        "--replace-existing-preference",
-        action="store_true",
-        help="Explicitly confirm replacement when the key already has a different active user-store preference.",
-    )
+    from . import candidate_cli
+    candidate_cli.register(subparsers, _add_root_command, _add_candidate_arguments,
+                           _add_candidate_draft_arguments)
     end_parser = _add_root_command(subparsers, "end", "Close out ArchMarshal project governance.")
     end_parser.add_argument(
         "--used-skill",
@@ -375,9 +344,17 @@ def _main_impl(argv: list[str] | None = None) -> int:
     )
 
     from .portability_cli import COMMANDS, dispatch, register
+    from .project_cli import COMMANDS as PROJECT_COMMANDS
+    from .project_cli import dispatch as dispatch_project
+    from .project_cli import register as register_project
 
     register(subparsers)
+    register_project(subparsers)
     args = parser.parse_args(argv)
+    if args.command in PROJECT_COMMANDS:
+        payload = dispatch_project(args)
+        _print_json(payload, args.pretty)
+        return _payload_exit_code(payload)
     if args.command in COMMANDS:
         payload = dispatch(args)
         _print_json(payload, args.pretty)
@@ -560,61 +537,8 @@ def _main_impl(argv: list[str] | None = None) -> int:
         )
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
-    if args.command == "candidate-review":
-        from .promotion import review_learning_candidate
-
-        payload = review_learning_candidate(
-            root,
-            args.pack,
-            args.candidate,
-            args.user_store,
-            decision=args.decision,
-            reason=args.reason,
-            expected_head_token=args.expect_head,
-            expected_plan=args.expect_plan,
-            reviewed_plan=_optional_reviewed_plan(args.plan_file),
-            apply=args.apply,
-        )
-        _print_json(payload, args.pretty)
-        return _payload_exit_code(payload)
-    if args.command == "candidate-draft":
-        from .candidate_draft import (
-            candidate_to_skill_draft,
-            load_candidate_draft_preview,
-        )
-
-        payload = candidate_to_skill_draft(
-            root,
-            args.pack,
-            args.candidate,
-            args.user_store,
-            args.destination,
-            reviewed_preview=(
-                load_candidate_draft_preview(args.plan_file) if args.plan_file else None
-            ),
-            expected_head_token=args.expect_head,
-            expected_plan=args.expect_plan,
-            apply=args.apply,
-        )
-        _print_json(payload, args.pretty)
-        return _payload_exit_code(payload)
-    if args.command == "candidate-promote":
-        from .promotion import promote_learning_candidate
-
-        payload = promote_learning_candidate(
-            root,
-            args.pack,
-            args.candidate,
-            args.user_store,
-            draft=args.draft,
-            reason=args.reason,
-            expected_head_token=args.expect_head,
-            expected_plan=args.expect_plan,
-            reviewed_plan=_optional_reviewed_plan(args.plan_file),
-            replace_existing_skill=args.replace_existing_skill,
-            replace_existing_preference=args.replace_existing_preference,
-            apply=args.apply,
-        )
+    if args.command in candidate_cli.COMMANDS:
+        payload = candidate_cli.dispatch(args, root)
         _print_json(payload, args.pretty)
         return _payload_exit_code(payload)
     if args.command == "init":

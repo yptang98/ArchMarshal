@@ -244,6 +244,8 @@ def fingerprint_directory(
     include_modes: bool = False,
     excluded_parts: Iterable[str] | None = None,
     excluded_directories: Iterable[Path] | None = None,
+    max_files: int | None = None,
+    max_content_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Return a deterministic content fingerprint without following links.
 
@@ -255,6 +257,11 @@ def fingerprint_directory(
     malformed or unexpectedly huge skill cannot make a routine start operation
     consume unbounded resources.
     """
+    file_limit = MAX_SKILL_FILES if max_files is None else max_files
+    byte_limit = MAX_SKILL_CONTENT_BYTES if max_content_bytes is None else max_content_bytes
+    if (type(file_limit) is not int or not 0 <= file_limit <= MAX_SKILL_FILES
+            or type(byte_limit) is not int or not 0 <= byte_limit <= MAX_SKILL_CONTENT_BYTES):
+        raise ArchMarshalError("fingerprint_limit_invalid", "Invalid fingerprint read budget.")
     directory = root.resolve()
     if not directory.is_dir() or is_link_or_reparse(root):
         raise ArchMarshalError(
@@ -273,7 +280,7 @@ def fingerprint_directory(
             directory,
             reject_links=True,
             purpose=purpose,
-            max_files=MAX_SKILL_FILES + 1,
+            max_files=file_limit + 1,
             excluded_parts=frozenset(excluded_parts or ()),
             excluded_directories=excluded_directories,
             excluded_found=preserved_paths,
@@ -291,10 +298,10 @@ def fingerprint_directory(
         relative = resolved.relative_to(directory).as_posix()
         if entrypoint_only and relative != "SKILL.md":
             continue
-        if len(records) >= MAX_SKILL_FILES:
+        if len(records) >= file_limit:
             raise ArchMarshalError(
                 "fingerprint_limit_exceeded",
-                f"{purpose} exceeds the {MAX_SKILL_FILES}-file fingerprint limit.",
+                f"{purpose} exceeds the {file_limit}-file fingerprint limit.",
                 details={"path": str(directory)},
             )
         digest_builder = hashlib.sha256()
@@ -303,18 +310,18 @@ def fingerprint_directory(
         descriptor = os.open(resolved, flags)
         with os.fdopen(descriptor, "rb") as source:
             before = os.fstat(source.fileno())
-            if total_bytes + before.st_size > MAX_SKILL_CONTENT_BYTES:
+            if total_bytes + before.st_size > byte_limit:
                 raise ArchMarshalError(
                     "fingerprint_limit_exceeded",
-                    f"{purpose} exceeds the {MAX_SKILL_CONTENT_BYTES}-byte fingerprint limit.",
+                    f"{purpose} exceeds the {byte_limit}-byte fingerprint limit.",
                     details={"path": str(directory)},
                 )
             byte_count = 0
             for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                if total_bytes + byte_count + len(chunk) > MAX_SKILL_CONTENT_BYTES:
+                if total_bytes + byte_count + len(chunk) > byte_limit:
                     raise ArchMarshalError(
                         "fingerprint_limit_exceeded",
-                        f"{purpose} exceeds the {MAX_SKILL_CONTENT_BYTES}-byte fingerprint limit.",
+                        f"{purpose} exceeds the {byte_limit}-byte fingerprint limit.",
                         details={"path": str(directory)},
                     )
                 digest_builder.update(chunk)
@@ -480,6 +487,9 @@ def create_bytes_exclusive(
     temporary_directory: Path | None = None,
 ) -> None:
     """Durably publish complete bytes with create-only, same-filesystem semantics."""
+    path = Path(_native_link_path(path))
+    if temporary_directory is not None:
+        temporary_directory = Path(_native_link_path(temporary_directory))
     path.parent.mkdir(parents=True, exist_ok=True)
     if is_link_or_reparse(path.parent):
         raise ArchMarshalError(
@@ -504,11 +514,21 @@ def create_bytes_exclusive(
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.link(temporary, path)
+        os.link(_native_link_path(temporary), _native_link_path(path))
         fsync_directory(path.parent)
     finally:
         if _unlink_created_path(temporary, identity):
             fsync_directory(temporary_parent)
+
+
+def _native_link_path(path: Path) -> Path | str:
+    """CreateHardLinkW needs extended paths even when other Python I/O accepts them."""
+    if os.name != "nt":
+        return path
+    value = os.path.abspath(path)
+    if value.startswith("\\\\?\\"):
+        return value
+    return "\\\\?\\UNC\\" + value[2:] if value.startswith("\\\\") else "\\\\?\\" + value
 
 
 def fsync_directory(path: Path) -> None:

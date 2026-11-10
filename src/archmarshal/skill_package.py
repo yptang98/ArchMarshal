@@ -13,7 +13,6 @@ from .portable import (
     fail,
     is_digest,
     portable_key,
-    publish,
     read,
     relative,
     sha,
@@ -37,7 +36,8 @@ def _safe_content(path: str, raw: bytes) -> None:
 
 
 def scan_package(directory: Path, *, boundaries: set[Path] | None = None,
-                 exact: bool = False) -> tuple[list[dict[str, Any]], list[str]]:
+                 exact: bool = False, entrypoint_only: bool = False
+                 ) -> tuple[list[dict[str, Any]], list[str]]:
     ensure_unlinked_path(directory, purpose="Skill source")
     if not directory.is_dir():
         fail("Skill package directory does not exist.")
@@ -48,7 +48,11 @@ def scan_package(directory: Path, *, boundaries: set[Path] | None = None,
     total = 0
     def scan_error(error: OSError) -> None:
         raise error
-    for current, children, filenames in os.walk(directory, followlinks=False, onerror=scan_error):
+    # Root Skills have an entrypoint-only review boundary. Do not enumerate or
+    # read unrelated project files, even to filter them out afterwards.
+    tree = [(directory, [], ["SKILL.md"])] if entrypoint_only else os.walk(
+        directory, followlinks=False, onerror=scan_error)
+    for current, children, filenames in tree:
         parent = Path(current)
         kept = []
         if len(seen) + len(children) + len(filenames) > MAX_FILES:
@@ -176,6 +180,6 @@ def materialize_package(directory: Path, snapshot: dict[str, Any]) -> None:
         (directory / name).mkdir(parents=True, exist_ok=True)
     for entry in snapshot["files"]:
         path = directory / entry["path"]
-        publish(path, base64.b64decode(entry["content"], validate=True))
-        if os.name != "nt":
-            path.chmod(0o755 if entry["executable"] else 0o644)
+        from .safety import create_bytes_exclusive
+        create_bytes_exclusive(path, base64.b64decode(entry["content"], validate=True),
+                               mode=0o755 if entry["executable"] else 0o644)

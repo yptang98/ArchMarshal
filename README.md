@@ -21,6 +21,15 @@ natural-language requests into reviewed, deterministic project and Skill
 management operations. Existing files stay human-readable and remain owned by
 the user.
 
+The 0.19 development version adds interrupted-operation recovery, context generation
+archives, explicit workstream start/finish, candidate evidence comparison, and
+external records with verified deliverable copies for Codex projects. See
+[Codex project paths and deliverables](docs/codex-projects.md),
+[native Skill state and version checks](docs/codex-skills.md),
+[recovery and history capacity](docs/recovery.md),
+[handoff and recommendation workflows](docs/workstream-and-reuse.md), and
+[current readiness](docs/product-readiness.md) for verified behavior and remaining limits.
+
 > **Agents should become sharper over time, not heavier.**
 
 <p align="center">
@@ -55,6 +64,7 @@ either source. Imported Skills remain quarantined until reviewed.
 
 | Capability | What ArchMarshal does | What it does not do |
 |---|---|---|
+| Follow Codex projects (0.19 development) | Keeps source in the actual checkout and copies selected deliverables into verified external versions with project/chat evidence. | It does not relocate projects, turn records into native adoption, or store the sole deliverable in chat. |
 | Adopt an existing project | Inspects the current layout, previews every managed path and Skill root, verifies a backup, then adds a create-only governance overlay. | It does not move, rename, normalize, or overwrite existing files. |
 | Initialize a new project | Creates a predictable project and Skill scaffold using confirmed paths, names, timezone, date partitioning, and tags. | It does not force ArchMarshal defaults over an approved user convention. |
 | Manage Skills safely | Discovers package boundaries, stores immutable metadata, supports exact persistent exclusions, quarantines new imports, and resolves reviewed Skills by task. | It does not rewrite an existing `SKILL.md` or auto-activate an imported Skill. |

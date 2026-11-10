@@ -18,11 +18,30 @@ from ._doctor_core import (
     report_format,
     unsafe_finding,
 )
+from .errors import ArchMarshalError
 from .session import MAX_SESSION_COMMIT_BYTES, MAX_SESSION_FILES
+from .workspace_layout import load_workspace_layout
 
 
 def inspect_sessions(root: Path, report: Report) -> None:
-    history = root / ".agent" / "history"
+    config_path = root / ".agent/workspace.yaml"
+    config = load_yaml(config_path, root, "session", "workspace", report) if path_exists(config_path) else {}
+    if config is None:
+        return  # The bounded reader already reported the failure.
+    try:
+        if not isinstance(config, dict):
+            raise ArchMarshalError("workspace_layout_invalid", "Workspace configuration must be a mapping.")
+        history = load_workspace_layout(
+            root, save_paths=config.get("save_paths") if config.get("save_paths") is not None else {},
+            naming=config.get("naming") if config.get("naming") is not None else {},
+        ).configured_dir("history")
+    except (ArchMarshalError, OSError) as exc:
+        if isinstance(exc, ArchMarshalError) and exc.code == "unsafe_managed_link":
+            unsafe_finding(report, "session", "workspace", Path(exc.details["path"]), root)
+        else:
+            report.add("session", "session_history_layout_invalid", "error", "invalid", "workspace",
+                       ".agent/workspace.yaml", "History location could not be resolved safely.")
+        return
     if not path_exists(history):
         report.add(
             "session",

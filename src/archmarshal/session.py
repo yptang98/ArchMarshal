@@ -14,8 +14,11 @@ import yaml
 
 from .closeout import closeout_workspace
 from .errors import ArchMarshalError, require_workspace_root
+from .git_environment import inspection_environment
 from .io import load_yaml_safe, read_bytes_safe
+from .operation_journal import complete_operation, prepare_operation
 from .ownership import require_owned_workspace, valid_ownership_marker
+from .portable import digest
 from .safety import (
     create_bytes_exclusive,
     create_text_exclusive,
@@ -277,6 +280,30 @@ def record_closeout(
     require_owned_workspace(root_path, operation="Closeout recording")
 
     with workspace_mutation_lock(root_path, operation="closeout") as held:
+        if session_dir.exists():
+            payload["mode"] = "blocked"
+            payload["notes"].append("The session directory was claimed; review a new path.")
+            return payload
+        destination = session_dir.relative_to(root_path).as_posix()
+        sealed_files = {destination + "/" + name: (content.encode("utf-8"), 0o644)
+                        for name, content in files.items()}
+        if level == "reproducible":
+            for record in script_records:
+                loaded = read_bytes_safe(root_path / record["path"], max_bytes=MAX_SNAPSHOT_BYTES,
+                                         label="Closeout recovery script")
+                if (loaded.error or loaded.byte_count != record["bytes"]
+                        or loaded.sha256 != record["sha256"]):
+                    raise ArchMarshalError("session_source_changed",
+                                           "A selected script changed before recovery staging.")
+                sealed_files[destination + "/scripts/" + record["snapshot_name"]] = (
+                    loaded.data, 0o644)
+        commit_relative = destination + "/COMMITTED.json"
+        sealed_files[commit_relative] = (commit_content, 0o600)
+        journal = prepare_operation(
+            root_path, kind="closeout", destination=destination, files=sealed_files,
+            directories=[], commit_files=[commit_relative],
+            metadata={"layout": layout.to_dict()}, reviewed_plan=plan_digest)
+        payload["operation_id"] = digest(journal)
         try:
             session_dir.mkdir(parents=True, exist_ok=False)
         except FileExistsError:
@@ -312,6 +339,7 @@ def record_closeout(
         commit_path = _commit_session(session_dir, created, commit_content)
         created.append(commit_path)
         held.verify()
+        complete_operation(root_path, journal)
 
     payload["mode"] = "append_only_applied"
     payload["created"] = [path.relative_to(root_path).as_posix() for path in created]
@@ -717,11 +745,15 @@ def _git_snapshot(root: Path) -> dict[str, Any]:
                 check=False,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                env=inspection_environment(),
                 timeout=5,
             )
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, UnicodeError, subprocess.SubprocessError):
             return None
-        return result.stdout.strip() if result.returncode == 0 else None
+        # Porcelain status uses leading spaces as columns; stripping them
+        # truncates the first modified filename when parsing line[3:].
+        return result.stdout.rstrip("\r\n") if result.returncode == 0 else None
 
     status = run("status", "--porcelain=v1")
     return {

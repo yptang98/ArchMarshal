@@ -46,6 +46,10 @@ execute project or user Skill code; ArchMarshal treats those packages as data.
 return `0`; an `error` state returns `2` while retaining the complete report on
 stdout. The command accepts an absent root so automation can diagnose setup
 without causing directory creation.
+An empty optional session history or adoption journal does not make an otherwise
+healthy owned workspace `absent`. Missing roots, ownership or required control/index
+state still do. Session inspection honors the validated configured history path,
+including committed records created before operation journals were introduced.
 
 Invalid arguments use `error.code = "cli_usage_error"` and include a compact
 `error.details.usage` string. Library callers of `main`, `start_main`, and

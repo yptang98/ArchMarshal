@@ -44,10 +44,30 @@ def doctor_workspace(
         inspect_transactions(workspace, report)
         inspect_skill_index(workspace, report)
         inspect_sessions(workspace, report)
-        if (workspace / ".agent/context-index").exists():
+        if any((workspace / path).exists() for path in (".agent/context-index", ".agent/context-archives")):
             from .handoff import inspect_context
 
             inspect_context(workspace, report)
+        if (workspace / ".agent/operations").exists():
+            from .errors import ArchMarshalError
+            from .operation_journal import operation_status
+
+            try:
+                recovery = operation_status(workspace, limit=history_limit)
+                for item in recovery["operations"]:
+                    complete = item["stage"] == "complete"
+                    report.add("recovery", "operation_" + item["stage"],
+                               "info" if complete else "warning", "verified" if complete else "partial",
+                               "workspace", ".agent/operations/" + item["operation_id"],
+                               "Sealed operation status; use operation-recover for a reviewed continuation.",
+                               stage=item["stage"])
+                if recovery["omitted"]:
+                    report.add("recovery", "operation_inspection_limited", "warning", "not_inspected",
+                               "workspace", ".agent/operations", "Select an operation ID for omitted records.",
+                               omitted=recovery["omitted"])
+            except (ArchMarshalError, OSError) as exc:
+                report.add("recovery", "operation_integrity_failed", "error", "invalid", "workspace",
+                           ".agent/operations", str(exc))
     else:
         fill_unavailable_workspace_areas(workspace, report)
 
@@ -89,7 +109,9 @@ def _finalize(workspace: Path, store: Path | None, report: Report) -> dict[str, 
         state = "error"
     elif summary["warning"]:
         state = "warning"
-    elif any(item["classification"] == "absent" for item in findings):
+    elif any(item["classification"] == "absent"
+             and item["area"] in {"ownership", "control_plane", "skill_index", "user_store"}
+             for item in findings):
         state = "absent"
     else:
         state = "healthy"

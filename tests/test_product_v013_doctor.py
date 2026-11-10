@@ -106,7 +106,7 @@ def test_format_registry_records_versions_owners_migrations_and_bounds() -> None
     for item in registry["formats"]:
         assert item["owner"].startswith("archmarshal.")
         assert item["readable_versions"]
-        assert item["writable_versions"]
+        assert item["writable_versions"] or item["kind"] == "read_only_evidence"
         assert item["migration_status"]
         assert item["boundedness"]
 
