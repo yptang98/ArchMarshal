@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 RUNTIME_FORMAT = "archmarshal-runtime-v1"
-REQUIRED_ENGINE_VERSION = "0.17.1"
+REQUIRED_ENGINE_VERSION = "0.18.0"
 MAX_POINTER_BYTES = 16 * 1024
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")

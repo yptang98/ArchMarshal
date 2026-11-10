@@ -1,13 +1,13 @@
 {
-  "content_bytes": 858476,
+  "content_bytes": 920046,
   "engine_api": "archmarshal-engine-api-v1",
-  "engine_version": "0.17.1",
-  "file_count": 43,
+  "engine_version": "0.18.0",
+  "file_count": 48,
   "files": [
     {
       "bytes": 170,
       "path": "__init__.py",
-      "sha256": "6cc22e16a786211dfe0c368acae879bb3f48f4a1b6af1e10e9d6475fcf016717"
+      "sha256": "cb1d6b8e41abc4bda44d2910bdb26d93e4e1f315418979853bbe25db8d166b2f"
     },
     {
       "bytes": 80,
@@ -65,9 +65,9 @@
       "sha256": "5c600006a8d3907d3b4cb27367686d885867160a2b879d296659afd983cee3ef"
     },
     {
-      "bytes": 46305,
+      "bytes": 46518,
       "path": "cli.py",
-      "sha256": "3912479f2c442961cee1147c6eb72091d6ab4c1ec7ec5194d20a84168c2bdffc"
+      "sha256": "3f38a1fe5604c163f641e01e41b00be833ee80021f69f286fb96a29b0ebb9bd2"
     },
     {
       "bytes": 18652,
@@ -80,9 +80,9 @@
       "sha256": "fb23b02a96c47381899dbea99541b8d77ddba45c0e917271026c30360d6d1ae3"
     },
     {
-      "bytes": 3486,
+      "bytes": 3641,
       "path": "doctor.py",
-      "sha256": "8441a6f31adb26932380668d87064c7d54407a4f64b00e2c6d373218c2b3fb12"
+      "sha256": "3327669deb5d513427c4287f6c13726e35e921bc20ffa66a4c75d79f033ff71a"
     },
     {
       "bytes": 1123,
@@ -90,9 +90,14 @@
       "sha256": "f7da85d7f6ebc31bb2a33336bda059e24ac0bc47a6aa26bfe932003abe38e1a0"
     },
     {
-      "bytes": 12720,
+      "bytes": 13954,
       "path": "formats.py",
-      "sha256": "668e63e7f718a0d82cad282f69d2c6a053d405325a1846eee998fd0086c71b9e"
+      "sha256": "d1eaaebaaba265dd5ed224bd181fc7aaecc76f23c21c9dc5f4dab147a587769e"
+    },
+    {
+      "bytes": 17269,
+      "path": "handoff.py",
+      "sha256": "f3071751ed036e217f9ecf419eb2709cfdbd6837f7a56ba4150eee42f1d5d7af"
     },
     {
       "bytes": 23288,
@@ -115,9 +120,9 @@
       "sha256": "f0c6779746bc7f7ffa056e815f32797a4be57d9ae42a66c05a8d9a8c758f967d"
     },
     {
-      "bytes": 6213,
+      "bytes": 6616,
       "path": "lifecycle.py",
-      "sha256": "7f395fa4309cb33aeb52eadcebb7984d989c728ec1da167c7eccfe8d8ed22c9b"
+      "sha256": "6882b584fd160ac48b7df67a03f0ae8da49cd7264521a1d8052606298f88acc3"
     },
     {
       "bytes": 55782,
@@ -133,6 +138,16 @@
       "bytes": 8749,
       "path": "planner.py",
       "sha256": "0d8e5b821a9096de9bbde00854dfe521a570e53a9c9a6476d8b30f2365662840"
+    },
+    {
+      "bytes": 5857,
+      "path": "portability_cli.py",
+      "sha256": "842effedc644e68a76d99f4687591972972ff116dbd8bc2a991e02120c0a641d"
+    },
+    {
+      "bytes": 6646,
+      "path": "portable.py",
+      "sha256": "4773ee25364e2ac4e501d7318bd469e4c4b08429f549f118b8352f939d275e7d"
     },
     {
       "bytes": 18482,
@@ -200,9 +215,19 @@
       "sha256": "e3a7949601ff400976a2366f169c1de441c02207843868b0a26aaa431106baa4"
     },
     {
+      "bytes": 19823,
+      "path": "skill_sync.py",
+      "sha256": "bf93ba5f4d440c758f2da8282db85a50ff90914bf796299a4c02264a1fdf9207"
+    },
+    {
       "bytes": 12468,
       "path": "skill_validation.py",
       "sha256": "0890fdd5a5e265f60d8939643b6a511194babcd01245cb14edaf57cc4c695b7c"
+    },
+    {
+      "bytes": 9970,
+      "path": "sync_transport.py",
+      "sha256": "29dd838896121228803e0d7c0c9793702ae24b56f4bbbbdeb0121fe5e142c2a4"
     },
     {
       "bytes": 119433,
@@ -222,5 +247,5 @@
   ],
   "format": "archmarshal-plugin-engine-lock-v1",
   "source_root": "src/archmarshal",
-  "source_tree_sha256": "36030eeec9bb47abdfbe982da2e4d48eef7ee26c9d89a05003ffcf538871a995"
+  "source_tree_sha256": "98459e4871e364cff9ac32e08d23a48517eec39cb68a182127475cc8c75ac5fd"
 }

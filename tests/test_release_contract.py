@@ -17,6 +17,9 @@ def test_version_is_consistent_and_changelog_has_entry() -> None:
     assert f"## {__version__} " in (REPOSITORY_ROOT / "CHANGELOG.md").read_text(
         encoding="utf-8"
     )
+    for filename in ("run_archmarshal.py", "invoke_archmarshal.py"):
+        text = (REPOSITORY_ROOT / "plugins/archmarshal/scripts" / filename).read_text("utf-8")
+        assert f'REQUIRED_ENGINE_VERSION = "{__version__}"' in text
 
 
 def test_packaged_schema_mirrors_are_complete_and_identical() -> None:

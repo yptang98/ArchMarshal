@@ -1,6 +1,6 @@
 ---
 name: manage-agent-workspace
-description: Govern Codex projects, Skills, memory, and closeout evidence with ArchMarshal through a safety-first native plugin workflow. Use when the user asks ArchMarshal to organize, manage, adopt, initialize, inspect, diagnose, start, close, catalog, or learn from a project; manage existing or generated Skills; protect and back up existing project or Skill files; organize projects by date and tags; create reproducible records; or extract reusable Skills and user preferences.
+description: Govern Codex projects, Skills, memory, and closeout evidence with ArchMarshal through a safety-first native plugin workflow. Use when the user asks ArchMarshal to organize, manage, adopt, initialize, inspect, diagnose, start, close, catalog, or learn from a project; manage existing or generated Skills; protect and back up existing project or Skill files; organize projects by date and tags; create reproducible records; extract reusable Skills and user preferences; sync or migrate Skills with device provenance; save or restore context by project address; or combine parallel-window workstreams.
 ---
 
 # Manage with ArchMarshal
@@ -44,6 +44,14 @@ upgrade dependencies automatically. A missing runtime must be repaired only by
 the separately authorized installation prompt, outside every project root.
 
 ## Route the request
+
+- Sync or migrate Skills between machines: read [portability.md](references/portability.md).
+  Use GitHub by default, retain device provenance, and review exact versions before
+  importing or installing. A request to sync Skills does not include project context.
+- Resume from a project directory/address, preserve a window's context, or combine
+  parallel work: use the context workflow in [portability.md](references/portability.md).
+  Save observed facts, decisions and rationale, constraints, rejected options, next
+  steps and validation evidence. Never invent content missing from this conversation.
 
 - Inspect health or safety: run `doctor`; add `--user-store` only when the user
   placed that store in scope. Use `inventory`, `lint`, or `audit` when the user

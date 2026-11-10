@@ -44,6 +44,10 @@ def doctor_workspace(
         inspect_transactions(workspace, report)
         inspect_skill_index(workspace, report)
         inspect_sessions(workspace, report)
+        if (workspace / ".agent/context-index").exists():
+            from .handoff import inspect_context
+
+            inspect_context(workspace, report)
     else:
         fill_unavailable_workspace_areas(workspace, report)
 

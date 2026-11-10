@@ -48,6 +48,11 @@ def main() -> int:
         "runtime": runtime_version,
         "plugin_manifest": plugin_manifest.get("version"),
         "plugin_wrapper": wrapper_version,
+        "runtime_launcher": _match(
+            ROOT / "plugins" / "archmarshal" / "scripts" / "run_archmarshal.py",
+            r'^REQUIRED_ENGINE_VERSION = "([0-9]+\.[0-9]+\.[0-9]+)"$',
+            "runtime launcher engine version",
+        ),
         "engine_lock": lock.get("engine_version"),
     }
     if set(versions.values()) != {package_version}:

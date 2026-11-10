@@ -34,6 +34,24 @@ ArchMarshal version.
 
 ## Layers
 
+### Portable Skills and parallel workstreams
+
+`portable.py` supplies bounded JSON, portable path validation, immutable writes
+and machine-local identity. `skill_sync.py` creates and validates complete Skill
+envelopes, preserving original/exporting device lineage; `sync_transport.py`
+provides GitHub and mounted-folder storage with an explicit backend interface.
+Remote objects have content-addressed names and no shared mutable active pointer.
+Imports are quarantined, reviewed installation uses a new destination, and the
+existing index/adoption/review machinery remains responsible for activation.
+
+`handoff.py` manages independent, append-only workstreams. It commits mapped
+checkpoint records before `.agent/context-index` pointers. Restore verifies the
+journal, exposes current stream heads and stale/overlapping file evidence, and
+returns a bounded context selection. A synthesis embeds referenced source records;
+it never deletes or overwrites either window's work. The local project registry
+maps known GitHub addresses to existing checkouts without transmitting context.
+`start` restores saved handoffs; `context-read` enables progressive retrieval.
+
 ```text
 User Instruction
   > Global Policy
